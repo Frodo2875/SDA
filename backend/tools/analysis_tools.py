@@ -1,1 +1,86 @@
-"""Analysis tools will be implemented in a later stage."""
+"""Deterministic Python tools for comparing student records."""
+
+from itertools import combinations
+from typing import Any
+
+from backend.tools.excel_utils import failure, normalize_student_id, success
+from backend.tools.student_tools import (
+    get_student_info,
+    get_student_research,
+    get_student_scores,
+)
+
+
+METRICS = ("average_score", "rank", "paper_count", "patent_count", "competition_count")
+
+
+def _difference(left: Any, right: Any) -> int | float | None:
+    if left is None or right is None:
+        return None
+    return round(left - right, 2)
+
+
+def compare_students(student_ids: list[str]) -> dict[str, Any]:
+    """Compare two or more students and calculate every pairwise difference."""
+    if not isinstance(student_ids, list) or len(student_ids) < 2:
+        return failure("INVALID_STUDENT_IDS", "至少需要提供 2 个学生学号")
+
+    normalized_ids = [normalize_student_id(student_id) for student_id in student_ids]
+    if any(not student_id for student_id in normalized_ids):
+        return failure("INVALID_STUDENT_IDS", "学生学号不能为空")
+    if len(set(normalized_ids)) != len(normalized_ids):
+        return failure("DUPLICATE_STUDENT_IDS", "比较列表中不能包含重复学号")
+
+    students = []
+    for student_id in normalized_ids:
+        info_result = get_student_info(student_id)
+        if not info_result["ok"]:
+            return failure(
+                info_result["error_code"] or "STUDENT_DATA_ERROR",
+                info_result["message"],
+                {"student_id": student_id},
+            )
+
+        score_result = get_student_scores(student_id)
+        if not score_result["ok"]:
+            return score_result
+        research_result = get_student_research(student_id)
+        if not research_result["ok"]:
+            return research_result
+
+        score_data = score_result["data"]
+        research_data = research_result["data"]
+        scores_found = score_data["status"] == "found"
+        research_found = research_data["status"] == "found"
+        research = research_data.get("research", {})
+        students.append(
+            {
+                "student_id": student_id,
+                "name": info_result["data"]["name"],
+                "average_score": score_data.get("average_score") if scores_found else None,
+                "rank": score_data.get("rank") if scores_found else None,
+                "paper_count": research.get("论文数") if research_found else None,
+                "patent_count": research.get("专利数") if research_found else None,
+                "competition_count": research.get("竞赛数") if research_found else None,
+                "score_status": score_data["status"],
+                "research_status": research_data["status"],
+            }
+        )
+
+    differences = []
+    for left, right in combinations(students, 2):
+        differences.append(
+            {
+                "left_student_id": left["student_id"],
+                "right_student_id": right["student_id"],
+                "calculation": "left_minus_right",
+                "values": {
+                    metric: _difference(left[metric], right[metric]) for metric in METRICS
+                },
+            }
+        )
+
+    return success(
+        {"students": students, "differences": differences},
+        f"已完成 {len(students)} 名学生的比较",
+    )
