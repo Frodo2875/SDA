@@ -6,7 +6,15 @@ from typing import Any
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
 
-from backend.schemas import CompareStudentsRequest, HealthResponse, ToolResponse
+from backend.agent import run_agent
+from backend.llm_client import LLMAPIError, LLMConfigurationError
+from backend.schemas import (
+    ChatRequest,
+    ChatResponse,
+    CompareStudentsRequest,
+    HealthResponse,
+    ToolResponse,
+)
 from backend.tools.analysis_tools import compare_students
 from backend.tools.file_tools import list_files
 from backend.tools.student_tools import (
@@ -19,7 +27,7 @@ from backend.tools.student_tools import (
 
 app = FastAPI(
     title="Student Document Agent",
-    description="学生材料智能文档助手开发测试 API（当前未接入 LLM Agent）",
+    description="学生材料智能文档助手开发测试 API",
     version="0.1.0",
 )
 
@@ -120,3 +128,25 @@ async def api_get_student_research(student_id: str) -> dict[str, Any] | JSONResp
 async def api_compare_students(request: CompareStudentsRequest) -> dict[str, Any] | JSONResponse:
     """Compare students through the existing deterministic comparison tool."""
     return _call_tool(compare_students, request.student_ids)
+
+
+@app.post("/api/chat", response_model=ChatResponse, tags=["agent"])
+async def api_chat(request: ChatRequest) -> dict[str, Any] | JSONResponse:
+    """Run one stateless natural-language request through the LLM tool loop."""
+    try:
+        return await run_agent(request.message)
+    except LLMConfigurationError as exc:
+        return JSONResponse(
+            status_code=503,
+            content={"answer": str(exc), "tool_calls": [], "status": "configuration_error"},
+        )
+    except LLMAPIError as exc:
+        return JSONResponse(
+            status_code=502,
+            content={"answer": str(exc), "tool_calls": [], "status": "llm_api_error"},
+        )
+    except Exception:
+        return JSONResponse(
+            status_code=500,
+            content={"answer": "服务器内部错误", "tool_calls": [], "status": "error"},
+        )

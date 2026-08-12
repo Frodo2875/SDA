@@ -3,6 +3,8 @@
 import httpx
 import pytest
 
+from backend import agent
+from backend.llm_client import LLMConfigurationError
 from backend.main import app
 
 
@@ -127,4 +129,26 @@ async def test_openapi_contains_all_requested_routes(client: httpx.AsyncClient) 
         "/api/students/{student_id}/scores",
         "/api/students/{student_id}/research",
         "/api/students/compare",
+        "/api/chat",
     } <= set(paths)
+
+
+async def test_chat_reports_missing_llm_configuration_without_traceback(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def missing_configuration_client():
+        raise LLMConfigurationError(
+            "缺少 LLM 配置：LLM_API_KEY, LLM_BASE_URL, LLM_MODEL"
+        )
+
+    monkeypatch.setattr(agent, "LLMClient", missing_configuration_client)
+
+    response = await client.post(
+        "/api/chat",
+        json={"session_id": "test-session", "message": "查询S001的学生信息"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "configuration_error"
+    assert response.json()["tool_calls"] == []
+    assert "Traceback" not in response.text

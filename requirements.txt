@@ -7,3 +7,4 @@ python-docx
 pydantic
 pytest
 python-dotenv
+httpx
