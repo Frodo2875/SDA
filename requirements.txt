@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+streamlit
+pandas
+openpyxl
+python-docx
+pydantic
+pytest
+python-dotenv
