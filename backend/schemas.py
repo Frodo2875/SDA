@@ -1,1 +1,32 @@
-"""Pydantic schemas will be defined here in a later stage."""
+"""Pydantic request and response models for the development API."""
+
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+class HealthResponse(BaseModel):
+    """Service health response."""
+
+    status: str
+    project: str
+    version: str
+
+
+class ToolResponse(BaseModel):
+    """Response envelope shared by the existing Python tools."""
+
+    ok: bool
+    data: Any = None
+    error_code: str | None = None
+    message: str
+
+
+class CompareStudentsRequest(BaseModel):
+    """Student IDs submitted for deterministic comparison."""
+
+    student_ids: list[str] = Field(
+        min_length=2,
+        description="需要比较的学生学号，至少提供 2 个",
+        examples=[["S001", "S002"]],
+    )
