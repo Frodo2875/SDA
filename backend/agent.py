@@ -8,7 +8,7 @@ from typing import Any, Protocol
 from backend import database
 from backend.llm_client import LLMClient
 from backend.services.confirmation import create_pending_action
-from backend.tools.analysis_tools import compare_students
+from backend.tools.analysis_tools import compare_students, get_top_three_students
 from backend.tools.file_tools import list_files
 from backend.tools.student_tools import (
     get_student_info,
@@ -36,10 +36,19 @@ SYSTEM_PROMPT = """你是学生材料智能文档助手。
 10. 比较两名或多名学生的综合情况时，必须依次完成：用 get_student_info 确认每名学生身份；用 get_student_scores 和 get_student_research 查询每名学生数据；最后调用 compare_students。不能跳过前置查询。
 11. get_student_research 返回 no_record 时，必须原样说明“当前科研成果材料中未查询到相关记录。”，不得说该学生没有科研成果或科研成果为零。
 12. 用户要求生成综合评价并写入 Word 时，必须先完整查询基本信息、成绩和科研，再生成适合直接追加到 Word 的评价正文。不要在正文中加入“已写入”“已确认”等表述。
+13. 用户询问全体学生中平均成绩最高的三名时，必须调用 get_top_three_students，禁止自行枚举或猜测排名。
 请用简洁中文整合工具结果并回答。"""
 
 
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_top_three_students",
+            "description": "由 Python 读取成绩材料、重新计算三科平均分并返回全体学生中最高的三名。",
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        },
+    },
     {
         "type": "function",
         "function": {
@@ -130,6 +139,7 @@ TOOL_FUNCTIONS = {
     "get_student_scores": get_student_scores,
     "get_student_research": get_student_research,
     "compare_students": compare_students,
+    "get_top_three_students": get_top_three_students,
 }
 
 TOOL_ARGUMENTS = {
@@ -139,6 +149,7 @@ TOOL_ARGUMENTS = {
     "get_student_scores": {"student_id": str},
     "get_student_research": {"student_id": str},
     "compare_students": {"student_ids": list},
+    "get_top_three_students": {},
 }
 
 
@@ -312,7 +323,7 @@ def _target_student_ids(
 def _write_request_target(user_message: str) -> str | None:
     """Extract a Word target only from an explicit write instruction."""
     match = re.search(
-        r"写入\s*[“\"']?([^“”\"'\s，。；;！？!?]+\.docx)",
+        r"写(?:入|进)\s*[“\"']?([^“”\"'\s，。；;！？!?]+\.docx)",
         user_message,
         re.I,
     )
@@ -320,7 +331,15 @@ def _write_request_target(user_message: str) -> str | None:
 
 
 def _is_write_request(user_message: str) -> bool:
-    return "写入" in user_message and ".docx" in user_message.lower()
+    return any(word in user_message for word in ("写入", "写进")) and ".docx" in user_message.lower()
+
+
+def _is_top_three_request(user_message: str) -> bool:
+    return (
+        "成绩" in user_message
+        and "最高" in user_message
+        and any(word in user_message for word in ("三名", "3名", "前三"))
+    )
 
 
 def _student_identity_for_action(
@@ -383,6 +402,11 @@ def _missing_required_calls(
             for call in executed_calls
         ):
             required.append(("compare_students", None))
+    if _is_top_three_request(user_message) and not any(
+        call["name"] == "get_top_three_students" and call["result"].get("ok") is True
+        for call in executed_calls
+    ):
+        required.append(("get_top_three_students", None))
 
     missing = []
     for tool_name, student_id in required:
@@ -518,6 +542,7 @@ async def _run_agent_core(
             "get_student_scores": 2,
             "get_student_research": 2,
             "compare_students": 3,
+            "get_top_three_students": 3,
         }
         ordered_calls = sorted(
             normalized_calls,

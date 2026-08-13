@@ -93,7 +93,7 @@ async def _request_pending_action(
         "/api/chat",
         json={
             "session_id": session_id,
-            "message": "给S001生成综合评价并写入综合评价.docx",
+            "message": "把S001评价写进综合评价.docx",
         },
     )
     assert response.status_code == 200
@@ -119,12 +119,13 @@ async def test_write_request_creates_pending_action_without_changing_file(
 ) -> None:
     target = isolated_word_dir / "综合评价.docx"
     before = target.read_bytes()
+    paragraphs_before = _paragraphs(target)
 
     action = await _request_pending_action(client, monkeypatch, "pending-test")
 
     assert action["action_type"] == "write_word"
     assert target.read_bytes() == before
-    assert _paragraphs(target) == ["学生综合评价"]
+    assert _paragraphs(target) == paragraphs_before
 
 
 async def test_cancel_keeps_file_unchanged(

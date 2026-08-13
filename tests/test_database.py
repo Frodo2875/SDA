@@ -54,12 +54,12 @@ def test_first_run_creates_database_tables_and_file_records(
             assert columns == expected
 
     file_rows = database.fetch_all("files")
-    assert {row["file_name"] for row in file_rows} == {
+    assert {
         "学生基本信息.xlsx",
         "学生成绩.xlsx",
         "科研成果.xlsx",
         "综合评价.docx",
-    }
+    } <= {row["file_name"] for row in file_rows}
     writable = {row["file_name"]: row["writable"] for row in file_rows}
     assert writable["综合评价.docx"] == 1
     assert writable["学生成绩.xlsx"] == 0

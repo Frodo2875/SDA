@@ -8,3 +8,4 @@ pydantic
 pytest
 python-dotenv
 httpx
+python-multipart

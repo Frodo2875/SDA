@@ -93,12 +93,23 @@ def sync_files() -> None:
     data_dir = excel_utils.DATA_DIR
     if not data_dir.is_dir():
         return
+    paths = [
+        path for path in data_dir.iterdir() if path.is_file() and not path.name.startswith(".")
+    ]
+    upload_dir = data_dir / "uploads"
+    if upload_dir.is_dir():
+        paths.extend(
+            path
+            for path in upload_dir.iterdir()
+            if path.is_file() and not path.name.startswith(".")
+        )
     with _connect() as connection:
-        for path in sorted(data_dir.iterdir(), key=lambda item: item.name):
+        for path in sorted(paths, key=lambda item: (item.name, str(item.parent))):
             metadata = SUPPORTED_FILES.get(path.suffix.lower())
             if not path.is_file() or metadata is None:
                 continue
             file_type, writable = metadata
+            relative_path = path.relative_to(data_dir).as_posix()
             connection.execute(
                 """
                 INSERT INTO files (
@@ -113,12 +124,49 @@ def sync_files() -> None:
                 (
                     path.name,
                     file_type,
-                    f"data/{path.name}",
+                    f"data/{relative_path}",
                     utc_now(),
                     "active",
                     writable,
                 ),
             )
+
+
+def register_file(
+    *,
+    file_name: str,
+    file_type: str,
+    file_path: str,
+    status: str = "active",
+    writable: bool = False,
+) -> int:
+    """Insert one validated file record without replacing an existing record."""
+    with _connect() as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO files (
+                file_name, file_type, file_path, created_at, status, writable
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                file_name,
+                file_type,
+                file_path,
+                utc_now(),
+                status,
+                int(writable),
+            ),
+        )
+        return int(cursor.lastrowid)
+
+
+def get_file_record(file_name: str) -> dict[str, Any] | None:
+    """Fetch one registered file by its plain file name."""
+    with _connect() as connection:
+        row = connection.execute(
+            "SELECT * FROM files WHERE file_name = ?", (file_name,)
+        ).fetchone()
+    return dict(row) if row is not None else None
 
 
 def save_chat_message(

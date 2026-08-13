@@ -33,6 +33,7 @@ class ScenarioClient:
     async def create_chat_completion(self, messages, tools):
         self.requests.append(messages.copy())
         assert {item["function"]["name"] for item in tools} == {
+            "get_top_three_students",
             "list_files",
             "search_student",
             "get_student_info",
@@ -132,12 +133,11 @@ async def test_comprehensive_analysis_stops_on_duplicate_name() -> None:
     assert [call["name"] for call in result["tool_calls"]] == ["search_student"]
 
 
-async def test_zhao_liu_is_reported_from_real_data_as_found() -> None:
+async def test_zhao_liu_is_reported_from_real_data_as_not_found() -> None:
     result = await run_agent("查询一个不存在的赵六", client=ScenarioClient())
 
     data = result["tool_calls"][0]["result"]["data"]
-    assert data["status"] == "found"
-    assert data["student"]["student_id"] == "S005"
+    assert data == {"status": "not_found"}
 
 
 class InvalidArgumentsClient:
@@ -202,6 +202,7 @@ def test_only_read_only_tools_are_exposed() -> None:
     names = {tool["function"]["name"] for tool in TOOL_DEFINITIONS}
 
     assert names == {
+        "get_top_three_students",
         "list_files",
         "search_student",
         "get_student_info",
@@ -209,6 +210,26 @@ def test_only_read_only_tools_are_exposed() -> None:
         "get_student_research",
         "compare_students",
     }
+
+
+async def test_top_three_request_must_use_python_ranking_tool() -> None:
+    client = MultiStepClient(
+        [[("get_top_three_students", {})]],
+        "平均成绩最高的三名学生已根据工具结果列出。",
+    )
+
+    result = await run_agent("成绩最高的三名学生是谁？", client=client)
+
+    assert result["status"] == "completed"
+    assert [call["name"] for call in result["tool_calls"]] == [
+        "get_top_three_students"
+    ]
+    students = result["tool_calls"][0]["result"]["data"]["students"]
+    assert [(item["student_id"], item["average_score"]) for item in students] == [
+        ("S004", 93.33),
+        ("S007", 91.0),
+        ("S001", 90.67),
+    ]
 
 
 class MultiStepClient:

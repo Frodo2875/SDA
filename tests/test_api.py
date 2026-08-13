@@ -40,12 +40,12 @@ async def test_files(client: httpx.AsyncClient) -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert {item["file_name"] for item in body["data"]} == {
+    assert {
         "学生基本信息.xlsx",
         "学生成绩.xlsx",
         "科研成果.xlsx",
         "综合评价.docx",
-    }
+    } <= {item["file_name"] for item in body["data"]}
 
 
 async def test_search_student(client: httpx.AsyncClient) -> None:

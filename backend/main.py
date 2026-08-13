@@ -3,12 +3,13 @@
 from collections.abc import Callable
 from typing import Any
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, File, Query, UploadFile
 from fastapi.responses import JSONResponse
 
 from backend.agent import run_agent
 from backend.llm_client import LLMAPIError, LLMConfigurationError
 from backend.services.confirmation import cancel_action, confirm_action
+from backend.services.file_upload import save_uploaded_file
 from backend.schemas import (
     ActionResponse,
     ChatRequest,
@@ -90,6 +91,37 @@ async def health() -> HealthResponse:
 async def api_list_files() -> dict[str, Any] | JSONResponse:
     """List supported files through the existing file tool."""
     return _call_tool(list_files)
+
+
+@app.post("/api/files/upload", response_model=ToolResponse, tags=["files"])
+async def api_upload_file(file: UploadFile = File(...)) -> dict[str, Any] | JSONResponse:
+    """Validate and store one new Excel or Word upload without overwriting."""
+    try:
+        content = await file.read()
+        result = save_uploaded_file(file.filename or "", content)
+    except Exception:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "ok": False,
+                "data": None,
+                "error_code": "INTERNAL_ERROR",
+                "message": "服务器内部错误",
+            },
+        )
+    finally:
+        await file.close()
+
+    if result["ok"]:
+        return result
+    status_code = {
+        "INVALID_FILE_NAME": 400,
+        "UNSUPPORTED_FILE_TYPE": 400,
+        "INVALID_FILE_CONTENT": 400,
+        "EMPTY_UPLOAD": 400,
+        "FILE_ALREADY_EXISTS": 409,
+    }.get(result.get("error_code"), 500)
+    return JSONResponse(status_code=status_code, content=result)
 
 
 @app.get("/api/students/search", response_model=ToolResponse, tags=["students"])

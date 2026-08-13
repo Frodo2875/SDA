@@ -17,6 +17,7 @@ TOOL_STATUS_LABELS = {
     "get_student_scores": "正在读取学生成绩…",
     "get_student_research": "正在查询科研成果…",
     "compare_students": "正在比较学生信息…",
+    "get_top_three_students": "正在统计成绩排名…",
 }
 FILE_TYPE_LABELS = {"excel": "Excel", "word": "Word"}
 COMPARISON_COLUMNS = {
@@ -39,6 +40,8 @@ def _initialize_state() -> None:
         "files": [],
         "files_loaded": False,
         "files_error": None,
+        "upload_notice": None,
+        "uploader_version": 0,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -78,6 +81,34 @@ def _refresh_files() -> None:
         st.session_state.files = []
         st.session_state.files_error = str(exc)
     st.session_state.files_loaded = True
+
+
+def _upload_file(uploaded_file: Any) -> None:
+    """Send the selected file to FastAPI; never read project files locally."""
+    if uploaded_file is None:
+        return
+    try:
+        with st.spinner("正在校验并上传文件…"):
+            result = _request(
+                "POST",
+                "/api/files/upload",
+                files={
+                    "file": (
+                        uploaded_file.name,
+                        uploaded_file.getvalue(),
+                        uploaded_file.type or "application/octet-stream",
+                    )
+                },
+            )
+        st.session_state.upload_notice = {
+            "ok": True,
+            "message": result.get("message") or "文件上传成功",
+        }
+        st.session_state.uploader_version += 1
+        _refresh_files()
+    except RuntimeError as exc:
+        st.session_state.upload_notice = {"ok": False, "message": str(exc)}
+    st.rerun()
 
 
 def _tool_statuses(response: dict[str, Any]) -> list[str]:
@@ -244,6 +275,26 @@ with st.sidebar:
     st.caption("Student Document Agent")
     st.divider()
     st.subheader("当前知识库")
+    uploaded_file = st.file_uploader(
+        "上传材料",
+        type=["xlsx", "docx"],
+        accept_multiple_files=False,
+        help="仅支持 Excel（.xlsx）和 Word（.docx），同名文件不会被覆盖。",
+        key=f"material-uploader-{st.session_state.uploader_version}",
+    )
+    if st.button(
+        "上传文件",
+        type="primary",
+        use_container_width=True,
+        disabled=uploaded_file is None,
+    ):
+        _upload_file(uploaded_file)
+    if st.session_state.upload_notice:
+        notice = st.session_state.upload_notice
+        if notice["ok"]:
+            st.success(notice["message"])
+        else:
+            st.error(notice["message"])
     if st.button("刷新文件列表", use_container_width=True, icon="🔄"):
         _refresh_files()
     if st.session_state.files_error:

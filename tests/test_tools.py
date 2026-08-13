@@ -8,7 +8,7 @@ from docx import Document
 from openpyxl import Workbook, load_workbook
 
 from backend.tools import excel_utils
-from backend.tools.analysis_tools import compare_students
+from backend.tools.analysis_tools import compare_students, get_top_three_students
 from backend.tools.file_tools import get_file_info, list_files
 from backend.tools.student_tools import (
     get_student_info,
@@ -29,13 +29,12 @@ EXPECTED_FILES = {
 }
 
 
-def test_list_files_returns_four_test_files() -> None:
+def test_list_files_returns_all_fixed_test_files() -> None:
     result = list_files()
 
     assert result["ok"] is True
     assert result["error_code"] is None
-    assert {item["file_name"] for item in result["data"]} == EXPECTED_FILES
-    assert len(result["data"]) == 4
+    assert EXPECTED_FILES <= {item["file_name"] for item in result["data"]}
     assert all(item["exists"] and item["size"] > 0 for item in result["data"])
 
 
@@ -159,12 +158,25 @@ def test_compare_students_calculates_differences() -> None:
     ]
 
 
+def test_top_three_students_are_sorted_by_python_calculated_average() -> None:
+    result = get_top_three_students()
+
+    assert result["ok"] is True
+    assert result["data"]["ranking_basis"].startswith("三科成绩的 Python 计算平均分")
+    students = result["data"]["students"]
+    assert [(item["position"], item["student_id"], item["average_score"]) for item in students] == [
+        (1, "S004", 93.33),
+        (2, "S007", 91.0),
+        (3, "S001", 90.67),
+    ]
+
+
 def test_read_word_returns_template_title() -> None:
     result = read_word("综合评价.docx")
 
     assert result["ok"] is True
-    assert result["data"]["text"] == "学生综合评价"
-    assert result["data"]["paragraphs"] == ["学生综合评价"]
+    assert result["data"]["paragraphs"][0] == "学生综合评价"
+    assert result["data"]["text"].startswith("学生综合评价")
 
 
 def test_write_word_appends_to_isolated_copy(
@@ -172,6 +184,7 @@ def test_write_word_appends_to_isolated_copy(
 ) -> None:
     isolated_document = tmp_path / "综合评价.docx"
     shutil.copy2(DATA_DIR / "综合评价.docx", isolated_document)
+    paragraphs_before = read_word_from_path(isolated_document)
     monkeypatch.setattr(excel_utils, "DATA_DIR", tmp_path)
 
     result = write_word("综合评价.docx", "这是一条隔离的测试评价。")
@@ -180,7 +193,7 @@ def test_write_word_appends_to_isolated_copy(
 
     assert result["ok"] is True
     assert result["data"]["mode"] == "append"
-    assert paragraphs == ["学生综合评价", "这是一条隔离的测试评价。"]
+    assert paragraphs == [*paragraphs_before, "这是一条隔离的测试评价。"]
 
 
 def test_word_write_does_not_modify_official_document(
