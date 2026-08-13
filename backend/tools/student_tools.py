@@ -145,7 +145,7 @@ def get_student_research(student_id: str) -> dict[str, Any]:
     if row is None:
         return success(
             {"status": "no_record", "student_id": normalized_id},
-            "该学生存在，但没有科研记录；不能据此认定科研成果为零",
+            "当前科研成果材料中未查询到相关记录。",
         )
 
     try:

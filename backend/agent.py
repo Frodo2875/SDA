@@ -1,6 +1,8 @@
 """Tool-calling loop for the read-only Student Document Agent."""
 
 import json
+import logging
+import re
 from typing import Any, Protocol
 
 from backend.llm_client import LLMClient
@@ -15,6 +17,8 @@ from backend.tools.student_tools import (
 
 
 MAX_TOOL_ROUNDS = 8
+LOGGER = logging.getLogger(__name__)
+MISSING_RESEARCH_MESSAGE = "当前科研成果材料中未查询到相关记录。"
 
 SYSTEM_PROMPT = """你是学生材料智能文档助手。
 必须遵守以下规则：
@@ -26,6 +30,9 @@ SYSTEM_PROMPT = """你是学生材料智能文档助手。
 6. 文件不存在时必须明确说明文件不存在。
 7. 查询学生详情、成绩或科研前，如用户只提供姓名，应先用 search_student 确认唯一学号。
 8. 不提供写文件能力，也不得声称已经修改任何文件。
+9. “综合分析某位学生”必须完整调用 get_student_info、get_student_scores、get_student_research，不能只依据其中一个工具回答。
+10. 比较两名或多名学生的综合情况时，必须依次完成：用 get_student_info 确认每名学生身份；用 get_student_scores 和 get_student_research 查询每名学生数据；最后调用 compare_students。不能跳过前置查询。
+11. get_student_research 返回 no_record 时，必须原样说明“当前科研成果材料中未查询到相关记录。”，不得说该学生没有科研成果或科研成果为零。
 请用简洁中文整合工具结果并回答。"""
 
 
@@ -144,7 +151,11 @@ def _invalid_tool_result(error_code: str, message: str) -> dict[str, Any]:
     return {"ok": False, "data": None, "error_code": error_code, "message": message}
 
 
-def _execute_tool(name: str, raw_arguments: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+def _execute_tool(
+    name: str,
+    raw_arguments: Any,
+    executed_calls: list[dict[str, Any]] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Validate model-generated arguments and execute an allow-listed tool."""
     if name not in TOOL_FUNCTIONS:
         return {}, _invalid_tool_result("UNKNOWN_TOOL", f"不允许调用工具：{name}")
@@ -175,12 +186,166 @@ def _execute_tool(name: str, raw_arguments: Any) -> tuple[dict[str, Any], dict[s
             return arguments, _invalid_tool_result(
                 "INVALID_TOOL_ARGUMENTS", "compare_students 至少需要两个有效学号"
             )
+        if executed_calls is not None:
+            sequence_error = _validate_compare_sequence(arguments, executed_calls)
+            if sequence_error is not None:
+                return arguments, sequence_error
 
     try:
         result = TOOL_FUNCTIONS[name](**arguments)
     except Exception:
         result = _invalid_tool_result("TOOL_EXECUTION_ERROR", f"工具 {name} 执行失败")
     return arguments, result
+
+
+def _has_successful_call(
+    executed_calls: list[dict[str, Any]], tool_name: str, student_id: str
+) -> bool:
+    """Return whether a successful student-specific tool call already occurred."""
+    return any(
+        call["name"] == tool_name
+        and call["arguments"].get("student_id") == student_id
+        and call["result"].get("ok") is True
+        for call in executed_calls
+    )
+
+
+def _validate_compare_sequence(
+    arguments: dict[str, Any], executed_calls: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """Require identity and source-data calls before an Agent comparison."""
+    student_ids = arguments.get("student_ids")
+    if not isinstance(student_ids, list):
+        return None
+
+    missing_steps = []
+    for student_id in student_ids:
+        for tool_name in (
+            "get_student_info",
+            "get_student_scores",
+            "get_student_research",
+        ):
+            if not _has_successful_call(executed_calls, tool_name, student_id):
+                missing_steps.append({"tool_name": tool_name, "student_id": student_id})
+
+    if not missing_steps:
+        return None
+    return _invalid_tool_result(
+        "TOOL_SEQUENCE_ERROR",
+        "比较前必须先确认每名学生身份，并查询双方成绩和科研数据。"
+        f"缺少步骤：{json.dumps(missing_steps, ensure_ascii=False)}",
+    )
+
+
+def _log_tool_call(
+    round_number: int,
+    tool_name: str,
+    arguments: dict[str, Any],
+    tool_result: dict[str, Any],
+) -> None:
+    """Write one structured backend log without exposing model reasoning."""
+    LOGGER.info(
+        "agent_tool_call round=%s tool_name=%s arguments=%s tool_result=%s",
+        round_number,
+        tool_name,
+        json.dumps(arguments, ensure_ascii=False),
+        json.dumps(tool_result, ensure_ascii=False),
+    )
+
+
+def _ambiguity_response(result: dict[str, Any]) -> dict[str, str]:
+    """Build a deterministic clarification response from Tool candidates."""
+    candidates = result["data"].get("candidates", [])
+    name = candidates[0].get("name", "该姓名") if candidates else "该姓名"
+    lines = [f"找到多名姓名为{name}的学生，请确认：", ""]
+    for index, candidate in enumerate(candidates, start=1):
+        lines.append(
+            f"{index}. {candidate.get('student_id')} {candidate.get('name')}，"
+            f"{candidate.get('major')}，{candidate.get('grade')}，"
+            f"{candidate.get('class_name')}"
+        )
+    return {"answer": "\n".join(lines), "status": "clarification_required"}
+
+
+def _normalize_final_answer(
+    answer: str, executed_calls: list[dict[str, Any]]
+) -> str:
+    """Preserve the exact no-record meaning in the user-facing answer."""
+    has_missing_research = any(
+        call["name"] == "get_student_research"
+        and call["result"].get("ok") is True
+        and isinstance(call["result"].get("data"), dict)
+        and call["result"]["data"].get("status") == "no_record"
+        for call in executed_calls
+    )
+    if not has_missing_research:
+        return answer
+
+    normalized = answer
+    for misleading_phrase in ("该学生没有科研成果", "没有科研成果", "科研成果为零"):
+        normalized = normalized.replace(misleading_phrase, MISSING_RESEARCH_MESSAGE)
+    normalized = normalized.replace("。。", "。")
+    if MISSING_RESEARCH_MESSAGE not in normalized:
+        normalized = f"{MISSING_RESEARCH_MESSAGE}\n\n{normalized}"
+    return normalized
+
+
+def _target_student_ids(
+    user_message: str, executed_calls: list[dict[str, Any]]
+) -> list[str]:
+    """Resolve explicit IDs plus IDs confirmed by successful identity searches."""
+    student_ids = [item.upper() for item in re.findall(r"S\d+", user_message, re.I)]
+    for call in executed_calls:
+        if call["name"] != "search_student" or call["result"].get("ok") is not True:
+            continue
+        data = call["result"].get("data")
+        if isinstance(data, dict) and data.get("status") == "found":
+            student_id = data.get("student", {}).get("student_id")
+            if isinstance(student_id, str):
+                student_ids.append(student_id)
+    return list(dict.fromkeys(student_ids))
+
+
+def _missing_required_calls(
+    user_message: str, executed_calls: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Return required calls missing before a complex task may finish."""
+    student_ids = _target_student_ids(user_message, executed_calls)
+    required: list[tuple[str, str | None]] = []
+
+    if "综合分析" in user_message and student_ids:
+        for student_id in student_ids:
+            required.extend(
+                (tool_name, student_id)
+                for tool_name in (
+                    "get_student_info",
+                    "get_student_scores",
+                    "get_student_research",
+                )
+            )
+    if "比较" in user_message and "综合" in user_message and len(student_ids) >= 2:
+        for student_id in student_ids:
+            required.extend(
+                (tool_name, student_id)
+                for tool_name in (
+                    "get_student_info",
+                    "get_student_scores",
+                    "get_student_research",
+                )
+            )
+        if not any(
+            call["name"] == "compare_students" and call["result"].get("ok") is True
+            for call in executed_calls
+        ):
+            required.append(("compare_students", None))
+
+    missing = []
+    for tool_name, student_id in required:
+        if student_id is None:
+            missing.append({"tool_name": tool_name})
+        elif not _has_successful_call(executed_calls, tool_name, student_id):
+            missing.append({"tool_name": tool_name, "student_id": student_id})
+    return missing
 
 
 async def run_agent(
@@ -196,6 +361,7 @@ async def run_agent(
     ]
     executed_calls: list[dict[str, Any]] = []
     tool_rounds = 0
+    incomplete_answer_retries = 0
 
     for _ in range(max_tool_rounds + 1):
         assistant_message = await llm_client.create_chat_completion(messages, TOOL_DEFINITIONS)
@@ -208,7 +374,32 @@ async def run_agent(
                     "tool_calls": executed_calls,
                     "status": "error",
                 }
-            return {"answer": answer.strip(), "tool_calls": executed_calls, "status": "completed"}
+            missing_calls = _missing_required_calls(message, executed_calls)
+            if missing_calls:
+                if incomplete_answer_retries >= 2:
+                    return {
+                        "answer": "模型未完成任务所需的全部工具查询，请重试。",
+                        "tool_calls": executed_calls,
+                        "status": "incomplete_tool_calls",
+                    }
+                incomplete_answer_retries += 1
+                messages.append(
+                    {"role": "assistant", "content": answer.strip()}
+                )
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": "系统校验发现任务尚未完成，请继续调用缺少的工具："
+                        + json.dumps(missing_calls, ensure_ascii=False)
+                        + "。完成后再生成最终回答。",
+                    }
+                )
+                continue
+            return {
+                "answer": _normalize_final_answer(answer.strip(), executed_calls),
+                "tool_calls": executed_calls,
+                "status": "completed",
+            }
 
         if tool_rounds >= max_tool_rounds:
             return {
@@ -233,10 +424,38 @@ async def run_agent(
             )
         messages.append({"role": "assistant", "content": assistant_message.get("content"), "tool_calls": normalized_calls})
 
-        for tool_call in normalized_calls:
+        tool_priority = {
+            "search_student": 0,
+            "get_student_info": 1,
+            "get_student_scores": 2,
+            "get_student_research": 2,
+            "compare_students": 3,
+        }
+        ordered_calls = sorted(
+            normalized_calls,
+            key=lambda call: tool_priority.get(call["function"]["name"], 4),
+        )
+        for tool_call in ordered_calls:
             name = tool_call["function"]["name"]
-            arguments, result = _execute_tool(name, tool_call["function"]["arguments"])
+            arguments, result = _execute_tool(
+                name, tool_call["function"]["arguments"], executed_calls
+            )
             executed_calls.append({"name": name, "arguments": arguments, "result": result})
+            _log_tool_call(tool_rounds, name, arguments, result)
+
+            if (
+                name == "search_student"
+                and result.get("ok") is True
+                and isinstance(result.get("data"), dict)
+                and result["data"].get("status") == "ambiguous"
+            ):
+                clarification = _ambiguity_response(result)
+                return {
+                    "answer": clarification["answer"],
+                    "tool_calls": executed_calls,
+                    "status": clarification["status"],
+                }
+
             messages.append(
                 {
                     "role": "tool",

@@ -129,7 +129,7 @@ def test_missing_research_record_returns_no_record() -> None:
 
     assert result["ok"] is True
     assert result["data"] == {"status": "no_record", "student_id": "S011"}
-    assert "不能据此认定科研成果为零" in result["message"]
+    assert result["message"] == "当前科研成果材料中未查询到相关记录。"
 
 
 def test_missing_score_record_returns_no_record() -> None:
