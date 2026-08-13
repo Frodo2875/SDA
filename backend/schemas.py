@@ -1,6 +1,7 @@
 """Pydantic request and response models for the development API."""
 
-from typing import Any
+from datetime import datetime
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -47,9 +48,32 @@ class AgentToolCall(BaseModel):
     result: dict[str, Any]
 
 
+class PendingAction(BaseModel):
+    """Frozen write proposal awaiting an explicit user decision."""
+
+    action_id: str
+    action_type: Literal["write_word"]
+    target_file: str
+    student_id: str
+    student_name: str
+    content: str
+    created_at: datetime
+    status: Literal["pending", "confirmed", "cancelled", "executed", "failed"]
+
+
 class ChatResponse(BaseModel):
     """Final Agent response and its auditable tool calls."""
 
     answer: str
     tool_calls: list[AgentToolCall]
     status: str
+    pending_action: PendingAction | None = None
+
+
+class ActionResponse(BaseModel):
+    """Confirmation or cancellation result."""
+
+    ok: bool
+    data: Any = None
+    error_code: str | None = None
+    message: str

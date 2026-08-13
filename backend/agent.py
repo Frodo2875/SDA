@@ -6,6 +6,7 @@ import re
 from typing import Any, Protocol
 
 from backend.llm_client import LLMClient
+from backend.services.confirmation import create_pending_action
 from backend.tools.analysis_tools import compare_students
 from backend.tools.file_tools import list_files
 from backend.tools.student_tools import (
@@ -29,10 +30,11 @@ SYSTEM_PROMPT = """你是学生材料智能文档助手。
 5. 姓名搜索出现 ambiguous 时，必须列出候选人并请用户用学号澄清，禁止自行选择。
 6. 文件不存在时必须明确说明文件不存在。
 7. 查询学生详情、成绩或科研前，如用户只提供姓名，应先用 search_student 确认唯一学号。
-8. 不提供写文件能力，也不得声称已经修改任何文件。
+8. write_word 不对你开放。用户要求写入时，你只能先生成待确认的综合评价内容，不得声称文件已经修改或用户已经确认。
 9. “综合分析某位学生”必须完整调用 get_student_info、get_student_scores、get_student_research，不能只依据其中一个工具回答。
 10. 比较两名或多名学生的综合情况时，必须依次完成：用 get_student_info 确认每名学生身份；用 get_student_scores 和 get_student_research 查询每名学生数据；最后调用 compare_students。不能跳过前置查询。
 11. get_student_research 返回 no_record 时，必须原样说明“当前科研成果材料中未查询到相关记录。”，不得说该学生没有科研成果或科研成果为零。
+12. 用户要求生成综合评价并写入 Word 时，必须先完整查询基本信息、成绩和科研，再生成适合直接追加到 Word 的评价正文。不要在正文中加入“已写入”“已确认”等表述。
 请用简洁中文整合工具结果并回答。"""
 
 
@@ -306,6 +308,38 @@ def _target_student_ids(
     return list(dict.fromkeys(student_ids))
 
 
+def _write_request_target(user_message: str) -> str | None:
+    """Extract a Word target only from an explicit write instruction."""
+    match = re.search(
+        r"写入\s*[“\"']?([^“”\"'\s，。；;！？!?]+\.docx)",
+        user_message,
+        re.I,
+    )
+    return match.group(1) if match else None
+
+
+def _is_write_request(user_message: str) -> bool:
+    return "写入" in user_message and ".docx" in user_message.lower()
+
+
+def _student_identity_for_action(
+    student_id: str, executed_calls: list[dict[str, Any]]
+) -> dict[str, str] | None:
+    """Read the confirmed student identity from an executed Tool result."""
+    for call in executed_calls:
+        if (
+            call["name"] == "get_student_info"
+            and call["arguments"].get("student_id") == student_id
+            and call["result"].get("ok") is True
+        ):
+            data = call["result"].get("data")
+            if isinstance(data, dict):
+                name = data.get("name")
+                if isinstance(name, str) and name.strip():
+                    return {"student_id": student_id, "student_name": name.strip()}
+    return None
+
+
 def _missing_required_calls(
     user_message: str, executed_calls: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -314,6 +348,16 @@ def _missing_required_calls(
     required: list[tuple[str, str | None]] = []
 
     if "综合分析" in user_message and student_ids:
+        for student_id in student_ids:
+            required.extend(
+                (tool_name, student_id)
+                for tool_name in (
+                    "get_student_info",
+                    "get_student_scores",
+                    "get_student_research",
+                )
+            )
+    if _is_write_request(user_message) and student_ids:
         for student_id in student_ids:
             required.extend(
                 (tool_name, student_id)
@@ -395,8 +439,49 @@ async def run_agent(
                     }
                 )
                 continue
+            normalized_answer = _normalize_final_answer(answer.strip(), executed_calls)
+            if _is_write_request(message):
+                target_file = _write_request_target(message)
+                student_ids = _target_student_ids(message, executed_calls)
+                if target_file is None:
+                    return {
+                        "answer": "无法识别要写入的 Word 文件名，请明确提供 .docx 文件名。",
+                        "tool_calls": executed_calls,
+                        "status": "error",
+                    }
+                if len(student_ids) != 1:
+                    return {
+                        "answer": "写入综合评价时必须确认唯一学生学号。",
+                        "tool_calls": executed_calls,
+                        "status": "error",
+                    }
+                identity = _student_identity_for_action(student_ids[0], executed_calls)
+                if identity is None:
+                    return {
+                        "answer": "尚未通过工具确认学生身份，不能创建写入操作。",
+                        "tool_calls": executed_calls,
+                        "status": "error",
+                    }
+                action_result = create_pending_action(
+                    target_file=target_file,
+                    student_id=identity["student_id"],
+                    student_name=identity["student_name"],
+                    content=normalized_answer,
+                )
+                if not action_result["ok"]:
+                    return {
+                        "answer": action_result["message"],
+                        "tool_calls": executed_calls,
+                        "status": "error",
+                    }
+                return {
+                    "answer": "综合评价已生成，等待用户确认。当前尚未写入文件。",
+                    "tool_calls": executed_calls,
+                    "status": "confirmation_required",
+                    "pending_action": action_result["data"],
+                }
             return {
-                "answer": _normalize_final_answer(answer.strip(), executed_calls),
+                "answer": normalized_answer,
                 "tool_calls": executed_calls,
                 "status": "completed",
             }

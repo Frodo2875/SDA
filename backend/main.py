@@ -8,7 +8,9 @@ from fastapi.responses import JSONResponse
 
 from backend.agent import run_agent
 from backend.llm_client import LLMAPIError, LLMConfigurationError
+from backend.services.confirmation import cancel_action, confirm_action
 from backend.schemas import (
+    ActionResponse,
     ChatRequest,
     ChatResponse,
     CompareStudentsRequest,
@@ -149,4 +151,57 @@ async def api_chat(request: ChatRequest) -> dict[str, Any] | JSONResponse:
         return JSONResponse(
             status_code=500,
             content={"answer": "服务器内部错误", "tool_calls": [], "status": "error"},
+        )
+
+
+def _action_response(result: dict[str, Any]) -> dict[str, Any] | JSONResponse:
+    """Map confirmation-service results without exposing internal exceptions."""
+    if result["ok"]:
+        return result
+    status_code = {
+        "ACTION_NOT_FOUND": 404,
+        "ACTION_NOT_PENDING": 409,
+    }.get(result.get("error_code"), 500)
+    return JSONResponse(status_code=status_code, content=result)
+
+
+@app.post(
+    "/api/actions/{action_id}/confirm",
+    response_model=ActionResponse,
+    tags=["actions"],
+)
+async def api_confirm_action(action_id: str) -> dict[str, Any] | JSONResponse:
+    """Execute the exact frozen content of one pending action once."""
+    try:
+        return _action_response(confirm_action(action_id))
+    except Exception:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "ok": False,
+                "data": None,
+                "error_code": "INTERNAL_ERROR",
+                "message": "服务器内部错误",
+            },
+        )
+
+
+@app.post(
+    "/api/actions/{action_id}/cancel",
+    response_model=ActionResponse,
+    tags=["actions"],
+)
+async def api_cancel_action(action_id: str) -> dict[str, Any] | JSONResponse:
+    """Cancel one pending action without modifying its target file."""
+    try:
+        return _action_response(cancel_action(action_id))
+    except Exception:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "ok": False,
+                "data": None,
+                "error_code": "INTERNAL_ERROR",
+                "message": "服务器内部错误",
+            },
         )
