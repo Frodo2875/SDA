@@ -5,6 +5,7 @@ import logging
 import re
 from typing import Any, Protocol
 
+from backend import database
 from backend.llm_client import LLMClient
 from backend.services.confirmation import create_pending_action
 from backend.tools.analysis_tools import compare_students
@@ -392,8 +393,9 @@ def _missing_required_calls(
     return missing
 
 
-async def run_agent(
+async def _run_agent_core(
     message: str,
+    session_id: str,
     client: ChatClient | None = None,
     max_tool_rounds: int = MAX_TOOL_ROUNDS,
 ) -> dict[str, Any]:
@@ -463,6 +465,7 @@ async def run_agent(
                         "status": "error",
                     }
                 action_result = create_pending_action(
+                    session_id=session_id,
                     target_file=target_file,
                     student_id=identity["student_id"],
                     student_name=identity["student_name"],
@@ -554,3 +557,44 @@ async def run_agent(
         "tool_calls": executed_calls,
         "status": "max_tool_rounds_exceeded",
     }
+
+
+async def run_agent(
+    message: str,
+    client: ChatClient | None = None,
+    max_tool_rounds: int = MAX_TOOL_ROUNDS,
+    session_id: str = "direct",
+) -> dict[str, Any]:
+    """Run one Agent request and persist both sides of the chat."""
+    database.save_chat_message(
+        session_id=session_id,
+        role="user",
+        content=message,
+        used_tools=[],
+        status="received",
+    )
+    try:
+        result = await _run_agent_core(
+            message=message,
+            session_id=session_id,
+            client=client,
+            max_tool_rounds=max_tool_rounds,
+        )
+    except Exception:
+        database.save_chat_message(
+            session_id=session_id,
+            role="assistant",
+            content="请求处理失败",
+            used_tools=[],
+            status="error",
+        )
+        raise
+
+    database.save_chat_message(
+        session_id=session_id,
+        role="assistant",
+        content=result["answer"],
+        used_tools=result.get("tool_calls", []),
+        status=result["status"],
+    )
+    return result

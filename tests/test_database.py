@@ -1,0 +1,138 @@
+"""Tests for centralized SQLite persistence."""
+
+import json
+import sqlite3
+from pathlib import Path
+
+import pytest
+
+from backend import database
+from backend.agent import run_agent
+from backend.services import confirmation
+
+
+EXPECTED_COLUMNS = {
+    "chat_messages": [
+        "id", "session_id", "role", "content", "created_at", "used_tools", "status"
+    ],
+    "files": [
+        "id", "file_name", "file_type", "file_path", "created_at", "status", "writable"
+    ],
+    "operation_logs": [
+        "id", "session_id", "action_type", "target_file", "student_id",
+        "confirmed", "success", "error_message", "created_at",
+    ],
+    "pending_actions": [
+        "action_id", "session_id", "action_type", "target_file", "student_id",
+        "student_name", "content", "status", "created_at", "executed_at",
+    ],
+}
+
+
+class FinalAnswerClient:
+    async def create_chat_completion(self, messages, tools):
+        return {"role": "assistant", "content": "测试回答", "tool_calls": []}
+
+
+def test_first_run_creates_database_tables_and_file_records(
+    isolated_database: Path,
+) -> None:
+    assert isolated_database.is_file()
+    with sqlite3.connect(isolated_database) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = ?", ("table",)
+            )
+        }
+        for table_name, expected in EXPECTED_COLUMNS.items():
+            assert table_name in tables
+            columns = [
+                row[1]
+                for row in connection.execute(f"PRAGMA table_info({table_name})")
+            ]
+            assert columns == expected
+
+    file_rows = database.fetch_all("files")
+    assert {row["file_name"] for row in file_rows} == {
+        "学生基本信息.xlsx",
+        "学生成绩.xlsx",
+        "科研成果.xlsx",
+        "综合评价.docx",
+    }
+    writable = {row["file_name"]: row["writable"] for row in file_rows}
+    assert writable["综合评价.docx"] == 1
+    assert writable["学生成绩.xlsx"] == 0
+
+
+@pytest.mark.anyio
+async def test_agent_saves_user_and_assistant_chat_messages() -> None:
+    result = await run_agent(
+        "普通问候，不包含学生信息",
+        client=FinalAnswerClient(),
+        session_id="session-'parameterized",
+    )
+
+    assert result["status"] == "completed"
+    rows = database.fetch_all("chat_messages")
+    assert [(row["role"], row["content"]) for row in rows] == [
+        ("user", "普通问候，不包含学生信息"),
+        ("assistant", "测试回答"),
+    ]
+    assert all(row["session_id"] == "session-'parameterized" for row in rows)
+    assert json.loads(rows[0]["used_tools"]) == []
+    assert rows[0]["status"] == "received"
+    assert rows[1]["status"] == "completed"
+
+
+def test_pending_actions_and_operation_logs_are_persisted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = confirmation.create_pending_action(
+        session_id="cancel-session",
+        target_file="综合评价.docx",
+        student_id="S001",
+        student_name="张三",
+        content="取消内容",
+    )
+    assert first["ok"] is True
+    assert confirmation.cancel_action(first["data"]["action_id"])["ok"] is True
+
+    second = confirmation.create_pending_action(
+        session_id="confirm-session",
+        target_file="综合评价.docx",
+        student_id="S002",
+        student_name="李四",
+        content="确认内容",
+    )
+    monkeypatch.setattr(
+        confirmation,
+        "write_word",
+        lambda file_name, content: {
+            "ok": True,
+            "data": {"file_name": file_name, "content": content},
+            "error_code": None,
+            "message": "模拟成功",
+        },
+    )
+    assert confirmation.confirm_action(second["data"]["action_id"])["ok"] is True
+    repeated = confirmation.confirm_action(second["data"]["action_id"])
+    assert repeated["error_code"] == "ACTION_NOT_PENDING"
+
+    database.initialize_database()
+    actions = database.fetch_all("pending_actions")
+    assert [row["status"] for row in actions] == ["cancelled", "executed"]
+    assert actions[0]["executed_at"] is None
+    assert actions[1]["executed_at"] is not None
+
+    logs = database.fetch_all("operation_logs")
+    assert [row["action_type"] for row in logs] == [
+        "create_pending_write",
+        "cancel_write",
+        "create_pending_write",
+        "confirm_write",
+        "confirm_write",
+    ]
+    assert logs[1]["confirmed"] == 0 and logs[1]["success"] == 1
+    assert logs[3]["confirmed"] == 1 and logs[3]["success"] == 1
+    assert logs[4]["confirmed"] == 1 and logs[4]["success"] == 0

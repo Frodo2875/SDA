@@ -38,14 +38,10 @@ async def client():
 def isolated_word_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Route all data-file resolution to a complete isolated data set."""
     for source in (PROJECT_ROOT / "data").iterdir():
-        if source.is_file():
+        if source.is_file() and source.suffix.lower() in {".xlsx", ".docx"}:
             shutil.copy2(source, tmp_path / source.name)
     monkeypatch.setattr(excel_utils, "DATA_DIR", tmp_path)
-    with confirmation._ACTIONS_LOCK:
-        confirmation._ACTIONS.clear()
     yield tmp_path
-    with confirmation._ACTIONS_LOCK:
-        confirmation._ACTIONS.clear()
 
 
 class WriteRequestClient:
@@ -224,6 +220,7 @@ def test_failed_write_sets_action_status_failed(
     isolated_word_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     action_result = confirmation.create_pending_action(
+        session_id="failed-write",
         target_file="综合评价.docx",
         student_id="S001",
         student_name="张三",
@@ -251,6 +248,7 @@ def test_confirm_reserves_action_before_write(
     isolated_word_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     action_result = confirmation.create_pending_action(
+        session_id="reserve-write",
         target_file="综合评价.docx",
         student_id="S001",
         student_name="张三",

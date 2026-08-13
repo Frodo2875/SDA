@@ -52,6 +52,7 @@ class PendingAction(BaseModel):
     """Frozen write proposal awaiting an explicit user decision."""
 
     action_id: str
+    session_id: str
     action_type: Literal["write_word"]
     target_file: str
     student_id: str
@@ -59,6 +60,7 @@ class PendingAction(BaseModel):
     content: str
     created_at: datetime
     status: Literal["pending", "confirmed", "cancelled", "executed", "failed"]
+    executed_at: datetime | None = None
 
 
 class ChatResponse(BaseModel):

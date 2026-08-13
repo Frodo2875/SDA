@@ -136,7 +136,7 @@ async def api_compare_students(request: CompareStudentsRequest) -> dict[str, Any
 async def api_chat(request: ChatRequest) -> dict[str, Any] | JSONResponse:
     """Run one stateless natural-language request through the LLM tool loop."""
     try:
-        return await run_agent(request.message)
+        return await run_agent(request.message, session_id=request.session_id)
     except LLMConfigurationError as exc:
         return JSONResponse(
             status_code=503,
