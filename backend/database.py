@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from backend.migrations import run_migrations
+from backend.repositories.file_repository import FileRepository
 from backend.tools import excel_utils
 
 
@@ -80,11 +82,21 @@ def _connect() -> sqlite3.Connection:
     return connection
 
 
+FILE_REPOSITORY = FileRepository(_connect)
+
+
+def create_base_schema(connection: sqlite3.Connection) -> None:
+    """Create the original V1 tables before applying ordered migrations."""
+    for statement in SCHEMA_STATEMENTS:
+        connection.execute(statement)
+
+
 def initialize_database() -> None:
     """Create the database and all tables, then register current data files."""
     with _connect() as connection:
-        for statement in SCHEMA_STATEMENTS:
-            connection.execute(statement)
+        create_base_schema(connection)
+        connection.commit()
+        run_migrations(connection)
     sync_files()
 
 
@@ -103,33 +115,22 @@ def sync_files() -> None:
             for path in upload_dir.iterdir()
             if path.is_file() and not path.name.startswith(".")
         )
-    with _connect() as connection:
-        for path in sorted(paths, key=lambda item: (item.name, str(item.parent))):
-            metadata = SUPPORTED_FILES.get(path.suffix.lower())
-            if not path.is_file() or metadata is None:
-                continue
-            file_type, writable = metadata
-            relative_path = path.relative_to(data_dir).as_posix()
-            connection.execute(
-                """
-                INSERT INTO files (
-                    file_name, file_type, file_path, created_at, status, writable
-                ) VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(file_name) DO UPDATE SET
-                    file_type = excluded.file_type,
-                    file_path = excluded.file_path,
-                    status = excluded.status,
-                    writable = excluded.writable
-                """,
-                (
-                    path.name,
-                    file_type,
-                    f"data/{relative_path}",
-                    utc_now(),
-                    "active",
-                    writable,
-                ),
-            )
+    for path in sorted(paths, key=lambda item: (item.name, str(item.parent))):
+        metadata = SUPPORTED_FILES.get(path.suffix.lower())
+        if not path.is_file() or metadata is None:
+            continue
+        file_type, writable = metadata
+        relative_path = path.relative_to(data_dir).as_posix()
+        source_type = "upload" if relative_path.startswith("uploads/") else "system"
+        FILE_REPOSITORY.upsert_discovered(
+            file_name=path.name,
+            file_type=file_type,
+            file_path=f"data/{relative_path}",
+            timestamp=utc_now(),
+            writable=bool(writable),
+            source_type=source_type,
+            deletable=source_type == "upload",
+        )
 
 
 def register_file(
@@ -141,32 +142,27 @@ def register_file(
     writable: bool = False,
 ) -> int:
     """Insert one validated file record without replacing an existing record."""
-    with _connect() as connection:
-        cursor = connection.execute(
-            """
-            INSERT INTO files (
-                file_name, file_type, file_path, created_at, status, writable
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                file_name,
-                file_type,
-                file_path,
-                utc_now(),
-                status,
-                int(writable),
-            ),
-        )
-        return int(cursor.lastrowid)
+    return FILE_REPOSITORY.register(
+        file_name=file_name,
+        file_type=file_type,
+        file_path=file_path,
+        created_at=utc_now(),
+        status=status,
+        writable=writable,
+        source_type="upload" if file_path.startswith("data/uploads/") else "system",
+        queryable=not file_path.startswith("data/uploads/"),
+        deletable=file_path.startswith("data/uploads/"),
+    )
 
 
 def get_file_record(file_name: str) -> dict[str, Any] | None:
     """Fetch one registered file by its plain file name."""
-    with _connect() as connection:
-        row = connection.execute(
-            "SELECT * FROM files WHERE file_name = ?", (file_name,)
-        ).fetchone()
-    return dict(row) if row is not None else None
+    return FILE_REPOSITORY.get_by_name(file_name)
+
+
+def get_file_record_by_id(file_id: str) -> dict[str, Any] | None:
+    """Fetch one registered file by its stable V2 identifier."""
+    return FILE_REPOSITORY.get_by_file_id(file_id)
 
 
 def save_chat_message(

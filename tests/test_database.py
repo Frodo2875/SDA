@@ -16,7 +16,9 @@ EXPECTED_COLUMNS = {
         "id", "session_id", "role", "content", "created_at", "used_tools", "status"
     ],
     "files": [
-        "id", "file_name", "file_type", "file_path", "created_at", "status", "writable"
+        "id", "file_name", "file_type", "file_path", "created_at", "status", "writable",
+        "file_id", "source_type", "lifecycle_status", "parse_status", "queryable",
+        "index_status", "updated_at", "deletable",
     ],
     "operation_logs": [
         "id", "session_id", "action_type", "target_file", "student_id",
@@ -52,6 +54,13 @@ def test_first_run_creates_database_tables_and_file_records(
                 for row in connection.execute(f"PRAGMA table_info({table_name})")
             ]
             assert columns == expected
+        assert "schema_migrations" in tables
+        migration = connection.execute(
+            "SELECT version, name, applied_at FROM schema_migrations"
+        ).fetchone()
+        assert migration[0:2] == (1, "add_files_v2_foundation")
+        assert migration[2]
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
 
     file_rows = database.fetch_all("files")
     assert {
@@ -63,6 +72,20 @@ def test_first_run_creates_database_tables_and_file_records(
     writable = {row["file_name"]: row["writable"] for row in file_rows}
     assert writable["综合评价.docx"] == 1
     assert writable["学生成绩.xlsx"] == 0
+    assert all(row["file_id"] for row in file_rows)
+    assert len({row["file_id"] for row in file_rows}) == len(file_rows)
+    fixed_names = {
+        "学生基本信息.xlsx",
+        "学生成绩.xlsx",
+        "科研成果.xlsx",
+        "综合评价.docx",
+    }
+    fixed_rows = [row for row in file_rows if row["file_name"] in fixed_names]
+    upload_rows = [row for row in file_rows if row["file_path"].startswith("data/uploads/")]
+    assert all(row["source_type"] == "system" for row in fixed_rows)
+    assert all(row["deletable"] == 0 for row in fixed_rows)
+    assert all(row["source_type"] == "upload" for row in upload_rows)
+    assert all(row["deletable"] == 1 for row in upload_rows)
 
 
 @pytest.mark.anyio

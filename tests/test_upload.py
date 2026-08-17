@@ -71,6 +71,7 @@ async def test_upload_valid_excel_saves_registers_and_lists_file(
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
+    assert body["data"]["file_id"]
     assert body["data"]["path"] == "data/uploads/补充材料.xlsx"
     saved_path = upload_data_dir / "uploads" / "补充材料.xlsx"
     assert saved_path.is_file()
@@ -80,6 +81,10 @@ async def test_upload_valid_excel_saves_registers_and_lists_file(
     record = database.get_file_record("补充材料.xlsx")
     assert record["file_type"] == "excel"
     assert record["file_path"] == "data/uploads/补充材料.xlsx"
+    assert record["file_id"] == body["data"]["file_id"]
+    assert record["source_type"] == "upload"
+    assert record["deletable"] == 1
+    assert record["queryable"] == 0
     listed = list_files()
     assert [(item["file_name"], item["path"]) for item in listed["data"]] == [
         ("补充材料.xlsx", "data/uploads/补充材料.xlsx")

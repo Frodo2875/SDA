@@ -131,8 +131,10 @@ def save_uploaded_file(file_name: str, content: bytes) -> dict[str, Any]:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
 
+    file_record = database.get_file_record(clean_name)
     return success(
         {
+            "file_id": file_record["file_id"] if file_record else None,
             "file_name": clean_name,
             "file_type": file_type,
             "path": f"data/uploads/{clean_name}",
