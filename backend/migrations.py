@@ -24,11 +24,11 @@ def _utc_now() -> str:
 
 
 def _column_names(connection: sqlite3.Connection, table_name: str) -> set[str]:
-    if table_name != "files":
+    if table_name not in {"files", "schema_fields"}:
         raise ValueError("不允许检查未知数据表")
     return {
         str(row[1])
-        for row in connection.execute("PRAGMA table_info(files)").fetchall()
+        for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
     }
 
 
@@ -172,10 +172,43 @@ def _create_excel_schema_tables(connection: sqlite3.Connection) -> None:
     )
 
 
+def _add_field_semantic_mapping(connection: sqlite3.Connection) -> None:
+    """Add explicit canonical mapping provenance to discovered fields."""
+    columns = _column_names(connection, "schema_fields")
+    additions = (
+        ("canonical_name", "TEXT"),
+        ("mapping_confidence", "REAL"),
+        ("mapping_source", "TEXT"),
+    )
+    for column_name, column_type in additions:
+        if column_name not in columns:
+            connection.execute(
+                f"ALTER TABLE schema_fields ADD COLUMN {column_name} {column_type}"
+            )
+    connection.execute(
+        """
+        UPDATE schema_fields
+        SET canonical_name = CASE
+                WHEN semantic_type = 'unknown' THEN NULL
+                ELSE semantic_type
+            END,
+            mapping_confidence = COALESCE(mapping_confidence, confidence, 0),
+            mapping_source = COALESCE(
+                mapping_source,
+                CASE
+                    WHEN semantic_type = 'unknown' THEN 'unmapped'
+                    ELSE 'deterministic_rule'
+                END
+            )
+        """
+    )
+
+
 MIGRATIONS = (
     Migration(1, "add_files_v2_foundation", _add_files_v2_foundation),
     Migration(2, "normalize_file_lifecycle", _normalize_file_lifecycle),
     Migration(3, "create_excel_schema_tables", _create_excel_schema_tables),
+    Migration(4, "add_field_semantic_mapping", _add_field_semantic_mapping),
 )
 
 

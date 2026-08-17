@@ -37,6 +37,7 @@ EXPECTED_COLUMNS = {
         "field_id", "schema_id", "source_name", "source_index", "inferred_type",
         "nullable", "null_count", "null_ratio", "unique_count", "semantic_type",
         "confidence", "sensitive",
+        "canonical_name", "mapping_confidence", "mapping_source",
     ],
 }
 
@@ -72,9 +73,10 @@ def test_first_run_creates_database_tables_and_file_records(
             (1, "add_files_v2_foundation"),
             (2, "normalize_file_lifecycle"),
             (3, "create_excel_schema_tables"),
+            (4, "add_field_semantic_mapping"),
         ]
         assert all(row[2] for row in migrations)
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
 
     file_rows = database.fetch_all("files")
     assert {

@@ -23,6 +23,20 @@ SCENARIOS = {
     "查询一个不存在的赵六": ("search_student", {"name_or_id": "赵六"}),
 }
 
+EXPECTED_TOOL_NAMES = {
+    "get_top_three_students",
+    "list_files",
+    "search_student",
+    "get_student_info",
+    "get_student_scores",
+    "get_student_research",
+    "compare_students",
+    "inspect_excel",
+    "get_table_schema",
+    "query_table",
+    "aggregate_table",
+}
+
 
 class ScenarioClient:
     """Script model tool choices while deriving final answers from tool messages."""
@@ -32,15 +46,7 @@ class ScenarioClient:
 
     async def create_chat_completion(self, messages, tools):
         self.requests.append(messages.copy())
-        assert {item["function"]["name"] for item in tools} == {
-            "get_top_three_students",
-            "list_files",
-            "search_student",
-            "get_student_info",
-            "get_student_scores",
-            "get_student_research",
-            "compare_students",
-        }
+        assert {item["function"]["name"] for item in tools} == EXPECTED_TOOL_NAMES
         assert "write_word" not in {item["function"]["name"] for item in tools}
 
         if messages[-1]["role"] == "user":
@@ -201,15 +207,7 @@ async def test_tool_loop_stops_at_maximum_rounds() -> None:
 def test_only_read_only_tools_are_exposed() -> None:
     names = {tool["function"]["name"] for tool in TOOL_DEFINITIONS}
 
-    assert names == {
-        "get_top_three_students",
-        "list_files",
-        "search_student",
-        "get_student_info",
-        "get_student_scores",
-        "get_student_research",
-        "compare_students",
-    }
+    assert names == EXPECTED_TOOL_NAMES
 
 
 async def test_top_three_request_must_use_python_ranking_tool() -> None:

@@ -55,8 +55,9 @@ class SchemaRepository:
                         INSERT INTO schema_fields (
                             field_id, schema_id, source_name, source_index,
                             inferred_type, nullable, null_count, null_ratio,
-                            unique_count, semantic_type, confidence, sensitive
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            unique_count, semantic_type, confidence, sensitive,
+                            canonical_name, mapping_confidence, mapping_source
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             uuid4().hex,
@@ -71,6 +72,9 @@ class SchemaRepository:
                             field["semantic_type"],
                             field["confidence"],
                             int(field["sensitive"]),
+                            field.get("canonical_name"),
+                            field["mapping_confidence"],
+                            field["mapping_source"],
                         ),
                     )
 

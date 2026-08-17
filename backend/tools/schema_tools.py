@@ -10,6 +10,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from backend import database
 from backend.services.file_locator import FileLocatorError, resolve_by_file_id
+from backend.services.field_semantics import map_field_semantics
 from backend.tools.excel_utils import failure, success
 
 
@@ -182,7 +183,7 @@ def _inspect_worksheet(worksheet: Worksheet) -> dict[str, Any]:
         values = [row[position] for row in data_rows]
         non_null = [value for value in values if not _is_empty(value)]
         null_count = row_count - len(non_null)
-        semantic_type, semantic_confidence, sensitive = _infer_semantic(source_name)
+        semantic = map_field_semantics(source_name)
         fields.append(
             {
                 "source_name": source_name,
@@ -192,9 +193,12 @@ def _inspect_worksheet(worksheet: Worksheet) -> dict[str, Any]:
                 "null_count": null_count,
                 "null_ratio": round(null_count / row_count, 6) if row_count else 0.0,
                 "unique_count": len({_unique_key(value) for value in non_null}),
-                "semantic_type": semantic_type,
-                "confidence": semantic_confidence,
-                "sensitive": sensitive,
+                "semantic_type": semantic["semantic_type"],
+                "confidence": semantic["mapping_confidence"],
+                "sensitive": semantic["sensitive"],
+                "canonical_name": semantic["canonical_name"],
+                "mapping_confidence": semantic["mapping_confidence"],
+                "mapping_source": semantic["mapping_source"],
             }
         )
 
@@ -357,30 +361,6 @@ def _value_type(value: Any) -> str:
     if isinstance(value, str):
         return "string"
     return "other"
-
-
-def _infer_semantic(source_name: str) -> tuple[str, float, bool]:
-    normalized = re.sub(r"[\s_\-（）()]+", "", source_name).lower()
-    rules = (
-        ({"身份证", "身份证号", "idcard", "nationalid"}, "id_card", 0.98, True),
-        ({"手机号", "手机", "电话", "联系电话", "phone", "mobile"}, "phone", 0.96, True),
-        ({"邮箱", "电子邮箱", "email", "emailaddress"}, "email", 0.96, True),
-        ({"地址", "家庭地址", "住址", "address"}, "address", 0.94, True),
-        ({"护照", "护照号", "passport"}, "passport", 0.96, True),
-        ({"银行卡", "银行账号", "bankaccount"}, "bank_account", 0.96, True),
-        ({"学号", "studentid", "studentnumber"}, "student_id", 0.96, True),
-        ({"姓名", "名字", "name", "fullname", "studentname"}, "name", 0.96, True),
-    )
-    for keywords, semantic_type, confidence, sensitive in rules:
-        if normalized in keywords or any(
-            keyword and keyword in normalized for keyword in keywords if len(keyword) >= 2
-        ):
-            return semantic_type, confidence, sensitive
-    if any(keyword in normalized for keyword in ("日期", "时间", "date", "time")):
-        return "date", 0.82, False
-    if any(keyword in normalized for keyword in ("成绩", "分数", "score", "平均分")):
-        return "score", 0.84, False
-    return "unknown", 0.5, False
 
 
 def _format_schema(schema: dict[str, Any]) -> dict[str, Any]:

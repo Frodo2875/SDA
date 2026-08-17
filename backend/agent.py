@@ -5,17 +5,12 @@ import logging
 import re
 from typing import Any, Protocol
 
+from pydantic import ValidationError
+
 from backend import database
 from backend.llm_client import LLMClient
 from backend.services.confirmation import create_pending_action
-from backend.tools.analysis_tools import compare_students, get_top_three_students
-from backend.tools.file_tools import list_files
-from backend.tools.student_tools import (
-    get_student_info,
-    get_student_research,
-    get_student_scores,
-    search_student,
-)
+from backend.tool_registry import TOOL_REGISTRY
 
 
 MAX_TOOL_ROUNDS = 8
@@ -37,120 +32,14 @@ SYSTEM_PROMPT = """你是学生材料智能文档助手。
 11. get_student_research 返回 no_record 时，必须原样说明“当前科研成果材料中未查询到相关记录。”，不得说该学生没有科研成果或科研成果为零。
 12. 用户要求生成综合评价并写入 Word 时，必须先完整查询基本信息、成绩和科研，再生成适合直接追加到 Word 的评价正文。不要在正文中加入“已写入”“已确认”等表述。
 13. 用户询问全体学生中平均成绩最高的三名时，必须调用 get_top_three_students，禁止自行枚举或猜测排名。
+14. 查询未知结构 Excel 前必须使用已保存 Schema；精确筛选使用 query_table，统计使用 aggregate_table。
+15. 不得生成 SQL、Python 或任意表达式作为工具参数，只能使用工具定义的结构化字段和白名单操作符。
 请用简洁中文整合工具结果并回答。"""
 
 
-TOOL_DEFINITIONS: list[dict[str, Any]] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_top_three_students",
-            "description": "由 Python 读取成绩材料、重新计算三科平均分并返回全体学生中最高的三名。",
-            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_files",
-            "description": "列出 data 目录中所有受支持的 Excel 和 Word 文件。",
-            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_student",
-            "description": "按完整姓名或学号搜索学生；用于识别重名、唯一匹配或不存在。",
-            "parameters": {
-                "type": "object",
-                "properties": {"name_or_id": {"type": "string", "description": "学生姓名或学号"}},
-                "required": ["name_or_id"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_student_info",
-            "description": "通过学号查询学生基本信息。只能传入已确认的学号。",
-            "parameters": {
-                "type": "object",
-                "properties": {"student_id": {"type": "string", "description": "学生学号"}},
-                "required": ["student_id"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_student_scores",
-            "description": "通过学号查询三科成绩、Python 计算的平均分和专业排名。",
-            "parameters": {
-                "type": "object",
-                "properties": {"student_id": {"type": "string", "description": "学生学号"}},
-                "required": ["student_id"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_student_research",
-            "description": "通过学号查询科研记录，并区分 no_record 与数值为零。",
-            "parameters": {
-                "type": "object",
-                "properties": {"student_id": {"type": "string", "description": "学生学号"}},
-                "required": ["student_id"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "compare_students",
-            "description": "比较至少两名学生的平均成绩、专业排名和科研数量，由 Python 计算差值。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "student_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "minItems": 2,
-                        "description": "至少两个学生学号",
-                    }
-                },
-                "required": ["student_ids"],
-                "additionalProperties": False,
-            },
-        },
-    },
-]
-
-
-TOOL_FUNCTIONS = {
-    "list_files": list_files,
-    "search_student": search_student,
-    "get_student_info": get_student_info,
-    "get_student_scores": get_student_scores,
-    "get_student_research": get_student_research,
-    "compare_students": compare_students,
-    "get_top_three_students": get_top_three_students,
-}
-
-TOOL_ARGUMENTS = {
-    "list_files": {},
-    "search_student": {"name_or_id": str},
-    "get_student_info": {"student_id": str},
-    "get_student_scores": {"student_id": str},
-    "get_student_research": {"student_id": str},
-    "compare_students": {"student_ids": list},
-    "get_top_three_students": {},
-}
+TOOL_DEFINITIONS: list[dict[str, Any]] = TOOL_REGISTRY.definitions()
+TOOL_FUNCTIONS = TOOL_REGISTRY.handlers()
+TOOL_ARGUMENTS = TOOL_REGISTRY.legacy_argument_types()
 
 
 class ChatClient(Protocol):
@@ -171,7 +60,8 @@ def _execute_tool(
     executed_calls: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Validate model-generated arguments and execute an allow-listed tool."""
-    if name not in TOOL_FUNCTIONS:
+    spec = TOOL_REGISTRY.get(name)
+    if name not in TOOL_FUNCTIONS or spec is None:
         return {}, _invalid_tool_result("UNKNOWN_TOOL", f"不允许调用工具：{name}")
     try:
         arguments = json.loads(raw_arguments or "{}")
@@ -180,20 +70,13 @@ def _execute_tool(
     if not isinstance(arguments, dict):
         return {}, _invalid_tool_result("INVALID_TOOL_ARGUMENTS", "工具参数必须是 JSON 对象")
 
-    expected = TOOL_ARGUMENTS[name]
-    if set(arguments) != set(expected):
+    try:
+        validated = spec.arguments_model.model_validate(arguments)
+    except ValidationError:
         return arguments, _invalid_tool_result(
-            "INVALID_TOOL_ARGUMENTS", f"工具 {name} 的参数字段不正确"
+            "INVALID_TOOL_ARGUMENTS", f"工具 {name} 的参数未通过 Schema 校验"
         )
-    for field, field_type in expected.items():
-        if not isinstance(arguments[field], field_type):
-            return arguments, _invalid_tool_result(
-                "INVALID_TOOL_ARGUMENTS", f"工具参数 {field} 类型不正确"
-            )
-        if field_type is str and not arguments[field].strip():
-            return arguments, _invalid_tool_result(
-                "INVALID_TOOL_ARGUMENTS", f"工具参数 {field} 不能为空"
-            )
+    arguments = validated.model_dump()
     if name == "compare_students":
         student_ids = arguments["student_ids"]
         if len(student_ids) < 2 or any(not isinstance(item, str) or not item.strip() for item in student_ids):
