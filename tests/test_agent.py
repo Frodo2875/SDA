@@ -35,6 +35,10 @@ EXPECTED_TOOL_NAMES = {
     "get_table_schema",
     "query_table",
     "aggregate_table",
+    "find_cross_file_conflicts",
+    "validate_document",
+    "find_duplicate_records",
+    "validate_student_data",
 }
 
 

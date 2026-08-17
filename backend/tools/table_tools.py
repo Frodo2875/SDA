@@ -41,7 +41,7 @@ def query_table(
     except ValidationError as exc:
         return failure("INVALID_QUERY_ARGUMENTS", _validation_message(exc))
 
-    context_result = _load_table(arguments.file_id, arguments.sheet)
+    context_result = load_table_data(arguments.file_id, arguments.sheet)
     if not context_result["ok"]:
         return context_result
     context = context_result["data"]
@@ -120,7 +120,7 @@ def aggregate_table(
     except ValidationError as exc:
         return failure("INVALID_AGGREGATE_ARGUMENTS", _validation_message(exc))
 
-    context_result = _load_table(arguments.file_id, arguments.sheet)
+    context_result = load_table_data(arguments.file_id, arguments.sheet)
     if not context_result["ok"]:
         return context_result
     context = context_result["data"]
@@ -209,7 +209,8 @@ def aggregate_table(
     return response
 
 
-def _load_table(file_id: str, sheet_name: str) -> dict[str, Any]:
+def load_table_data(file_id: str, sheet_name: str) -> dict[str, Any]:
+    """Load rows according to one persisted Schema for trusted Python services."""
     record = database.get_file_record_by_id(file_id)
     if record is None:
         return failure("FILE_NOT_FOUND", "未找到指定 file_id 的文件")
@@ -243,10 +244,13 @@ def _load_table(file_id: str, sheet_name: str) -> dict[str, Any]:
             return failure("SHEET_NOT_FOUND", f"Excel 中不存在 Sheet：{sheet_name}")
         worksheet = workbook[sheet_name]
         rows = []
-        for values in worksheet.iter_rows(
-            min_row=schema["data_start_row"],
-            max_col=max_column,
-            values_only=True,
+        for row_number, values in enumerate(
+            worksheet.iter_rows(
+                min_row=schema["data_start_row"],
+                max_col=max_column,
+                values_only=True,
+            ),
+            start=schema["data_start_row"],
         ):
             row = {
                 field["source_name"]: values[field["source_index"] - 1]
@@ -255,6 +259,7 @@ def _load_table(file_id: str, sheet_name: str) -> dict[str, Any]:
                 for field in schema["fields"]
             }
             if any(not _is_null(value) for value in row.values()):
+                row["__row_number__"] = row_number
                 rows.append(row)
     except Exception:
         return failure("TABLE_READ_ERROR", "读取 Excel 表格失败")

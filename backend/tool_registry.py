@@ -8,7 +8,9 @@ from pydantic import BaseModel
 from backend.tool_models import (
     AggregateTableArguments,
     CompareStudentsArguments,
+    DuplicateRecordsArguments,
     EmptyArguments,
+    EntityIdArguments,
     FileIdArguments,
     QueryTableArguments,
     StudentIdArguments,
@@ -16,6 +18,12 @@ from backend.tool_models import (
     TableSchemaArguments,
 )
 from backend.tools.analysis_tools import compare_students, get_top_three_students
+from backend.tools.data_quality_tools import (
+    find_cross_file_conflicts,
+    find_duplicate_records,
+    validate_document,
+    validate_student_data,
+)
 from backend.tools.file_tools import list_files
 from backend.tools.schema_tools import get_table_schema, inspect_excel
 from backend.tools.student_tools import (
@@ -169,6 +177,30 @@ TOOL_REGISTRY = ToolRegistry(
             "由 Python 对已解析 Excel Sheet 执行 count、sum、avg、min 或 max。",
             AggregateTableArguments,
             aggregate_table,
+        ),
+        _spec(
+            "find_cross_file_conflicts",
+            "按受控关联规则检查一个实体的跨文件冲突，不自动选择真实值。",
+            EntityIdArguments,
+            find_cross_file_conflicts,
+        ),
+        _spec(
+            "validate_document",
+            "由 Python 校验一个已解析 Excel 的字段、空值、重复、类型、范围和联系方式质量。",
+            FileIdArguments,
+            validate_document,
+        ),
+        _spec(
+            "find_duplicate_records",
+            "按真实 Schema 字段查找一个 Excel 内的重复键记录。",
+            DuplicateRecordsArguments,
+            find_duplicate_records,
+        ),
+        _spec(
+            "validate_student_data",
+            "按学号验证学生跨文档数据质量、关联可靠性和属性冲突。",
+            StudentIdArguments,
+            validate_student_data,
         ),
     ]
 )

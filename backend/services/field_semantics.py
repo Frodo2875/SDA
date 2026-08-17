@@ -10,6 +10,8 @@ HIGH_CONFIDENCE_ALIASES = {
     "college": {"学院", "所属院系"},
     "phone": {"联系电话", "移动电话", "手机号", "手机"},
     "email": {"邮箱", "email"},
+    "grade": {"年级", "所在年级"},
+    "class": {"班级", "所在班级"},
 }
 
 SENSITIVE_CANONICAL_NAMES = {"student_id", "name", "phone", "email"}

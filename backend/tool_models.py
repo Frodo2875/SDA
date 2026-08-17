@@ -21,6 +21,10 @@ class StudentIdArguments(ToolArguments):
     student_id: str = Field(min_length=1)
 
 
+class EntityIdArguments(ToolArguments):
+    entity_id: str = Field(min_length=1)
+
+
 class CompareStudentsArguments(ToolArguments):
     student_ids: list[str] = Field(min_length=2)
 
@@ -34,6 +38,20 @@ class CompareStudentsArguments(ToolArguments):
 
 class FileIdArguments(ToolArguments):
     file_id: str = Field(pattern=r"^[0-9a-fA-F]{32}$")
+
+
+class DuplicateRecordsArguments(FileIdArguments):
+    keys: list[str] = Field(min_length=1)
+
+    @field_validator("keys")
+    @classmethod
+    def validate_keys(cls, values: list[str]) -> list[str]:
+        cleaned = [value.strip() for value in values]
+        if any(not value for value in cleaned):
+            raise ValueError("keys 不能包含空字段")
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("keys 不能包含重复字段")
+        return cleaned
 
 
 class TableSchemaArguments(FileIdArguments):
