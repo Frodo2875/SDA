@@ -11,6 +11,7 @@ from docx import Document
 from openpyxl import load_workbook
 
 from backend import database
+from backend.services.file_lifecycle import process_uploaded_file
 from backend.tools import excel_utils
 from backend.tools.excel_utils import failure, success
 
@@ -114,6 +115,10 @@ def save_uploaded_file(file_name: str, content: bytes) -> dict[str, Any]:
             file_path=f"data/uploads/{clean_name}",
             status="active",
             writable=file_type == "word",
+            lifecycle_status="uploaded",
+            parse_status="pending",
+            queryable=False,
+            index_status="not_required",
         )
     except sqlite3.IntegrityError:
         if destination_created:
@@ -132,15 +137,32 @@ def save_uploaded_file(file_name: str, content: bytes) -> dict[str, Any]:
             temporary_path.unlink(missing_ok=True)
 
     file_record = database.get_file_record(clean_name)
+    if file_record is None:
+        return failure("FILE_REGISTER_ERROR", "文件登记结果无法读取")
+
+    parse_result = process_uploaded_file(
+        file_record["file_id"],
+        destination,
+        _validate_document,
+    )
+    if not parse_result["ok"]:
+        return parse_result
+
+    file_record = database.get_file_record_by_id(file_record["file_id"])
     return success(
         {
-            "file_id": file_record["file_id"] if file_record else None,
+            "file_id": file_record["file_id"],
             "file_name": clean_name,
             "file_type": file_type,
             "path": f"data/uploads/{clean_name}",
             "size": len(content),
             "exists": True,
             "status": "active",
+            "source_type": file_record["source_type"],
+            "lifecycle_status": file_record["lifecycle_status"],
+            "parse_status": file_record["parse_status"],
+            "queryable": bool(file_record["queryable"]),
+            "index_status": file_record["index_status"],
         },
         "文件上传并校验成功",
     )

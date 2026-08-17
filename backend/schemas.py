@@ -40,6 +40,12 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1, description="用户自然语言消息")
 
 
+class DeleteFileRequest(BaseModel):
+    """Explicit session context for preparing a file deletion."""
+
+    session_id: str = Field(min_length=1, description="请求删除的客户端会话标识")
+
+
 class AgentToolCall(BaseModel):
     """One tool invocation executed during an Agent run."""
 
@@ -53,7 +59,7 @@ class PendingAction(BaseModel):
 
     action_id: str
     session_id: str
-    action_type: Literal["write_word"]
+    action_type: Literal["write_word", "delete_file"]
     target_file: str
     student_id: str
     student_name: str

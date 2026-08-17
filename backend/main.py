@@ -1,20 +1,25 @@
 """FastAPI application entry point."""
 
 from collections.abc import Callable
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import FastAPI, File, Query, UploadFile
+from fastapi import FastAPI, File, Path, Query, UploadFile
 from fastapi.responses import JSONResponse
 
 from backend.agent import run_agent
 from backend.llm_client import LLMAPIError, LLMConfigurationError
-from backend.services.confirmation import cancel_action, confirm_action
+from backend.services.confirmation import (
+    cancel_action,
+    confirm_action,
+    create_pending_delete_action,
+)
 from backend.services.file_upload import save_uploaded_file
 from backend.schemas import (
     ActionResponse,
     ChatRequest,
     ChatResponse,
     CompareStudentsRequest,
+    DeleteFileRequest,
     HealthResponse,
     ToolResponse,
 )
@@ -120,6 +125,50 @@ async def api_upload_file(file: UploadFile = File(...)) -> dict[str, Any] | JSON
         "INVALID_FILE_CONTENT": 400,
         "EMPTY_UPLOAD": 400,
         "FILE_ALREADY_EXISTS": 409,
+    }.get(result.get("error_code"), 500)
+    return JSONResponse(status_code=status_code, content=result)
+
+
+@app.post(
+    "/api/files/{file_id}/delete",
+    response_model=ActionResponse,
+    tags=["files"],
+)
+async def api_prepare_file_delete(
+    file_id: Annotated[
+        str,
+        Path(
+            min_length=32,
+            max_length=32,
+            pattern=r"^[0-9a-fA-F]{32}$",
+            description="稳定文件标识",
+        ),
+    ],
+    request: DeleteFileRequest,
+) -> dict[str, Any] | JSONResponse:
+    """Create a pending upload deletion; this endpoint never deletes directly."""
+    try:
+        result = create_pending_delete_action(
+            session_id=request.session_id,
+            file_id=file_id,
+        )
+    except Exception:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "ok": False,
+                "data": None,
+                "error_code": "INTERNAL_ERROR",
+                "message": "服务器内部错误",
+            },
+        )
+    if result["ok"]:
+        return result
+    status_code = {
+        "INVALID_FILE_ID": 400,
+        "FILE_NOT_FOUND": 404,
+        "FILE_DELETE_FORBIDDEN": 403,
+        "FILE_ALREADY_DELETED": 409,
     }.get(result.get("error_code"), 500)
     return JSONResponse(status_code=status_code, content=result)
 

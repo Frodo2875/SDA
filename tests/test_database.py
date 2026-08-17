@@ -55,12 +55,15 @@ def test_first_run_creates_database_tables_and_file_records(
             ]
             assert columns == expected
         assert "schema_migrations" in tables
-        migration = connection.execute(
-            "SELECT version, name, applied_at FROM schema_migrations"
-        ).fetchone()
-        assert migration[0:2] == (1, "add_files_v2_foundation")
-        assert migration[2]
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        migrations = connection.execute(
+            "SELECT version, name, applied_at FROM schema_migrations ORDER BY version"
+        ).fetchall()
+        assert [(row[0], row[1]) for row in migrations] == [
+            (1, "add_files_v2_foundation"),
+            (2, "normalize_file_lifecycle"),
+        ]
+        assert all(row[2] for row in migrations)
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
 
     file_rows = database.fetch_all("files")
     assert {
@@ -84,6 +87,9 @@ def test_first_run_creates_database_tables_and_file_records(
     upload_rows = [row for row in file_rows if row["file_path"].startswith("data/uploads/")]
     assert all(row["source_type"] == "system" for row in fixed_rows)
     assert all(row["deletable"] == 0 for row in fixed_rows)
+    assert all(row["lifecycle_status"] == "ready" for row in fixed_rows)
+    assert all(row["parse_status"] == "not_required" for row in fixed_rows)
+    assert all(row["queryable"] == 1 for row in fixed_rows)
     assert all(row["source_type"] == "upload" for row in upload_rows)
     assert all(row["deletable"] == 1 for row in upload_rows)
 

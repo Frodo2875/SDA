@@ -140,8 +140,13 @@ def register_file(
     file_path: str,
     status: str = "active",
     writable: bool = False,
+    lifecycle_status: str | None = None,
+    parse_status: str | None = None,
+    queryable: bool | None = None,
+    index_status: str = "not_required",
 ) -> int:
     """Insert one validated file record without replacing an existing record."""
+    is_upload = file_path.startswith("data/uploads/")
     return FILE_REPOSITORY.register(
         file_name=file_name,
         file_type=file_type,
@@ -149,9 +154,12 @@ def register_file(
         created_at=utc_now(),
         status=status,
         writable=writable,
-        source_type="upload" if file_path.startswith("data/uploads/") else "system",
-        queryable=not file_path.startswith("data/uploads/"),
-        deletable=file_path.startswith("data/uploads/"),
+        source_type="upload" if is_upload else "system",
+        lifecycle_status=lifecycle_status or ("uploaded" if is_upload else "ready"),
+        parse_status=parse_status or ("pending" if is_upload else "not_required"),
+        queryable=(not is_upload) if queryable is None else queryable,
+        index_status=index_status,
+        deletable=is_upload,
     )
 
 
@@ -163,6 +171,27 @@ def get_file_record(file_name: str) -> dict[str, Any] | None:
 def get_file_record_by_id(file_id: str) -> dict[str, Any] | None:
     """Fetch one registered file by its stable V2 identifier."""
     return FILE_REPOSITORY.get_by_file_id(file_id)
+
+
+def update_file_state(
+    *,
+    file_id: str,
+    lifecycle_status: str,
+    parse_status: str,
+    queryable: bool,
+    index_status: str = "not_required",
+    expected_lifecycle: str | None = None,
+) -> bool:
+    """Persist one validated lifecycle transition through the repository."""
+    return FILE_REPOSITORY.update_state(
+        file_id=file_id,
+        lifecycle_status=lifecycle_status,
+        parse_status=parse_status,
+        queryable=queryable,
+        index_status=index_status,
+        updated_at=utc_now(),
+        expected_lifecycle=expected_lifecycle,
+    )
 
 
 def save_chat_message(

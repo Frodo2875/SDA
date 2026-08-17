@@ -84,7 +84,10 @@ async def test_upload_valid_excel_saves_registers_and_lists_file(
     assert record["file_id"] == body["data"]["file_id"]
     assert record["source_type"] == "upload"
     assert record["deletable"] == 1
-    assert record["queryable"] == 0
+    assert record["lifecycle_status"] == "ready"
+    assert record["parse_status"] == "parsed"
+    assert record["queryable"] == 1
+    assert record["index_status"] == "not_required"
     listed = list_files()
     assert [(item["file_name"], item["path"]) for item in listed["data"]] == [
         ("补充材料.xlsx", "data/uploads/补充材料.xlsx")

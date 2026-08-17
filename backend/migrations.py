@@ -90,8 +90,39 @@ def _add_files_v2_foundation(connection: sqlite3.Connection) -> None:
     )
 
 
+def _normalize_file_lifecycle(connection: sqlite3.Connection) -> None:
+    """Move V2.1 records to the explicit V2.2 lifecycle vocabulary."""
+    connection.execute(
+        """
+        UPDATE files
+        SET lifecycle_status = 'ready',
+            parse_status = CASE
+                WHEN source_type = 'system' THEN 'not_required'
+                ELSE 'parsed'
+            END,
+            queryable = 1,
+            index_status = 'not_required',
+            updated_at = COALESCE(updated_at, created_at, ?),
+            deletable = CASE WHEN source_type = 'upload' THEN 1 ELSE 0 END
+        WHERE lifecycle_status IS NULL
+           OR lifecycle_status = 'active'
+        """,
+        (_utc_now(),),
+    )
+    connection.execute(
+        """
+        UPDATE files
+        SET index_status = 'not_required',
+            updated_at = COALESCE(updated_at, created_at, ?)
+        WHERE index_status IS NULL OR index_status = 'not_indexed'
+        """,
+        (_utc_now(),),
+    )
+
+
 MIGRATIONS = (
     Migration(1, "add_files_v2_foundation", _add_files_v2_foundation),
+    Migration(2, "normalize_file_lifecycle", _normalize_file_lifecycle),
 )
 
 
