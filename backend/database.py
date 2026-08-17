@@ -8,6 +8,7 @@ from typing import Any
 
 from backend.migrations import run_migrations
 from backend.repositories.file_repository import FileRepository
+from backend.repositories.schema_repository import SchemaRepository
 from backend.tools import excel_utils
 
 
@@ -83,6 +84,7 @@ def _connect() -> sqlite3.Connection:
 
 
 FILE_REPOSITORY = FileRepository(_connect)
+SCHEMA_REPOSITORY = SchemaRepository(_connect)
 
 
 def create_base_schema(connection: sqlite3.Connection) -> None:
@@ -192,6 +194,28 @@ def update_file_state(
         updated_at=utc_now(),
         expected_lifecycle=expected_lifecycle,
     )
+
+
+def replace_table_schemas(file_id: str, schemas: list[dict[str, Any]]) -> None:
+    """Atomically persist all discovered Sheet schemas for one file."""
+    SCHEMA_REPOSITORY.replace_for_file(
+        file_id=file_id,
+        schemas=schemas,
+        created_at=utc_now(),
+    )
+
+
+def get_table_schema_records(
+    file_id: str,
+    sheet_name: str | None = None,
+) -> list[dict[str, Any]]:
+    """Read persisted Sheet schemas through the compatibility facade."""
+    return SCHEMA_REPOSITORY.get_for_file(file_id=file_id, sheet_name=sheet_name)
+
+
+def delete_table_schemas(file_id: str) -> None:
+    """Delete stale discovery output for one file."""
+    SCHEMA_REPOSITORY.delete_for_file(file_id)
 
 
 def save_chat_message(
@@ -368,6 +392,8 @@ def fetch_all(table_name: str) -> list[dict[str, Any]]:
         "files": "SELECT * FROM files ORDER BY id",
         "operation_logs": "SELECT * FROM operation_logs ORDER BY id",
         "pending_actions": "SELECT * FROM pending_actions ORDER BY created_at",
+        "table_schemas": "SELECT * FROM table_schemas ORDER BY rowid",
+        "schema_fields": "SELECT * FROM schema_fields ORDER BY rowid",
     }
     query = queries.get(table_name)
     if query is None:

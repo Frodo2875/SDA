@@ -120,9 +120,62 @@ def _normalize_file_lifecycle(connection: sqlite3.Connection) -> None:
     )
 
 
+def _create_excel_schema_tables(connection: sqlite3.Connection) -> None:
+    """Create normalized per-sheet schema discovery storage."""
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS table_schemas (
+            schema_id TEXT PRIMARY KEY,
+            file_id TEXT NOT NULL,
+            sheet_name TEXT NOT NULL,
+            header_row INTEGER,
+            data_start_row INTEGER,
+            row_count INTEGER NOT NULL,
+            column_count INTEGER NOT NULL,
+            detection_status TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            detection_message TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE (file_id, sheet_name),
+            FOREIGN KEY (file_id) REFERENCES files(file_id) ON DELETE CASCADE
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_fields (
+            field_id TEXT PRIMARY KEY,
+            schema_id TEXT NOT NULL,
+            source_name TEXT NOT NULL,
+            source_index INTEGER NOT NULL,
+            inferred_type TEXT NOT NULL,
+            nullable INTEGER NOT NULL CHECK (nullable IN (0, 1)),
+            null_count INTEGER NOT NULL,
+            null_ratio REAL NOT NULL,
+            unique_count INTEGER NOT NULL,
+            semantic_type TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            sensitive INTEGER NOT NULL CHECK (sensitive IN (0, 1)),
+            FOREIGN KEY (schema_id) REFERENCES table_schemas(schema_id)
+                ON DELETE CASCADE,
+            UNIQUE (schema_id, source_index)
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS ix_table_schemas_file_id "
+        "ON table_schemas(file_id)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS ix_schema_fields_schema_id "
+        "ON schema_fields(schema_id)"
+    )
+
+
 MIGRATIONS = (
     Migration(1, "add_files_v2_foundation", _add_files_v2_foundation),
     Migration(2, "normalize_file_lifecycle", _normalize_file_lifecycle),
+    Migration(3, "create_excel_schema_tables", _create_excel_schema_tables),
 )
 
 

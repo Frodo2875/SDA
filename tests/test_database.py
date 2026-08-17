@@ -28,6 +28,16 @@ EXPECTED_COLUMNS = {
         "action_id", "session_id", "action_type", "target_file", "student_id",
         "student_name", "content", "status", "created_at", "executed_at",
     ],
+    "table_schemas": [
+        "schema_id", "file_id", "sheet_name", "header_row", "data_start_row",
+        "row_count", "column_count", "detection_status", "confidence",
+        "detection_message", "created_at",
+    ],
+    "schema_fields": [
+        "field_id", "schema_id", "source_name", "source_index", "inferred_type",
+        "nullable", "null_count", "null_ratio", "unique_count", "semantic_type",
+        "confidence", "sensitive",
+    ],
 }
 
 
@@ -61,9 +71,10 @@ def test_first_run_creates_database_tables_and_file_records(
         assert [(row[0], row[1]) for row in migrations] == [
             (1, "add_files_v2_foundation"),
             (2, "normalize_file_lifecycle"),
+            (3, "create_excel_schema_tables"),
         ]
         assert all(row[2] for row in migrations)
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
 
     file_rows = database.fetch_all("files")
     assert {

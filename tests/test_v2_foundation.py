@@ -46,7 +46,7 @@ def _insert_v1_file(
 
 def test_empty_database_migration_creates_history_and_v2_columns(tmp_path: Path) -> None:
     with _v1_connection(tmp_path / "empty.db") as connection:
-        assert run_migrations(connection) == [1, 2]
+        assert run_migrations(connection) == [1, 2, 3]
 
         columns = {
             row[1] for row in connection.execute("PRAGMA table_info(files)").fetchall()
@@ -67,9 +67,10 @@ def test_empty_database_migration_creates_history_and_v2_columns(tmp_path: Path)
         assert [(row[0], row[1]) for row in history] == [
             (1, "add_files_v2_foundation"),
             (2, "normalize_file_lifecycle"),
+            (3, "create_excel_schema_tables"),
         ]
         assert history[0][2]
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
 
 
 def test_v1_database_is_migrated_in_place_with_stable_unique_ids(
@@ -127,7 +128,7 @@ def test_migration_is_idempotent_and_preserves_file_identity(tmp_path: Path) -> 
             file_name="学生基本信息.xlsx",
             file_path="data/学生基本信息.xlsx",
         )
-        assert run_migrations(connection) == [1, 2]
+        assert run_migrations(connection) == [1, 2, 3]
         original = connection.execute(
             "SELECT file_name, file_id FROM files"
         ).fetchone()
@@ -139,7 +140,7 @@ def test_migration_is_idempotent_and_preserves_file_identity(tmp_path: Path) -> 
         assert tuple(current) == tuple(original)
         assert connection.execute(
             "SELECT COUNT(*) FROM schema_migrations"
-        ).fetchone()[0] == 2
+        ).fetchone()[0] == 3
 
 
 def test_failed_migration_rolls_back_all_changes(tmp_path: Path) -> None:
@@ -151,7 +152,7 @@ def test_failed_migration_rolls_back_all_changes(tmp_path: Path) -> None:
             active.execute("INSERT INTO must_be_rolled_back (id) VALUES (?)", (1,))
             raise RuntimeError("forced migration failure")
 
-        failing = Migration(3, "forced_failure", fail_after_schema_change)
+        failing = Migration(4, "forced_failure", fail_after_schema_change)
         with pytest.raises(RuntimeError, match="forced migration failure"):
             run_migrations(connection, (failing,))
 
@@ -160,9 +161,9 @@ def test_failed_migration_rolls_back_all_changes(tmp_path: Path) -> None:
             ("must_be_rolled_back",),
         ).fetchone() is None
         assert connection.execute(
-            "SELECT COUNT(*) FROM schema_migrations WHERE version = ?", (3,)
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = ?", (4,)
         ).fetchone()[0] == 0
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
 
 
 def test_repository_keeps_file_id_when_metadata_is_renamed(tmp_path: Path) -> None:
