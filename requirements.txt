@@ -9,3 +9,4 @@ pytest
 python-dotenv
 httpx
 python-multipart
+pypdf

@@ -8,8 +8,8 @@ from backend.tools import excel_utils
 from backend.tools.excel_utils import failure, resolve_data_file, success
 
 
-SUPPORTED_SUFFIXES = {".xlsx", ".docx"}
-FILE_TYPES = {".xlsx": "excel", ".docx": "word"}
+SUPPORTED_SUFFIXES = {".xlsx", ".docx", ".pdf"}
+FILE_TYPES = {".xlsx": "excel", ".docx": "word", ".pdf": "pdf"}
 
 
 def list_files() -> dict[str, Any]:

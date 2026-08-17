@@ -78,6 +78,7 @@ def delete_uploaded_file(action: dict[str, Any]) -> dict[str, Any]:
         return failure("FILE_DELETE_ERROR", f"删除文件失败：{exc}")
 
     staging = target.parent / f".delete-{action['action_id']}-{target.name}"
+    original_chunks = database.get_document_chunks(file_id)
     try:
         os.replace(target, staging)
     except OSError:
@@ -94,6 +95,7 @@ def delete_uploaded_file(action: dict[str, Any]) -> dict[str, Any]:
         )
         if not state_updated:
             raise RuntimeError("文件状态更新失败")
+        database.delete_document_chunks(file_id)
         staging.unlink()
     except Exception:
         if staging.exists():
@@ -101,6 +103,10 @@ def delete_uploaded_file(action: dict[str, Any]) -> dict[str, Any]:
                 os.replace(staging, target)
             except OSError:
                 pass
+        try:
+            database.replace_document_chunks(file_id, original_chunks)
+        except Exception:
+            pass
         _mark_cleanup_failed(record)
         return failure(
             "FILE_DELETE_ERROR",
@@ -125,5 +131,5 @@ def _mark_cleanup_failed(record: dict[str, Any]) -> None:
         lifecycle_status="cleanup_failed",
         parse_status=record["parse_status"],
         queryable=False,
-        index_status="not_required",
+        index_status=record["index_status"],
     )

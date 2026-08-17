@@ -39,6 +39,10 @@ EXPECTED_COLUMNS = {
         "confidence", "sensitive",
         "canonical_name", "mapping_confidence", "mapping_source",
     ],
+    "document_chunks": [
+        "chunk_id", "file_id", "page_no", "chunk_index", "chunk_text",
+        "text_hash", "metadata_json",
+    ],
 }
 
 
@@ -74,9 +78,10 @@ def test_first_run_creates_database_tables_and_file_records(
             (2, "normalize_file_lifecycle"),
             (3, "create_excel_schema_tables"),
             (4, "add_field_semantic_mapping"),
+            (5, "create_document_chunks"),
         ]
         assert all(row[2] for row in migrations)
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
 
     file_rows = database.fetch_all("files")
     assert {

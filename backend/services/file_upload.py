@@ -12,11 +12,12 @@ from openpyxl import load_workbook
 
 from backend import database
 from backend.services.file_lifecycle import process_uploaded_file
+from backend.services.document_index import index_document, validate_pdf_file
 from backend.tools import excel_utils
 from backend.tools.excel_utils import failure, success
 
 
-SUPPORTED_UPLOADS = {".xlsx": "excel", ".docx": "word"}
+SUPPORTED_UPLOADS = {".xlsx": "excel", ".docx": "word", ".pdf": "pdf"}
 
 
 def _safe_file_name(file_name: str) -> tuple[str | None, dict[str, Any] | None]:
@@ -34,7 +35,7 @@ def _safe_file_name(file_name: str) -> tuple[str | None, dict[str, Any] | None]:
     if Path(clean_name).suffix.lower() not in SUPPORTED_UPLOADS:
         return None, failure(
             "UNSUPPORTED_FILE_TYPE",
-            "仅支持 .xlsx 和 .docx 文件，暂不支持 PDF",
+            "仅支持 .xlsx、.docx 和普通文本 .pdf 文件",
         )
     return clean_name, None
 
@@ -44,10 +45,12 @@ def _validate_document(path: Path, suffix: str) -> dict[str, Any] | None:
         if suffix == ".xlsx":
             workbook = load_workbook(path, read_only=True, data_only=True)
             workbook.close()
-        else:
+        elif suffix == ".docx":
             Document(path)
+        else:
+            return validate_pdf_file(path)
     except Exception:
-        label = "Excel" if suffix == ".xlsx" else "Word"
+        label = {".xlsx": "Excel", ".docx": "Word", ".pdf": "PDF"}[suffix]
         return failure(
             "INVALID_FILE_CONTENT",
             f"文件不是可正常打开的 {label} 文档，请检查文件是否损坏或扩展名是否正确",
@@ -147,6 +150,11 @@ def save_uploaded_file(file_name: str, content: bytes) -> dict[str, Any]:
     )
     if not parse_result["ok"]:
         return parse_result
+
+    if file_type in {"word", "pdf"}:
+        index_result = index_document(file_record["file_id"])
+        if not index_result["ok"]:
+            return index_result
 
     file_record = database.get_file_record_by_id(file_record["file_id"])
     return success(

@@ -110,17 +110,28 @@ async def test_upload_valid_word_can_be_opened(
     assert record["writable"] == 1
 
 
-async def test_pdf_is_rejected_without_creating_file(
-    client: httpx.AsyncClient, upload_data_dir: Path
+async def test_corrupt_pdf_is_rejected_without_creating_file(
+    client: httpx.AsyncClient, upload_data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from backend.services import file_upload
+
+    monkeypatch.setattr(
+        file_upload,
+        "validate_pdf_file",
+        lambda path: {
+            "ok": False,
+            "data": None,
+            "error_code": "INVALID_FILE_CONTENT",
+            "message": "文件不是可正常打开的 PDF 文档",
+        },
+    )
     response = await client.post(
         "/api/files/upload",
         files={"file": ("材料.pdf", b"%PDF-1.4 test", "application/pdf")},
     )
 
     assert response.status_code == 400
-    assert response.json()["error_code"] == "UNSUPPORTED_FILE_TYPE"
-    assert "暂不支持 PDF" in response.json()["message"]
+    assert response.json()["error_code"] == "INVALID_FILE_CONTENT"
     assert not (upload_data_dir / "uploads" / "材料.pdf").exists()
 
 

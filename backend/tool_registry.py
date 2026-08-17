@@ -13,6 +13,7 @@ from backend.tool_models import (
     EntityIdArguments,
     FileIdArguments,
     QueryTableArguments,
+    RetrieveDocumentArguments,
     StudentIdArguments,
     StudentSearchArguments,
     TableSchemaArguments,
@@ -33,6 +34,7 @@ from backend.tools.student_tools import (
     search_student,
 )
 from backend.tools.table_tools import aggregate_table, query_table
+from backend.tools.document_tools import retrieve_document
 
 
 ToolHandler = Callable[..., dict[str, Any]]
@@ -118,7 +120,7 @@ TOOL_REGISTRY = ToolRegistry(
         ),
         _spec(
             "list_files",
-            "列出知识库中受支持的 Excel 和 Word 文件。",
+            "列出知识库中受支持的 Excel、Word 和普通文本 PDF 文件。",
             EmptyArguments,
             list_files,
             retryable=True,
@@ -201,6 +203,12 @@ TOOL_REGISTRY = ToolRegistry(
             "按学号验证学生跨文档数据质量、关联可靠性和属性冲突。",
             StudentIdArguments,
             validate_student_data,
+        ),
+        _spec(
+            "retrieve_document",
+            "从已索引 PDF 或 Word 中检索有限条材料依据，并返回可引用 Evidence。",
+            RetrieveDocumentArguments,
+            retrieve_document,
         ),
     ]
 )

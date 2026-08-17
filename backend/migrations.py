@@ -204,11 +204,42 @@ def _add_field_semantic_mapping(connection: sqlite3.Connection) -> None:
     )
 
 
+def _create_document_chunks(connection: sqlite3.Connection) -> None:
+    """Create local unstructured chunks and their replaceable FTS5 index."""
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS document_chunks (
+            chunk_id TEXT PRIMARY KEY,
+            file_id TEXT NOT NULL,
+            page_no INTEGER,
+            chunk_index INTEGER NOT NULL,
+            chunk_text TEXT NOT NULL,
+            text_hash TEXT NOT NULL,
+            metadata_json TEXT NOT NULL,
+            FOREIGN KEY (file_id) REFERENCES files(file_id) ON DELETE CASCADE,
+            UNIQUE (file_id, chunk_index)
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS ix_document_chunks_file_id "
+        "ON document_chunks(file_id)"
+    )
+    connection.execute(
+        """
+        CREATE VIRTUAL TABLE IF NOT EXISTS document_chunks_fts USING fts5(
+            chunk_id UNINDEXED,
+            chunk_text,
+            tokenize='trigram'
+        )
+        """
+    )
 MIGRATIONS = (
     Migration(1, "add_files_v2_foundation", _add_files_v2_foundation),
     Migration(2, "normalize_file_lifecycle", _normalize_file_lifecycle),
     Migration(3, "create_excel_schema_tables", _create_excel_schema_tables),
     Migration(4, "add_field_semantic_mapping", _add_field_semantic_mapping),
+    Migration(5, "create_document_chunks", _create_document_chunks),
 )
 
 

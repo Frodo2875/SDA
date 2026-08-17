@@ -39,6 +39,7 @@ EXPECTED_TOOL_NAMES = {
     "validate_document",
     "find_duplicate_records",
     "validate_student_data",
+    "retrieve_document",
 }
 
 

@@ -19,7 +19,7 @@ TOOL_STATUS_LABELS = {
     "compare_students": "正在比较学生信息…",
     "get_top_three_students": "正在统计成绩排名…",
 }
-FILE_TYPE_LABELS = {"excel": "Excel", "word": "Word"}
+FILE_TYPE_LABELS = {"excel": "Excel", "word": "Word", "pdf": "PDF"}
 COMPARISON_COLUMNS = {
     "student_id": "学号",
     "name": "姓名",
@@ -277,9 +277,9 @@ with st.sidebar:
     st.subheader("当前知识库")
     uploaded_file = st.file_uploader(
         "上传材料",
-        type=["xlsx", "docx"],
+        type=["xlsx", "docx", "pdf"],
         accept_multiple_files=False,
-        help="仅支持 Excel（.xlsx）和 Word（.docx），同名文件不会被覆盖。",
+        help="支持 Excel（.xlsx）、Word（.docx）和普通文本 PDF；暂不支持扫描 PDF / OCR，同名文件不会覆盖。",
         key=f"material-uploader-{st.session_state.uploader_version}",
     )
     if st.button(

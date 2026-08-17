@@ -1,5 +1,7 @@
 """Strict Pydantic argument models for registered Python tools."""
 
+import re
+
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -52,6 +54,36 @@ class DuplicateRecordsArguments(FileIdArguments):
         if len(cleaned) != len(set(cleaned)):
             raise ValueError("keys 不能包含重复字段")
         return cleaned
+
+
+class RetrievalScope(ToolArguments):
+    file_id: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{32}$")
+    file_ids: list[str] | None = None
+
+    @field_validator("file_ids")
+    @classmethod
+    def validate_file_ids(cls, values: list[str] | None) -> list[str] | None:
+        if values is None:
+            return None
+        if not values:
+            raise ValueError("file_ids 不能为空列表")
+        if any(not re.fullmatch(r"[0-9a-fA-F]{32}", value) for value in values):
+            raise ValueError("file_ids 包含非法 file_id")
+        if len(values) != len(set(values)):
+            raise ValueError("file_ids 不能重复")
+        return values
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> "RetrievalScope":
+        if self.file_id is not None and self.file_ids is not None:
+            raise ValueError("file_id 与 file_ids 只能使用一个")
+        return self
+
+
+class RetrieveDocumentArguments(ToolArguments):
+    scope: RetrievalScope
+    query: str = Field(min_length=1, max_length=500)
+    top_k: int = Field(default=5, ge=1, le=20)
 
 
 class TableSchemaArguments(FileIdArguments):

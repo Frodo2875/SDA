@@ -8,13 +8,18 @@ from typing import Any
 
 from backend.migrations import run_migrations
 from backend.repositories.file_repository import FileRepository
+from backend.repositories.document_repository import DocumentRepository
 from backend.repositories.schema_repository import SchemaRepository
 from backend.tools import excel_utils
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = PROJECT_ROOT / "data" / "app.db"
-SUPPORTED_FILES = {".xlsx": ("excel", 0), ".docx": ("word", 1)}
+SUPPORTED_FILES = {
+    ".xlsx": ("excel", 0),
+    ".docx": ("word", 1),
+    ".pdf": ("pdf", 0),
+}
 
 SCHEMA_STATEMENTS = (
     """
@@ -85,6 +90,7 @@ def _connect() -> sqlite3.Connection:
 
 FILE_REPOSITORY = FileRepository(_connect)
 SCHEMA_REPOSITORY = SchemaRepository(_connect)
+DOCUMENT_REPOSITORY = DocumentRepository(_connect)
 
 
 def create_base_schema(connection: sqlite3.Connection) -> None:
@@ -216,6 +222,25 @@ def get_table_schema_records(
 def delete_table_schemas(file_id: str) -> None:
     """Delete stale discovery output for one file."""
     SCHEMA_REPOSITORY.delete_for_file(file_id)
+
+
+def replace_document_chunks(file_id: str, chunks: list[dict[str, Any]]) -> None:
+    """Atomically replace local chunks and their FTS entries for one file."""
+    DOCUMENT_REPOSITORY.replace_for_file(file_id, chunks)
+
+
+def get_document_chunks(file_id: str) -> list[dict[str, Any]]:
+    return DOCUMENT_REPOSITORY.get_for_file(file_id)
+
+
+def delete_document_chunks(file_id: str) -> None:
+    DOCUMENT_REPOSITORY.delete_for_file(file_id)
+
+
+def search_document_chunks(
+    *, file_ids: list[str], query: str, limit: int
+) -> list[dict[str, Any]]:
+    return DOCUMENT_REPOSITORY.search(file_ids=file_ids, query=query, limit=limit)
 
 
 def save_chat_message(
@@ -394,6 +419,7 @@ def fetch_all(table_name: str) -> list[dict[str, Any]]:
         "pending_actions": "SELECT * FROM pending_actions ORDER BY created_at",
         "table_schemas": "SELECT * FROM table_schemas ORDER BY rowid",
         "schema_fields": "SELECT * FROM schema_fields ORDER BY rowid",
+        "document_chunks": "SELECT * FROM document_chunks ORDER BY file_id, chunk_index",
     }
     query = queries.get(table_name)
     if query is None:
