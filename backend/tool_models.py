@@ -86,6 +86,11 @@ class RetrieveDocumentArguments(ToolArguments):
     top_k: int = Field(default=5, ge=1, le=20)
 
 
+class ScholarshipEvaluationArguments(ToolArguments):
+    student_id: str = Field(min_length=1, max_length=64)
+    award_name: str = Field(default="一等奖学金", min_length=1, max_length=100)
+
+
 class TableSchemaArguments(FileIdArguments):
     sheet_name: str | None = Field(default=None, min_length=1)
 

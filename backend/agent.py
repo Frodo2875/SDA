@@ -35,6 +35,8 @@ SYSTEM_PROMPT = """你是学生材料智能文档助手。
 14. 查询未知结构 Excel 前必须使用已保存 Schema；精确筛选使用 query_table，统计使用 aggregate_table。
 15. 不得生成 SQL、Python 或任意表达式作为工具参数，只能使用工具定义的结构化字段和白名单操作符。
 16. 回答 PDF 或 Word 中的制度、规则和长文本内容时必须使用 retrieve_document，并且只能依据返回的 Evidence；若状态为 not_found，必须回答“当前材料中未找到足够依据。”，不得用模型自身知识补写。
+17. 判断奖学金资格时必须依次调用 search_student、query_table 查询成绩、query_table 查询科研、retrieve_document 查询评审规则，最后调用 evaluate_scholarship_eligibility。不得自行比较阈值；不得把阈值或学生数值作为判断 Tool 参数。
+18. evaluate_scholarship_eligibility 返回 insufficient_evidence 时必须回答“当前材料不足以判断。”并列出缺失项；“本次结论使用了”只能列出该 Tool 返回的 evidence_chain 和 used_tools。
 请用简洁中文整合工具结果并回答。"""
 
 
@@ -89,8 +91,24 @@ def _execute_tool(
             if sequence_error is not None:
                 return arguments, sequence_error
 
+    evidence_context = None
+    if name == "evaluate_scholarship_eligibility":
+        if executed_calls is None:
+            return arguments, _invalid_tool_result(
+                "TOOL_SEQUENCE_ERROR", "奖学金判断缺少本轮工具证据上下文"
+            )
+        sequence_error = _validate_scholarship_sequence(arguments, executed_calls)
+        if sequence_error is not None:
+            return arguments, sequence_error
+        evidence_context = _scholarship_context(arguments, executed_calls)
+
     try:
-        result = TOOL_FUNCTIONS[name](**arguments)
+        if evidence_context is None:
+            result = TOOL_FUNCTIONS[name](**arguments)
+        else:
+            result = TOOL_FUNCTIONS[name](
+                **arguments, evidence_context=evidence_context
+            )
     except Exception:
         result = _invalid_tool_result("TOOL_EXECUTION_ERROR", f"工具 {name} 执行失败")
     return arguments, result
@@ -135,6 +153,99 @@ def _validate_compare_sequence(
     )
 
 
+def _query_call_categories(call: dict[str, Any], student_id: str) -> set[str]:
+    if call["name"] != "query_table" or call["result"].get("ok") is not True:
+        return set()
+    evidence = call["result"].get("evidence_chain") or []
+    fields = {
+        str(item.get("field") or "").replace("_", "").casefold()
+        for item in evidence
+        if item.get("record_key") == student_id
+    }
+    fields.update(
+        str(field).replace("_", "").casefold()
+        for field in (call.get("arguments", {}).get("select") or [])
+    )
+    categories = set()
+    if fields.intersection({"平均分", "平均成绩", "averagescore", "专业排名", "排名", "rank"}):
+        categories.add("score")
+    if fields.intersection({"论文数", "论文数量", "专利数", "专利数量", "竞赛数", "竞赛数量", "papers", "patents", "competitions"}):
+        categories.add("research")
+    return categories
+
+
+def _validate_scholarship_sequence(
+    arguments: dict[str, Any], executed_calls: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    student_id = arguments["student_id"]
+    identity_found = any(
+        call["name"] == "search_student"
+        and call["result"].get("ok") is True
+        and (call["result"].get("data") or {}).get("status") == "found"
+        and (call["result"].get("data") or {}).get("student", {}).get("student_id")
+        == student_id
+        for call in executed_calls
+    )
+    categories = {
+        category
+        for call in executed_calls
+        for category in _query_call_categories(call, student_id)
+    }
+    has_rules = any(
+        call["name"] == "retrieve_document"
+        and call["result"].get("ok") is True
+        for call in executed_calls
+    )
+    missing = []
+    if not identity_found:
+        missing.append("search_student")
+    if "score" not in categories:
+        missing.append("query_table:成绩")
+    if "research" not in categories:
+        missing.append("query_table:科研")
+    if not has_rules:
+        missing.append("retrieve_document:规则")
+    if not missing:
+        return None
+    return _invalid_tool_result(
+        "TOOL_SEQUENCE_ERROR",
+        "奖学金判断前必须完成身份、成绩、科研和规则证据查询。缺少："
+        + "、".join(missing),
+    )
+
+
+def _scholarship_context(
+    arguments: dict[str, Any], executed_calls: list[dict[str, Any]]
+) -> dict[str, Any]:
+    student_id = arguments["student_id"]
+    identity_call = next(
+        (
+            call
+            for call in executed_calls
+            if call["name"] == "search_student"
+            and (call["result"].get("data") or {}).get("status") == "found"
+            and (call["result"].get("data") or {}).get("student", {}).get("student_id")
+            == student_id
+        ),
+        None,
+    )
+    return {
+        "identity_call": identity_call,
+        "query_calls": [
+            call
+            for call in executed_calls
+            if call["name"] == "query_table"
+            and _query_call_categories(call, student_id)
+        ],
+        "retrieval_calls": [
+            call
+            for call in executed_calls
+            if call["name"] == "retrieve_document"
+            and call["result"].get("ok") is True
+        ],
+    }
+
+
 def _log_tool_call(
     round_number: int,
     tool_name: str,
@@ -169,6 +280,19 @@ def _normalize_final_answer(
     answer: str, executed_calls: list[dict[str, Any]]
 ) -> str:
     """Preserve the exact no-record meaning in the user-facing answer."""
+    scholarship_result = next(
+        (
+            call["result"].get("data")
+            for call in reversed(executed_calls)
+            if call["name"] == "evaluate_scholarship_eligibility"
+            and call["result"].get("ok") is True
+            and isinstance(call["result"].get("data"), dict)
+        ),
+        None,
+    )
+    if scholarship_result is not None:
+        return str(scholarship_result["answer"])
+
     has_missing_research = any(
         call["name"] == "get_student_research"
         and call["result"].get("ok") is True
@@ -223,6 +347,12 @@ def _is_top_three_request(user_message: str) -> bool:
         "成绩" in user_message
         and "最高" in user_message
         and any(word in user_message for word in ("三名", "3名", "前三"))
+    )
+
+
+def _is_scholarship_evaluation_request(user_message: str) -> bool:
+    return "奖学金" in user_message and any(
+        word in user_message for word in ("判断", "满足", "符合", "条件", "资格")
     )
 
 
@@ -291,6 +421,38 @@ def _missing_required_calls(
         for call in executed_calls
     ):
         required.append(("get_top_three_students", None))
+    if _is_scholarship_evaluation_request(user_message):
+        student_id = student_ids[0] if len(student_ids) == 1 else None
+        identity_ok = any(
+            call["name"] == "search_student"
+            and call["result"].get("ok") is True
+            and (call["result"].get("data") or {}).get("status") == "found"
+            for call in executed_calls
+        )
+        if not identity_ok:
+            required.append(("search_student", None))
+        if student_id is not None:
+            categories = {
+                category
+                for call in executed_calls
+                for category in _query_call_categories(call, student_id)
+            }
+            if "score" not in categories:
+                required.append(("query_table:成绩", None))
+            if "research" not in categories:
+                required.append(("query_table:科研", None))
+        if not any(
+            call["name"] == "retrieve_document"
+            and call["result"].get("ok") is True
+            for call in executed_calls
+        ):
+            required.append(("retrieve_document:规则", None))
+        if not any(
+            call["name"] == "evaluate_scholarship_eligibility"
+            and call["result"].get("ok") is True
+            for call in executed_calls
+        ):
+            required.append(("evaluate_scholarship_eligibility", None))
 
     missing = []
     for tool_name, student_id in required:
@@ -427,6 +589,9 @@ async def _run_agent_core(
             "get_student_research": 2,
             "compare_students": 3,
             "get_top_three_students": 3,
+            "query_table": 3,
+            "retrieve_document": 3,
+            "evaluate_scholarship_eligibility": 4,
         }
         ordered_calls = sorted(
             normalized_calls,

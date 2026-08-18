@@ -8,6 +8,7 @@ from openpyxl import load_workbook
 from pydantic import ValidationError
 
 from backend import database
+from backend.evidence import build_evidence, make_evidence_id
 from backend.services.file_locator import FileLocatorError, resolve_by_file_id
 from backend.tool_models import (
     AggregateTableArguments,
@@ -91,6 +92,9 @@ def query_table(
             "warnings": warnings,
             "result_summary": (
                 f"匹配 {len(matched_rows)} 行，返回 {len(result_rows)} 行"
+            ),
+            "evidence_chain": _structured_evidence(
+                context, returned_rows, arguments.select
             ),
         }
     )
@@ -275,6 +279,52 @@ def load_table_data(file_id: str, sheet_name: str) -> dict[str, Any]:
         },
         "表格读取成功",
     )
+
+
+def _structured_evidence(
+    context: dict[str, Any],
+    rows: list[dict[str, Any]],
+    selected_fields: list[str],
+) -> list[dict[str, Any]]:
+    semantic_id = next(
+        (
+            field["source_name"]
+            for field in context["fields"].values()
+            if field.get("canonical_name") == "student_id"
+        ),
+        None,
+    )
+    evidence = []
+    for row in rows:
+        row_number = row.get("__row_number__")
+        record_key = (
+            str(row.get(semantic_id)).strip()
+            if semantic_id and row.get(semantic_id) is not None
+            else f"row:{row_number}"
+        )
+        for field in selected_fields:
+            value = _json_value(row.get(field))
+            evidence.append(
+                build_evidence(
+                    evidence_id=make_evidence_id(
+                        file_id=context["record"]["file_id"],
+                        sheet=context["schema"]["sheet_name"],
+                        row=row_number,
+                        field=field,
+                        value=value,
+                    ),
+                    source_type="structured",
+                    file_id=context["record"]["file_id"],
+                    file_name=context["record"]["file_name"],
+                    sheet=context["schema"]["sheet_name"],
+                    page_no=None,
+                    chunk_id=None,
+                    field=field,
+                    record_key=record_key,
+                    value_summary=str(value) if value is not None else "null",
+                )
+            )
+    return evidence
 
 
 def _validate_fields(

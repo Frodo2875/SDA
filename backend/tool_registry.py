@@ -14,6 +14,7 @@ from backend.tool_models import (
     FileIdArguments,
     QueryTableArguments,
     RetrieveDocumentArguments,
+    ScholarshipEvaluationArguments,
     StudentIdArguments,
     StudentSearchArguments,
     TableSchemaArguments,
@@ -35,6 +36,7 @@ from backend.tools.student_tools import (
 )
 from backend.tools.table_tools import aggregate_table, query_table
 from backend.tools.document_tools import retrieve_document
+from backend.tools.hybrid_tools import evaluate_scholarship_eligibility
 
 
 ToolHandler = Callable[..., dict[str, Any]]
@@ -209,6 +211,12 @@ TOOL_REGISTRY = ToolRegistry(
             "从已索引 PDF 或 Word 中检索有限条材料依据，并返回可引用 Evidence。",
             RetrieveDocumentArguments,
             retrieve_document,
+        ),
+        _spec(
+            "evaluate_scholarship_eligibility",
+            "只使用本轮已查询的成绩、科研与规则 Evidence，由 Python 判断奖学金条件；参数中不接受阈值或学生数值。",
+            ScholarshipEvaluationArguments,
+            evaluate_scholarship_eligibility,
         ),
     ]
 )

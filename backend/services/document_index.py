@@ -9,6 +9,7 @@ from docx import Document
 from pydantic import ValidationError
 
 from backend import database
+from backend.evidence import build_evidence, make_evidence_id
 from backend.services.file_locator import FileLocatorError, resolve_by_file_id
 from backend.tool_models import FileIdArguments, RetrieveDocumentArguments
 from backend.tools.excel_utils import failure, success
@@ -115,18 +116,24 @@ def retrieve_document(
     for row in rows:
         record = eligible[row["file_id"]]
         evidence.append(
-            {
-                "evidence_id": hashlib.sha256(
-                    f"{row['chunk_id']}:{arguments.query}".encode("utf-8")
-                ).hexdigest()[:24],
-                "file_id": row["file_id"],
-                "file_name": record["file_name"],
-                "page_no": row["page_no"],
-                "chunk_id": row["chunk_id"],
-                "score": round(1.0 / (1.0 + abs(float(row["rank"]))), 6),
-                "text_excerpt": _excerpt(row["chunk_text"], arguments.query),
-            }
+            build_evidence(
+                evidence_id=make_evidence_id(
+                    chunk_id=row["chunk_id"], query=arguments.query
+                ),
+                task_id=None,
+                source_type="unstructured",
+                file_id=row["file_id"],
+                file_name=record["file_name"],
+                sheet=None,
+                page_no=row["page_no"],
+                chunk_id=row["chunk_id"],
+                field=None,
+                record_key=None,
+                value_summary=_excerpt(row["chunk_text"], arguments.query),
+            )
         )
+        evidence[-1]["score"] = round(1.0 / (1.0 + abs(float(row["rank"]))), 6)
+        evidence[-1]["text_excerpt"] = evidence[-1]["value_summary"]
     if not evidence:
         result = success(
             {

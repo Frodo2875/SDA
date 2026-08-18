@@ -79,13 +79,20 @@ def test_r01_text_pdf_preserves_each_page_and_returns_page_evidence(
     assert evidence["page_no"] == 2
     assert {
         "evidence_id",
+        "task_id",
+        "source_type",
         "file_id",
         "file_name",
+        "sheet",
         "page_no",
         "chunk_id",
+        "field",
+        "record_key",
+        "value_summary",
         "score",
         "text_excerpt",
     } == set(evidence)
+    assert evidence["source_type"] == "unstructured"
     assert "申请奖学金需要提交成绩证明" in evidence["text_excerpt"]
 
 
