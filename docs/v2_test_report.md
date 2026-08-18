@@ -58,7 +58,7 @@ V2.11 在 `test_api.py` 新增了一个文件详情/Trace API 测试，因此 V1
 V2 独立测试集合实际结果：
 
 ```text
-124 passed in 4.06s
+125 passed（包含最终 Demo A 陌生 Excel 验收）
 ```
 
 ## 4. Integration Test
@@ -78,7 +78,7 @@ V2 独立测试集合实际结果：
 完整测试最终结果：
 
 ```text
-190 passed in 7.60s
+191 passed in 6.12s
 ```
 
 ## 5. Agent Eval
@@ -149,8 +149,8 @@ V2 Evaluation 失败数：0。
 V2 自动化验收通过：
 
 - V1：66/66 通过
-- V2：124/124 通过
-- 总计：190/190 通过
+- V2：125/125 通过
+- 总计：191/191 通过
 - 自动测试失败：0
 - 人工复核项：6
 

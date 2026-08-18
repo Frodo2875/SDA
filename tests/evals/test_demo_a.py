@@ -134,14 +134,18 @@ async def test_final_demo_a_unseen_excel_end_to_end(
     assert record["lifecycle_status"] == "ready"
     assert record["parse_status"] == "parsed"
     assert bool(record["queryable"]) is True
-    schema = parsed["data"]["sheets"][0]
+    schema = parsed["data"]["schemas"][0]
     assert schema["sheet_name"] == SHEET_NAME
     assert schema["header_row"] == 3
     assert schema["column_count"] == 6
     assert schema["row_count"] == 6
-    assert {
+    semantic_mapping = {
         field["source_name"]: field["canonical_name"] for field in schema["fields"]
-    } >= {
+    }
+    assert {
+        key: semantic_mapping[key]
+        for key in ("学生学号", "学生姓名", "所属院系", "移动电话")
+    } == {
         "学生学号": "student_id",
         "学生姓名": "name",
         "所属院系": "college",
@@ -250,3 +254,32 @@ async def test_final_demo_a_unseen_excel_end_to_end(
         "average_score": 90.67,
         "relation_method": {"uploaded": "student_id", "scores": "student_id"},
     }
+    print(
+        "DEMO_A_RESULT="
+        + json.dumps(
+            {
+                "file_name": FILE_NAME,
+                "lifecycle_observations": lifecycle_observations,
+                "final_state": {
+                    "lifecycle_status": record["lifecycle_status"],
+                    "parse_status": record["parse_status"],
+                    "queryable": bool(record["queryable"]),
+                },
+                "schema": {
+                    "sheet": SHEET_NAME, "header_row": 3,
+                    "field_count": 6, "row_count": 6,
+                    "semantic_mapping": semantic_mapping,
+                },
+                "person_rows": person["tool_calls"][0]["result"]["data"]["rows"],
+                "person_evidence_count": len(person["evidence"]),
+                "college_count": count["tool_calls"][0]["result"]["data"]["results"][0]["value"],
+                "missing_phone_students": sorted(
+                    row["学生姓名"]
+                    for row in missing_phone["tool_calls"][0]["result"]["data"]["rows"]
+                ),
+                "cross_file_result": combined,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
