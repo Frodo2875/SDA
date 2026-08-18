@@ -1,0 +1,4 @@
+V1 baseline commit: 950ade3
+Expected collected tests: 66
+
+pytest -q tests/test_agent.py tests/test_api.py tests/test_confirmation.py tests/test_database.py tests/test_tools.py tests/test_upload.py --deselect tests/test_api.py::test_file_detail_and_redacted_trace_endpoints

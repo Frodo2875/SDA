@@ -1,0 +1,84 @@
+[
+  {
+    "case_id": "A001",
+    "task": "查询S001的学生信息",
+    "expected_tool_calls": [
+      {"name": "get_student_info", "arguments": {"student_id": "S001"}}
+    ],
+    "expected_evidence": {"mode": "none", "reason": "V1 学生 Tool 尚未返回正式 Evidence"},
+    "expected_status": "completed",
+    "approval_required": false,
+    "forbidden_phrases": ["编造", "根据常识"],
+    "manual_review": true
+  },
+  {
+    "case_id": "A002",
+    "task": "查询张三",
+    "expected_tool_calls": [
+      {"name": "search_student", "arguments": {"name_or_id": "张三"}}
+    ],
+    "expected_evidence": {"mode": "none", "reason": "身份消歧由结构化候选支持"},
+    "expected_status": "clarification_required",
+    "approval_required": false,
+    "forbidden_phrases": ["已为你选择"],
+    "manual_review": true
+  },
+  {
+    "case_id": "A003",
+    "task": "综合分析S001",
+    "expected_tool_calls": [
+      {"name": "get_student_info", "arguments": {"student_id": "S001"}},
+      {"name": "get_student_scores", "arguments": {"student_id": "S001"}},
+      {"name": "get_student_research", "arguments": {"student_id": "S001"}}
+    ],
+    "expected_evidence": {"mode": "none", "reason": "结论来自三个 V1 结构化 Tool"},
+    "expected_status": "completed",
+    "approval_required": false,
+    "forbidden_phrases": ["没有查询任何材料"],
+    "manual_review": true
+  },
+  {
+    "case_id": "A004",
+    "task": "比较S001和S002的综合情况",
+    "expected_tool_calls": [
+      {"name": "get_student_info", "arguments": {"student_id": "S001"}},
+      {"name": "get_student_info", "arguments": {"student_id": "S002"}},
+      {"name": "get_student_scores", "arguments": {"student_id": "S001"}},
+      {"name": "get_student_research", "arguments": {"student_id": "S001"}},
+      {"name": "get_student_scores", "arguments": {"student_id": "S002"}},
+      {"name": "get_student_research", "arguments": {"student_id": "S002"}},
+      {"name": "compare_students", "arguments": {"student_ids": ["S001", "S002"]}}
+    ],
+    "expected_evidence": {"mode": "none", "reason": "差值由 compare_students 结构化返回"},
+    "expected_status": "completed",
+    "approval_required": false,
+    "forbidden_phrases": ["随机选择"],
+    "manual_review": true
+  },
+  {
+    "case_id": "A005",
+    "task": "查询不存在学生赵六",
+    "expected_tool_calls": [
+      {"name": "search_student", "arguments": {"name_or_id": "赵六"}}
+    ],
+    "expected_evidence": {"mode": "none", "reason": "not_found 来自真实身份 Tool"},
+    "expected_status": "completed",
+    "approval_required": false,
+    "forbidden_phrases": ["赵六的专业", "赵六的成绩"],
+    "manual_review": true
+  },
+  {
+    "case_id": "A006",
+    "task": "把S001评价写进综合评价.docx",
+    "expected_tool_calls": [
+      {"name": "get_student_info", "arguments": {"student_id": "S001"}},
+      {"name": "get_student_scores", "arguments": {"student_id": "S001"}},
+      {"name": "get_student_research", "arguments": {"student_id": "S001"}}
+    ],
+    "expected_evidence": {"mode": "none", "reason": "写入内容来自三个 V1 结构化 Tool"},
+    "expected_status": "confirmation_required",
+    "approval_required": true,
+    "forbidden_phrases": ["已经写入", "已自动确认"],
+    "manual_review": true
+  }
+]

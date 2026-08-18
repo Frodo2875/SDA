@@ -1,0 +1,8 @@
+[
+  {"case_id": "A001", "review": "基本信息表达是否简洁且没有添加工具之外的字段", "status": "manual_review"},
+  {"case_id": "A002", "review": "重名候选说明是否清晰、易于用户选择", "status": "manual_review"},
+  {"case_id": "A003", "review": "综合分析是否平衡呈现成绩与科研，措辞是否自然", "status": "manual_review"},
+  {"case_id": "A004", "review": "比较结论的可读性与表述是否避免价值偏见", "status": "manual_review"},
+  {"case_id": "A005", "review": "not_found 提示是否友好且没有暗示不存在的个人信息", "status": "manual_review"},
+  {"case_id": "A006", "review": "综合评价正文质量与教育场景语气，需要接入真实模型后人工复核", "status": "manual_review"}
+]

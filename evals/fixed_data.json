@@ -1,0 +1,10 @@
+{
+  "virtual_only": true,
+  "source_files": ["学生基本信息.xlsx", "学生成绩.xlsx", "科研成果.xlsx", "综合评价.docx"],
+  "student_count": 12,
+  "known_student": {"student_id": "S001", "name": "张三"},
+  "duplicate_name": {"name": "张三", "student_ids": ["S001", "S004"]},
+  "missing_score_student_id": "S012",
+  "missing_research_student_id": "S011",
+  "unknown_student_query": "赵六"
+}

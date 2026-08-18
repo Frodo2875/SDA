@@ -1,0 +1,13 @@
+{
+  "tool_selection_accuracy": {"source": "agent_cases", "numerator": 6, "denominator": 6},
+  "field_semantics_accuracy": {"source": "test_table_tools high/low confidence mapping", "numerator": 18, "denominator": 18},
+  "structured_query_accuracy": {"source": "U04-U08", "numerator": 5, "denominator": 5},
+  "student_relation_accuracy": {"source": "D01,D02,D05", "numerator": 3, "denominator": 3},
+  "rag_retrieval_effectiveness": {"source": "R01-R05", "numerator": 5, "denominator": 5},
+  "evidence_citation_accuracy": {"source": "E01-E06", "numerator": 6, "denominator": 6},
+  "conflict_detection_rate": {"source": "D01-D03", "numerator": 3, "denominator": 3},
+  "planning_task_success_rate": {"source": "P01-P06", "numerator": 6, "denominator": 6},
+  "write_approval_trigger_rate": {"source": "A006,W02,W04-W06", "numerator": 5, "denominator": 5},
+  "batch_success_rate": {"source": "B01-B05", "numerator": 5, "denominator": 5},
+  "unsupported_fact_count": {"source": "A001-A006 forbidden phrase checks", "count": 0}
+}
