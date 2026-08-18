@@ -14,7 +14,10 @@ from backend.services.confirmation import (
     cancel_action,
     confirm_action,
     create_pending_delete_action,
+    create_pending_undo_action,
+    rollback_file,
 )
+from backend.services.file_versioning import list_versions, preview_word_diff
 from backend.services.file_upload import save_uploaded_file
 from backend.schemas import (
     ActionResponse,
@@ -24,6 +27,8 @@ from backend.schemas import (
     DeleteFileRequest,
     HealthResponse,
     ToolResponse,
+    VersionActionRequest,
+    WordDiffOperationRequest,
 )
 from backend.tools.analysis_tools import compare_students
 from backend.tools.file_tools import list_files
@@ -47,8 +52,13 @@ CLIENT_ERROR_CODES = {
     "INVALID_QUERY",
     "INVALID_STUDENT_ID",
     "INVALID_STUDENT_IDS",
+    "INVALID_DIFF_OPERATION",
+    "INVALID_TARGET_FILE",
 }
-NOT_FOUND_ERROR_CODES = {"FILE_NOT_FOUND", "STUDENT_NOT_FOUND"}
+NOT_FOUND_ERROR_CODES = {
+    "FILE_NOT_FOUND", "STUDENT_NOT_FOUND", "VERSION_NOT_FOUND",
+    "VERSION_FILE_MISSING",
+}
 
 
 def _tool_http_status(result: dict[str, Any]) -> int:
@@ -246,6 +256,12 @@ def _action_response(result: dict[str, Any]) -> dict[str, Any] | JSONResponse:
     status_code = {
         "ACTION_NOT_FOUND": 404,
         "ACTION_NOT_PENDING": 409,
+        "FILE_NOT_FOUND": 404,
+        "VERSION_NOT_FOUND": 404,
+        "NO_UNDO_VERSION": 409,
+        "FILE_WRITE_FORBIDDEN": 403,
+        "INVALID_DIFF_OPERATION": 400,
+        "INVALID_TARGET_FILE": 400,
     }.get(result.get("error_code"), 500)
     return JSONResponse(status_code=status_code, content=result)
 
@@ -287,6 +303,64 @@ async def api_cancel_action(action_id: str) -> dict[str, Any] | JSONResponse:
                 "ok": False,
                 "data": None,
                 "error_code": "INTERNAL_ERROR",
+                "message": "服务器内部错误",
+            },
+        )
+
+
+@app.post("/api/files/{file_id}/diff", response_model=ToolResponse, tags=["versions"])
+async def api_preview_word_diff(
+    file_id: str, request: WordDiffOperationRequest
+) -> dict[str, Any] | JSONResponse:
+    """Preview one validated Word change without modifying the file."""
+    return _call_tool(preview_word_diff, file_id, request.model_dump())
+
+
+@app.get("/api/files/{file_id}/versions", response_model=ToolResponse, tags=["versions"])
+async def api_list_file_versions(file_id: str) -> dict[str, Any] | JSONResponse:
+    """List immutable versions for one stable file ID."""
+    return _call_tool(list_versions, file_id)
+
+
+@app.post(
+    "/api/files/{file_id}/undo", response_model=ActionResponse, tags=["versions"]
+)
+async def api_prepare_file_undo(
+    file_id: str, request: VersionActionRequest
+) -> dict[str, Any] | JSONResponse:
+    """Create a pending undo action; this endpoint never modifies the file."""
+    try:
+        return _action_response(
+            create_pending_undo_action(session_id=request.session_id, file_id=file_id)
+        )
+    except Exception:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "ok": False, "data": None, "error_code": "INTERNAL_ERROR",
+                "message": "服务器内部错误",
+            },
+        )
+
+
+@app.post(
+    "/api/files/{file_id}/rollback/{version_id}",
+    response_model=ActionResponse,
+    tags=["versions"],
+)
+async def api_prepare_file_rollback(
+    file_id: str, version_id: str, request: VersionActionRequest
+) -> dict[str, Any] | JSONResponse:
+    """Create a pending rollback action; confirmation remains mandatory."""
+    try:
+        return _action_response(
+            rollback_file(file_id, version_id, session_id=request.session_id)
+        )
+    except Exception:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "ok": False, "data": None, "error_code": "INTERNAL_ERROR",
                 "message": "服务器内部错误",
             },
         )

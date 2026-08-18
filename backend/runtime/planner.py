@@ -39,8 +39,9 @@ def create_plan(user_message: str) -> TaskPlan | None:
                 PlannedStep(2, "查询学生成绩", "tool", "get_student_scores"),
                 PlannedStep(3, "查询科研成果", "tool", "get_student_research"),
                 PlannedStep(4, "生成待写入内容", "generation"),
-                PlannedStep(5, "等待用户确认", "confirmation"),
-                PlannedStep(6, "执行确认写入", "side_effect", "write_word"),
+                PlannedStep(5, "生成 Word Diff 预览", "tool", "preview_word_diff"),
+                PlannedStep(6, "等待用户确认", "confirmation"),
+                PlannedStep(7, "执行确认写入", "side_effect", "write_word"),
             ),
         )
     return None

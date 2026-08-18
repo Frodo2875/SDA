@@ -27,6 +27,7 @@ EXPECTED_COLUMNS = {
     "pending_actions": [
         "action_id", "session_id", "action_type", "target_file", "student_id",
         "student_name", "content", "status", "created_at", "executed_at",
+        "file_id", "operation_json", "diff_json", "target_version_id", "task_id",
     ],
     "table_schemas": [
         "schema_id", "file_id", "sheet_name", "header_row", "data_start_row",
@@ -52,6 +53,11 @@ EXPECTED_COLUMNS = {
         "step_id", "task_id", "sequence", "step_name", "step_type",
         "tool_name", "arguments_json", "status", "retry_count",
         "result_summary", "failed_reason", "started_at", "completed_at",
+    ],
+    "file_versions": [
+        "version_id", "file_id", "version_number", "parent_version_id",
+        "storage_path", "content_hash", "size", "task_id", "session_id",
+        "change_type", "created_at", "status",
     ],
 }
 
@@ -90,9 +96,10 @@ def test_first_run_creates_database_tables_and_file_records(
             (4, "add_field_semantic_mapping"),
             (5, "create_document_chunks"),
             (6, "create_runtime_tasks"),
+            (7, "create_file_versions"),
         ]
         assert all(row[2] for row in migrations)
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 7
 
     file_rows = database.fetch_all("files")
     assert {

@@ -1,10 +1,22 @@
 """SQLite-backed two-phase confirmation for high-impact file actions."""
 
+import json
 from typing import Any
 from uuid import uuid4
 
 from backend import database
-from backend.runtime.task_runner import resume_after_action
+from backend.runtime.planner import PlannedStep, TaskPlan
+from backend.runtime.task_runner import (
+    finalize_task,
+    record_tool_execution,
+    resume_after_action,
+    start_task,
+)
+from backend.services.file_versioning import (
+    WordDiffOperation,
+    execute_versioned_word_action,
+    preview_word_diff,
+)
 from backend.services.file_lifecycle import delete_uploaded_file
 from backend.tools.file_tools import get_file_info
 from backend.tools.word_tools import write_word
@@ -12,6 +24,8 @@ from backend.tools.word_tools import write_word
 
 ACTION_TYPE_WRITE_WORD = "write_word"
 ACTION_TYPE_DELETE_FILE = "delete_file"
+ACTION_TYPE_UNDO_WORD = "undo_word"
+ACTION_TYPE_ROLLBACK_WORD = "rollback_word"
 ACTION_STATUSES = {"pending", "confirmed", "cancelled", "executed", "failed"}
 
 
@@ -35,6 +49,7 @@ def create_pending_action(
     student_id: str,
     student_name: str,
     content: str,
+    task_id: str | None = None,
 ) -> dict[str, Any]:
     """Freeze one proposed Word append without modifying the target file."""
     file_result = get_file_info(target_file)
@@ -49,28 +64,154 @@ def create_pending_action(
     if not isinstance(content, str) or not content.strip():
         return _failure("INVALID_ACTION_CONTENT", "待写入内容不能为空")
 
+    record = database.get_file_record(target_file)
+    if record is None:
+        return _failure("FILE_NOT_FOUND", "未找到目标文件记录")
+    preview = preview_word_diff(
+        record["file_id"],
+        WordDiffOperation(operation_type="append", content=content.strip()),
+    )
+    if not preview["ok"]:
+        return preview
+    return _create_pending_word_action(
+        session_id=session_id,
+        action_type=ACTION_TYPE_WRITE_WORD,
+        preview=preview,
+        student_id=str(student_id).strip(),
+        student_name=str(student_name).strip(),
+        content=content.strip(),
+        task_id=task_id,
+        finalize_standalone=False,
+    )
+
+
+def create_pending_undo_action(
+    *, session_id: str, file_id: str
+) -> dict[str, Any]:
+    """Prepare an undo Diff and reuse the existing pending-action confirmation."""
+    preview = preview_word_diff(file_id, WordDiffOperation(operation_type="undo"))
+    if not preview["ok"]:
+        return preview
+    return _create_pending_word_action(
+        session_id=session_id,
+        action_type=ACTION_TYPE_UNDO_WORD,
+        preview=preview,
+        student_id="",
+        student_name="",
+        content="撤销最近一次 Word 修改",
+        task_id=None,
+        finalize_standalone=True,
+    )
+
+
+def rollback_file(
+    file_id: str, version_id: str, *, session_id: str = "direct"
+) -> dict[str, Any]:
+    """Prepare—not execute—a confirmed rollback to an immutable version."""
+    preview = preview_word_diff(
+        file_id,
+        WordDiffOperation(operation_type="rollback", version_id=version_id),
+    )
+    if not preview["ok"]:
+        return preview
+    return _create_pending_word_action(
+        session_id=session_id,
+        action_type=ACTION_TYPE_ROLLBACK_WORD,
+        preview=preview,
+        student_id="",
+        student_name="",
+        content=f"恢复 Word 到版本 {version_id}",
+        task_id=None,
+        finalize_standalone=True,
+    )
+
+
+def _create_pending_word_action(
+    *,
+    session_id: str,
+    action_type: str,
+    preview: dict[str, Any],
+    student_id: str,
+    student_name: str,
+    content: str,
+    task_id: str | None,
+    finalize_standalone: bool,
+) -> dict[str, Any]:
+    preview_data = preview["data"]
+    if task_id is not None and database.get_task_record(task_id) is None:
+        return _failure("TASK_NOT_FOUND", "关联 Task 不存在")
+    if finalize_standalone:
+        plan = TaskPlan(
+            task_type=(
+                "word_undo" if action_type == ACTION_TYPE_UNDO_WORD else "word_rollback"
+            ),
+            steps=(
+                PlannedStep(1, "生成 Word Diff 预览", "tool", "preview_word_diff"),
+                PlannedStep(2, "等待用户确认", "confirmation"),
+                PlannedStep(3, "执行版本恢复", "side_effect", action_type),
+            ),
+        )
+        task = start_task(
+            session_id=session_id,
+            user_message=content,
+            plan=plan,
+        )
+        task_id = task["task_id"]
+    if task_id is not None:
+        record_tool_execution(
+            task_id=task_id,
+            tool_name="preview_word_diff",
+            arguments={
+                "file_id": preview_data["file_id"],
+                "operation": preview_data["operation"],
+            },
+            result=preview,
+            retry_count=0,
+        )
+
+    diff_fields = {
+        key: preview_data[key]
+        for key in (
+            "target_file", "target_object", "location", "operation_type",
+            "before", "after", "impact_scope",
+        )
+    }
     action = {
         "action_id": uuid4().hex,
         "session_id": session_id,
-        "action_type": ACTION_TYPE_WRITE_WORD,
-        "target_file": target_file,
-        "student_id": str(student_id).strip(),
-        "student_name": str(student_name).strip(),
-        "content": content.strip(),
+        "action_type": action_type,
+        "target_file": preview_data["target_file"],
+        "student_id": student_id,
+        "student_name": student_name,
+        "content": content,
         "created_at": database.utc_now(),
         "status": "pending",
         "executed_at": None,
+        "file_id": preview_data["file_id"],
+        "operation_json": json.dumps(preview_data["operation"], ensure_ascii=False),
+        "diff_json": json.dumps(diff_fields, ensure_ascii=False),
+        "target_version_id": preview_data["operation"].get("target_version_id"),
+        "task_id": task_id,
     }
     database.insert_pending_action(action)
     database.save_operation_log(
         session_id=session_id,
-        action_type="create_pending_write",
-        target_file=target_file,
-        student_id=action["student_id"],
+        action_type=_operation_name(action_type, "create_pending"),
+        target_file=action["target_file"],
+        student_id=student_id,
         confirmed=False,
         success=True,
     )
-    return _success(dict(action), "待确认写入操作已创建，文件尚未修改")
+    public_action = _deserialize_action(action)
+    if finalize_standalone:
+        finalize_task(
+            task_id,
+            {
+                "status": "confirmation_required",
+                "pending_action": public_action,
+            },
+        )
+    return _success(public_action, "待确认 Word 操作已创建，文件尚未修改")
 
 
 def create_pending_delete_action(*, session_id: str, file_id: str) -> dict[str, Any]:
@@ -115,7 +256,7 @@ def get_pending_action(action_id: str) -> dict[str, Any]:
     action = database.get_pending_action_record(action_id)
     if action is None:
         return _failure("ACTION_NOT_FOUND", "未找到指定的待确认操作")
-    return _success(action, "操作读取成功")
+    return _success(_deserialize_action(action), "操作读取成功")
 
 
 def cancel_action(action_id: str) -> dict[str, Any]:
@@ -136,7 +277,7 @@ def cancel_action(action_id: str) -> dict[str, Any]:
         return _failure(
             "ACTION_NOT_PENDING",
             f"操作当前状态为 {action['status']}，不能取消",
-            action,
+            _deserialize_action(action),
         )
     database.save_operation_log(
         session_id=action["session_id"],
@@ -147,7 +288,7 @@ def cancel_action(action_id: str) -> dict[str, Any]:
         success=True,
     )
     _resume_runtime_action(action_id, "cancelled", success=False)
-    return _success(action, "操作已取消，文件未修改")
+    return _success(_deserialize_action(action), "操作已取消，文件未修改")
 
 
 def confirm_action(action_id: str) -> dict[str, Any]:
@@ -168,7 +309,7 @@ def confirm_action(action_id: str) -> dict[str, Any]:
         return _failure(
             "ACTION_NOT_PENDING",
             f"操作当前状态为 {action['status']}，不能重复执行",
-            action,
+            _deserialize_action(action),
         )
     action_result = _execute_frozen_action(action)
     terminal_status = "executed" if action_result["ok"] else "failed"
@@ -186,21 +327,16 @@ def confirm_action(action_id: str) -> dict[str, Any]:
         action_id, terminal_status, success=bool(action_result["ok"])
     )
     if action_result["ok"]:
-        result_key = (
-            "write_result"
-            if action["action_type"] == ACTION_TYPE_WRITE_WORD
-            else "delete_result"
-        )
+        is_delete = action["action_type"] == ACTION_TYPE_DELETE_FILE
+        result_key = "delete_result" if is_delete else "write_result"
         return _success(
-            {"pending_action": action, result_key: action_result},
-            "已执行确认的 Word 写入"
-            if action["action_type"] == ACTION_TYPE_WRITE_WORD
-            else "已执行确认的文件删除",
+            {"pending_action": _deserialize_action(action), result_key: action_result},
+            "已执行确认的文件删除" if is_delete else "已执行确认的 Word 操作",
         )
     return _failure(
         "ACTION_EXECUTION_FAILED",
         action_result["message"],
-        {"pending_action": action, "action_result": action_result},
+        {"pending_action": _deserialize_action(action), "action_result": action_result},
     )
 
 
@@ -210,18 +346,33 @@ def _execute_frozen_action(action: dict[str, Any]) -> dict[str, Any]:
             return delete_uploaded_file(action)
         except Exception:
             return _failure("FILE_DELETE_ERROR", "文件删除失败")
-    if action["action_type"] != ACTION_TYPE_WRITE_WORD:
+    if action["action_type"] not in {
+        ACTION_TYPE_WRITE_WORD,
+        ACTION_TYPE_UNDO_WORD,
+        ACTION_TYPE_ROLLBACK_WORD,
+    }:
         return _failure("UNKNOWN_ACTION_TYPE", "不支持的待确认操作类型")
 
     try:
-        return write_word(action["target_file"], action["content"])
+        return execute_versioned_word_action(action, write_handler=write_word)
     except Exception:
         return _failure("WORD_WRITE_ERROR", "Word 写入失败")
 
 
 def _operation_name(action_type: str, verb: str) -> str:
-    suffix = "delete" if action_type == ACTION_TYPE_DELETE_FILE else "write"
+    suffix = {
+        ACTION_TYPE_DELETE_FILE: "delete",
+        ACTION_TYPE_UNDO_WORD: "undo",
+        ACTION_TYPE_ROLLBACK_WORD: "rollback",
+    }.get(action_type, "write")
     return f"{verb}_{suffix}"
+
+
+def _deserialize_action(action: dict[str, Any]) -> dict[str, Any]:
+    item = dict(action)
+    item["operation"] = json.loads(item["operation_json"]) if item.get("operation_json") else None
+    item["diff_preview"] = json.loads(item["diff_json"]) if item.get("diff_json") else None
+    return item
 
 
 def _resume_runtime_action(action_id: str, status: str, *, success: bool) -> None:

@@ -11,6 +11,7 @@ from backend.repositories.file_repository import FileRepository
 from backend.repositories.document_repository import DocumentRepository
 from backend.repositories.schema_repository import SchemaRepository
 from backend.repositories.task_repository import TaskRepository
+from backend.repositories.version_repository import VersionRepository
 from backend.tools import excel_utils
 
 
@@ -93,6 +94,7 @@ FILE_REPOSITORY = FileRepository(_connect)
 SCHEMA_REPOSITORY = SchemaRepository(_connect)
 DOCUMENT_REPOSITORY = DocumentRepository(_connect)
 TASK_REPOSITORY = TaskRepository(_connect)
+VERSION_REPOSITORY = VersionRepository(_connect)
 
 
 def create_base_schema(connection: sqlite3.Connection) -> None:
@@ -269,6 +271,31 @@ def find_task_waiting_for_action(action_id: str) -> dict[str, Any] | None:
     return TASK_REPOSITORY.waiting_for_action(action_id)
 
 
+def list_file_versions(file_id: str) -> list[dict[str, Any]]:
+    return VERSION_REPOSITORY.list_for_file(file_id)
+
+
+def get_file_version(version_id: str) -> dict[str, Any] | None:
+    return VERSION_REPOSITORY.get(version_id)
+
+
+def get_latest_file_version(file_id: str) -> dict[str, Any] | None:
+    return VERSION_REPOSITORY.latest(file_id)
+
+
+def commit_file_version_transition(
+    *,
+    file_id: str,
+    before_version: dict[str, Any],
+    after_version: dict[str, Any],
+) -> dict[str, Any]:
+    return VERSION_REPOSITORY.commit_transition(
+        file_id=file_id,
+        before_version=before_version,
+        after_version=after_version,
+    )
+
+
 def save_chat_message(
     *,
     session_id: str,
@@ -337,8 +364,9 @@ def insert_pending_action(action: dict[str, Any]) -> None:
             """
             INSERT INTO pending_actions (
                 action_id, session_id, action_type, target_file, student_id,
-                student_name, content, status, created_at, executed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                student_name, content, status, created_at, executed_at,
+                file_id, operation_json, diff_json, target_version_id, task_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 action["action_id"],
@@ -351,6 +379,11 @@ def insert_pending_action(action: dict[str, Any]) -> None:
                 action["status"],
                 action["created_at"],
                 action.get("executed_at"),
+                action.get("file_id"),
+                action.get("operation_json"),
+                action.get("diff_json"),
+                action.get("target_version_id"),
+                action.get("task_id"),
             ),
         )
 
@@ -448,6 +481,7 @@ def fetch_all(table_name: str) -> list[dict[str, Any]]:
         "document_chunks": "SELECT * FROM document_chunks ORDER BY file_id, chunk_index",
         "tasks": "SELECT * FROM tasks ORDER BY created_at",
         "task_steps": "SELECT * FROM task_steps ORDER BY task_id, sequence",
+        "file_versions": "SELECT * FROM file_versions ORDER BY file_id, version_number",
     }
     query = queries.get(table_name)
     if query is None:

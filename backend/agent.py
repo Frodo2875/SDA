@@ -570,6 +570,7 @@ async def _run_agent_core(
                     student_id=identity["student_id"],
                     student_name=identity["student_name"],
                     content=normalized_answer,
+                    task_id=task_id,
                 )
                 if not action_result["ok"]:
                     return {

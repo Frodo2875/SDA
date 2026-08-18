@@ -24,7 +24,7 @@ def _utc_now() -> str:
 
 
 def _column_names(connection: sqlite3.Connection, table_name: str) -> set[str]:
-    if table_name not in {"files", "schema_fields"}:
+    if table_name not in {"files", "schema_fields", "pending_actions"}:
         raise ValueError("不允许检查未知数据表")
     return {
         str(row[1])
@@ -288,6 +288,51 @@ def _create_runtime_tasks(connection: sqlite3.Connection) -> None:
     connection.execute(
         "CREATE INDEX IF NOT EXISTS ix_task_steps_task_id ON task_steps(task_id)"
     )
+
+
+def _create_file_versions(connection: sqlite3.Connection) -> None:
+    """Add immutable Word snapshots and frozen V2.9 action metadata."""
+    columns = _column_names(connection, "pending_actions")
+    additions = (
+        ("file_id", "TEXT"),
+        ("operation_json", "TEXT"),
+        ("diff_json", "TEXT"),
+        ("target_version_id", "TEXT"),
+        ("task_id", "TEXT"),
+    )
+    for column_name, column_type in additions:
+        if column_name not in columns:
+            connection.execute(
+                f"ALTER TABLE pending_actions ADD COLUMN {column_name} {column_type}"
+            )
+
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS file_versions (
+            version_id TEXT PRIMARY KEY,
+            file_id TEXT NOT NULL,
+            version_number INTEGER NOT NULL,
+            parent_version_id TEXT,
+            storage_path TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            size INTEGER NOT NULL,
+            task_id TEXT,
+            session_id TEXT NOT NULL,
+            change_type TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            status TEXT NOT NULL,
+            FOREIGN KEY (file_id) REFERENCES files(file_id) ON DELETE CASCADE,
+            FOREIGN KEY (parent_version_id) REFERENCES file_versions(version_id),
+            FOREIGN KEY (task_id) REFERENCES tasks(task_id),
+            UNIQUE (file_id, version_number),
+            UNIQUE (storage_path)
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS ix_file_versions_file_id "
+        "ON file_versions(file_id, version_number)"
+    )
 MIGRATIONS = (
     Migration(1, "add_files_v2_foundation", _add_files_v2_foundation),
     Migration(2, "normalize_file_lifecycle", _normalize_file_lifecycle),
@@ -295,6 +340,7 @@ MIGRATIONS = (
     Migration(4, "add_field_semantic_mapping", _add_field_semantic_mapping),
     Migration(5, "create_document_chunks", _create_document_chunks),
     Migration(6, "create_runtime_tasks", _create_runtime_tasks),
+    Migration(7, "create_file_versions", _create_file_versions),
 )
 
 

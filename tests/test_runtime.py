@@ -276,8 +276,8 @@ async def test_p06_confirmation_resume_does_not_repeat_successful_reads(
 
     assert result["status"] == "confirmation_required"
     assert database.get_task_record(task_id)["status"] == "waiting_confirmation"
-    assert [step["status"] for step in before[:5]] == [
-        "success", "success", "success", "success", "waiting_confirmation"
+    assert [step["status"] for step in before[:6]] == [
+        "success", "success", "success", "success", "success", "waiting_confirmation"
     ]
     monkeypatch.setattr(
         confirmation,
@@ -296,7 +296,7 @@ async def test_p06_confirmation_resume_does_not_repeat_successful_reads(
     assert confirmed["ok"] is True
     assert client.rounds == 2
     assert database.get_task_record(task_id)["status"] == "success"
-    assert [step["status"] for step in after] == ["success"] * 6
+    assert [step["status"] for step in after] == ["success"] * 7
     assert after[-1]["retry_count"] == 0
     assert [step["result_summary"] for step in after[:3]] == [
         step["result_summary"] for step in before[:3]

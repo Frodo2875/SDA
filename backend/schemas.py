@@ -46,6 +46,20 @@ class DeleteFileRequest(BaseModel):
     session_id: str = Field(min_length=1, description="请求删除的客户端会话标识")
 
 
+class VersionActionRequest(BaseModel):
+    """Session context for a confirmed undo or rollback."""
+
+    session_id: str = Field(min_length=1, description="版本操作的客户端会话标识")
+
+
+class WordDiffOperationRequest(BaseModel):
+    """Validated public request for a side-effect-free Word Diff preview."""
+
+    operation_type: Literal["append", "undo", "rollback"]
+    content: str | None = Field(default=None, max_length=100_000)
+    version_id: str | None = Field(default=None, max_length=128)
+
+
 class AgentToolCall(BaseModel):
     """One tool invocation executed during an Agent run."""
 
@@ -60,7 +74,7 @@ class PendingAction(BaseModel):
 
     action_id: str
     session_id: str
-    action_type: Literal["write_word", "delete_file"]
+    action_type: Literal["write_word", "delete_file", "undo_word", "rollback_word"]
     target_file: str
     student_id: str
     student_name: str
@@ -68,6 +82,11 @@ class PendingAction(BaseModel):
     created_at: datetime
     status: Literal["pending", "confirmed", "cancelled", "executed", "failed"]
     executed_at: datetime | None = None
+    file_id: str | None = None
+    operation: dict[str, Any] | None = None
+    diff_preview: dict[str, Any] | None = None
+    target_version_id: str | None = None
+    task_id: str | None = None
 
 
 class ChatResponse(BaseModel):

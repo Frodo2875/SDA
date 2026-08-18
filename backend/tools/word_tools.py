@@ -8,12 +8,20 @@ from typing import Any
 
 from docx import Document
 
+from backend.services.file_locator import FileLocatorError, resolve_by_file_name
 from backend.tools.excel_utils import failure, resolve_data_file, success
 
 
 def _word_path(file_name: str) -> tuple[Path | None, dict[str, Any] | None]:
     try:
-        path = resolve_data_file(file_name, {".docx"})
+        path = resolve_by_file_name(file_name)
+        if path.suffix.lower() != ".docx":
+            raise ValueError("仅允许访问 .docx 文件")
+    except FileLocatorError:
+        try:
+            path = resolve_data_file(file_name, {".docx"})
+        except ValueError as exc:
+            return None, failure("INVALID_FILE_NAME", str(exc))
     except ValueError as exc:
         return None, failure("INVALID_FILE_NAME", str(exc))
     if not path.is_file():
