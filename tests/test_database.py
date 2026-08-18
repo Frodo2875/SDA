@@ -68,6 +68,17 @@ EXPECTED_COLUMNS = {
         "item_id", "batch_id", "target_id", "status", "result_summary",
         "error_code", "action_id",
     ],
+    "traces": [
+        "trace_id", "task_id", "session_id", "step_id", "event_type",
+        "tool_name", "arguments_summary", "result_summary", "duration_ms",
+        "retry_count", "result_status", "error_code", "created_at",
+    ],
+    "session_contexts": [
+        "session_id", "current_task_id", "current_student_json",
+        "current_file_json", "ambiguity_json", "pending_action_id",
+        "successful_steps_json", "evidence_refs_json", "session_summary",
+        "updated_at",
+    ],
 }
 
 
@@ -107,9 +118,10 @@ def test_first_run_creates_database_tables_and_file_records(
             (6, "create_runtime_tasks"),
             (7, "create_file_versions"),
             (8, "create_batches"),
+            (9, "create_traces_and_context"),
         ]
         assert all(row[2] for row in migrations)
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 9
 
     file_rows = database.fetch_all("files")
     assert {

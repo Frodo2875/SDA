@@ -97,6 +97,7 @@ class ChatResponse(BaseModel):
     status: str
     pending_action: PendingAction | None = None
     task_id: str | None = None
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ActionResponse(BaseModel):

@@ -377,6 +377,57 @@ def _create_batches(connection: sqlite3.Connection) -> None:
     connection.execute(
         "CREATE INDEX IF NOT EXISTS ix_batch_items_batch_id ON batch_items(batch_id)"
     )
+
+
+def _create_traces_and_context(connection: sqlite3.Connection) -> None:
+    """Create observable runtime traces and bounded session context state."""
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS traces (
+            trace_id TEXT PRIMARY KEY,
+            task_id TEXT,
+            session_id TEXT NOT NULL,
+            step_id TEXT,
+            event_type TEXT NOT NULL,
+            tool_name TEXT,
+            arguments_summary TEXT,
+            result_summary TEXT,
+            duration_ms INTEGER NOT NULL DEFAULT 0,
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            result_status TEXT NOT NULL,
+            error_code TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (task_id) REFERENCES tasks(task_id),
+            FOREIGN KEY (step_id) REFERENCES task_steps(step_id)
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS ix_traces_task_id ON traces(task_id, created_at)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS ix_traces_session_id ON traces(session_id, created_at)"
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS session_contexts (
+            session_id TEXT PRIMARY KEY,
+            current_task_id TEXT,
+            current_student_json TEXT,
+            current_file_json TEXT,
+            ambiguity_json TEXT NOT NULL DEFAULT '[]',
+            pending_action_id TEXT,
+            successful_steps_json TEXT NOT NULL DEFAULT '[]',
+            evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+            session_summary TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (current_task_id) REFERENCES tasks(task_id),
+            FOREIGN KEY (pending_action_id) REFERENCES pending_actions(action_id)
+        )
+        """
+    )
+
+
 MIGRATIONS = (
     Migration(1, "add_files_v2_foundation", _add_files_v2_foundation),
     Migration(2, "normalize_file_lifecycle", _normalize_file_lifecycle),
@@ -386,6 +437,7 @@ MIGRATIONS = (
     Migration(6, "create_runtime_tasks", _create_runtime_tasks),
     Migration(7, "create_file_versions", _create_file_versions),
     Migration(8, "create_batches", _create_batches),
+    Migration(9, "create_traces_and_context", _create_traces_and_context),
 )
 
 

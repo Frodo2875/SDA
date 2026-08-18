@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from backend import database
 from backend.runtime.planner import TaskPlan
+from backend.services.trace_service import record_trace
 
 
 StepExecutor = Callable[[dict[str, Any]], tuple[dict[str, Any], int]]
@@ -55,6 +56,7 @@ def record_tool_execution(
     result: dict[str, Any],
     retry_count: int,
     step_id: str | None = None,
+    duration_ms: int = 0,
 ) -> None:
     steps = database.get_task_step_records(task_id)
     step = (
@@ -76,6 +78,23 @@ def record_tool_execution(
         started_at=step.get("started_at") or now,
         completed_at=now,
     )
+    try:
+        record_trace(
+            task_id=task_id,
+            session_id=database.get_task_record(task_id)["session_id"],
+            step_id=step["step_id"],
+            event_type="tool_execution",
+            tool_name=tool_name,
+            arguments=arguments,
+            result=result,
+            duration_ms=duration_ms,
+            retry_count=retry_count,
+            result_status="success" if ok else "failed",
+            error_code=None if ok else result.get("error_code"),
+        )
+    except Exception:
+        # Observability must never alter the authoritative Tool outcome.
+        pass
     _refresh_checkpoint(task_id)
 
 

@@ -13,6 +13,8 @@ from backend.repositories.schema_repository import SchemaRepository
 from backend.repositories.task_repository import TaskRepository
 from backend.repositories.version_repository import VersionRepository
 from backend.repositories.batch_repository import BatchRepository
+from backend.repositories.context_repository import ContextRepository
+from backend.repositories.trace_repository import TraceRepository
 from backend.tools import excel_utils
 
 
@@ -97,6 +99,8 @@ DOCUMENT_REPOSITORY = DocumentRepository(_connect)
 TASK_REPOSITORY = TaskRepository(_connect)
 VERSION_REPOSITORY = VersionRepository(_connect)
 BATCH_REPOSITORY = BatchRepository(_connect)
+TRACE_REPOSITORY = TraceRepository(_connect)
+CONTEXT_REPOSITORY = ContextRepository(_connect)
 
 
 def create_base_schema(connection: sqlite3.Connection) -> None:
@@ -332,6 +336,26 @@ def finish_batch_action(action_id: str, *, outcome: str) -> dict[str, Any] | Non
     )
 
 
+def add_trace_record(trace: dict[str, Any]) -> None:
+    TRACE_REPOSITORY.add(trace)
+
+
+def get_task_trace_records(task_id: str) -> list[dict[str, Any]]:
+    return TRACE_REPOSITORY.list_for_task(task_id)
+
+
+def get_session_trace_records(session_id: str, limit: int = 100) -> list[dict[str, Any]]:
+    return TRACE_REPOSITORY.list_for_session(session_id, limit)
+
+
+def get_session_context_record(session_id: str) -> dict[str, Any] | None:
+    return CONTEXT_REPOSITORY.get(session_id)
+
+
+def save_session_context_record(context: dict[str, Any]) -> None:
+    CONTEXT_REPOSITORY.save(context)
+
+
 def save_chat_message(
     *,
     session_id: str,
@@ -520,6 +544,8 @@ def fetch_all(table_name: str) -> list[dict[str, Any]]:
         "file_versions": "SELECT * FROM file_versions ORDER BY file_id, version_number",
         "batches": "SELECT * FROM batches ORDER BY created_at",
         "batch_items": "SELECT * FROM batch_items ORDER BY batch_id, rowid",
+        "traces": "SELECT * FROM traces ORDER BY created_at, rowid",
+        "session_contexts": "SELECT * FROM session_contexts ORDER BY updated_at",
     }
     query = queries.get(table_name)
     if query is None:

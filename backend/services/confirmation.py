@@ -12,6 +12,7 @@ from backend.runtime.task_runner import (
     resume_after_action,
     start_task,
 )
+from backend.runtime.context_manager import clear_pending_action, set_pending_action
 from backend.services.file_versioning import (
     WordDiffOperation,
     execute_versioned_word_action,
@@ -194,6 +195,7 @@ def _create_pending_word_action(
         "task_id": task_id,
     }
     database.insert_pending_action(action)
+    _set_context_action(session_id, action["action_id"])
     database.save_operation_log(
         session_id=session_id,
         action_type=_operation_name(action_type, "create_pending"),
@@ -240,6 +242,7 @@ def create_pending_delete_action(*, session_id: str, file_id: str) -> dict[str, 
         "executed_at": None,
     }
     database.insert_pending_action(action)
+    _set_context_action(session_id, action["action_id"])
     database.save_operation_log(
         session_id=session_id,
         action_type="create_pending_delete",
@@ -289,6 +292,7 @@ def cancel_action(action_id: str) -> dict[str, Any]:
     )
     _resume_runtime_action(action_id, "cancelled", success=False)
     _finish_batch_action(action_id, "skipped")
+    _clear_context_action(action["session_id"], action_id)
     return _success(_deserialize_action(action), "操作已取消，文件未修改")
 
 
@@ -330,6 +334,7 @@ def confirm_action(action_id: str) -> dict[str, Any]:
     _finish_batch_action(
         action_id, "success" if action_result["ok"] else "failed"
     )
+    _clear_context_action(action["session_id"], action_id)
     if action_result["ok"]:
         is_delete = action["action_type"] == ACTION_TYPE_DELETE_FILE
         result_key = "delete_result" if is_delete else "write_result"
@@ -393,5 +398,19 @@ def _finish_batch_action(action_id: str, outcome: str) -> None:
     """Synchronize an optional whole-Batch action without weakening HITL."""
     try:
         database.finish_batch_action(action_id, outcome=outcome)
+    except Exception:
+        return
+
+
+def _set_context_action(session_id: str, action_id: str) -> None:
+    try:
+        set_pending_action(session_id, action_id)
+    except Exception:
+        return
+
+
+def _clear_context_action(session_id: str, action_id: str) -> None:
+    try:
+        clear_pending_action(session_id, action_id)
     except Exception:
         return

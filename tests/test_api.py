@@ -3,6 +3,7 @@
 import httpx
 import pytest
 
+from backend import database
 from backend import agent
 from backend.llm_client import LLMConfigurationError
 from backend.main import app
@@ -46,6 +47,25 @@ async def test_files(client: httpx.AsyncClient) -> None:
         "科研成果.xlsx",
         "综合评价.docx",
     } <= {item["file_name"] for item in body["data"]}
+    item = next(entry for entry in body["data"] if entry["file_name"] == "学生基本信息.xlsx")
+    assert {
+        "source_type", "lifecycle_status", "parse_status", "queryable",
+        "index_status", "uploaded_at", "schema_summary",
+    } <= set(item)
+
+
+async def test_file_detail_and_redacted_trace_endpoints(client: httpx.AsyncClient) -> None:
+    record = database.get_file_record("学生基本信息.xlsx")
+    details = await client.get(f"/api/files/{record['file_id']}/details")
+    context = await client.get("/api/sessions/api-v2/context")
+    traces = await client.get("/api/sessions/api-v2/traces")
+
+    assert details.status_code == 200
+    assert details.json()["data"]["file_id"] == record["file_id"]
+    assert context.status_code == 200
+    assert context.json()["data"]["session_id"] == "api-v2"
+    assert traces.status_code == 200
+    assert traces.json()["data"] == []
 
 
 async def test_search_student(client: httpx.AsyncClient) -> None:
@@ -130,6 +150,10 @@ async def test_openapi_contains_all_requested_routes(client: httpx.AsyncClient) 
         "/api/students/{student_id}/research",
         "/api/students/compare",
         "/api/chat",
+        "/api/files/{file_id}/details",
+        "/api/tasks/{task_id}/traces",
+        "/api/sessions/{session_id}/context",
+        "/api/sessions/{session_id}/traces",
     } <= set(paths)
 
 

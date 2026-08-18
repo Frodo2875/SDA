@@ -1,0 +1,74 @@
+"""HTTP-only client for the FastAPI backend."""
+
+import os
+from typing import Any
+
+import httpx
+
+
+BASE_URL = os.getenv("BACKEND_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+TIMEOUT = 60.0
+
+
+def request(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+    try:
+        response = httpx.request(method, f"{BASE_URL}{path}", timeout=TIMEOUT, **kwargs)
+    except httpx.RequestError as exc:
+        raise RuntimeError("无法连接后端服务，请确认 FastAPI 已在 8000 端口启动。") from exc
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise RuntimeError("后端返回了无法识别的响应。") from exc
+    if response.is_error:
+        raise RuntimeError(str(payload.get("message") or payload.get("answer") or "请求处理失败"))
+    return payload
+
+
+def list_files() -> list[dict[str, Any]]:
+    result = request("GET", "/api/files")
+    if not result.get("ok"):
+        raise RuntimeError(result.get("message") or "文件列表读取失败")
+    return result.get("data") or []
+
+
+def upload_file(uploaded_file: Any) -> dict[str, Any]:
+    return request(
+        "POST", "/api/files/upload",
+        files={"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type or "application/octet-stream")},
+    )
+
+
+def chat(session_id: str, message: str) -> dict[str, Any]:
+    return request("POST", "/api/chat", json={"session_id": session_id, "message": message})
+
+
+def decide_action(action_id: str, decision: str) -> dict[str, Any]:
+    return request("POST", f"/api/actions/{action_id}/{decision}")
+
+
+def get_task(task_id: str) -> dict[str, Any]:
+    return request("GET", f"/api/tasks/{task_id}").get("data") or {}
+
+
+def get_traces(*, task_id: str | None = None, session_id: str | None = None) -> list[dict[str, Any]]:
+    path = f"/api/tasks/{task_id}/traces" if task_id else f"/api/sessions/{session_id}/traces"
+    return request("GET", path).get("data") or []
+
+
+def list_versions(file_id: str) -> list[dict[str, Any]]:
+    return request("GET", f"/api/files/{file_id}/versions").get("data") or []
+
+
+def prepare_undo(file_id: str, session_id: str) -> dict[str, Any]:
+    return request("POST", f"/api/files/{file_id}/undo", json={"session_id": session_id})
+
+
+def prepare_rollback(file_id: str, version_id: str, session_id: str) -> dict[str, Any]:
+    return request(
+        "POST", f"/api/files/{file_id}/rollback/{version_id}",
+        json={"session_id": session_id},
+    )
+
+
+def get_batch(batch_id: str) -> dict[str, Any]:
+    return request("GET", f"/api/batches/{batch_id}").get("data") or {}

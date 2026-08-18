@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+import time
 from typing import Any, Protocol
 
 from pydantic import ValidationError
@@ -12,7 +13,10 @@ from backend.llm_client import LLMClient
 from backend.runtime.planner import create_plan
 from backend.runtime.task_runner import finalize_task, record_tool_execution, start_task
 from backend.runtime.tool_executor import execute_with_retry
+from backend.runtime.context_manager import resolve_message, update_after_run
 from backend.services.confirmation import create_pending_action
+from backend.services.redaction import redacted_json, redact_value
+from backend.services.trace_service import record_trace
 from backend.tool_registry import TOOL_REGISTRY
 
 
@@ -286,8 +290,8 @@ def _log_tool_call(
         "agent_tool_call round=%s tool_name=%s arguments=%s tool_result=%s",
         round_number,
         tool_name,
-        json.dumps(arguments, ensure_ascii=False),
-        json.dumps(tool_result, ensure_ascii=False),
+        redacted_json(arguments),
+        redacted_json(tool_result),
     )
 
 
@@ -498,13 +502,14 @@ async def _run_agent_core(
     client: ChatClient | None = None,
     max_tool_rounds: int = MAX_TOOL_ROUNDS,
     task_id: str | None = None,
+    context_prompt: str | None = None,
 ) -> dict[str, Any]:
     """Run the model/tool loop until a final answer or the safety limit is reached."""
     llm_client = client or LLMClient()
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": message},
-    ]
+    messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    if context_prompt:
+        messages.append({"role": "system", "content": context_prompt})
+    messages.append({"role": "user", "content": message})
     executed_calls: list[dict[str, Any]] = []
     tool_rounds = 0
     incomplete_answer_retries = 0
@@ -630,9 +635,11 @@ async def _run_agent_core(
         )
         for tool_call in ordered_calls:
             name = tool_call["function"]["name"]
+            started = time.perf_counter()
             arguments, result, retry_count = _execute_tool_with_retry(
                 name, tool_call["function"]["arguments"], executed_calls
             )
+            duration_ms = max(0, round((time.perf_counter() - started) * 1000))
             executed_calls.append(
                 {
                     "name": name,
@@ -648,7 +655,23 @@ async def _run_agent_core(
                     arguments=arguments,
                     result=result,
                     retry_count=retry_count,
+                    duration_ms=duration_ms,
                 )
+            else:
+                try:
+                    record_trace(
+                        session_id=session_id,
+                        event_type="tool_execution",
+                        tool_name=name,
+                        arguments=arguments,
+                        result=result,
+                        duration_ms=duration_ms,
+                        retry_count=retry_count,
+                        result_status="success" if result.get("ok") is True else "failed",
+                        error_code=None if result.get("ok") is True else result.get("error_code"),
+                    )
+                except Exception:
+                    pass
             _log_tool_call(tool_rounds, name, arguments, result)
 
             if (
@@ -686,7 +709,9 @@ async def run_agent(
     session_id: str = "direct",
 ) -> dict[str, Any]:
     """Run one Agent request and persist both sides of the chat."""
-    plan = create_plan(message)
+    context_resolution = resolve_message(session_id, message)
+    resolved_message = context_resolution["message"]
+    plan = create_plan(resolved_message)
     task = (
         start_task(session_id=session_id, user_message=message, plan=plan)
         if plan is not None
@@ -700,13 +725,30 @@ async def run_agent(
         used_tools=[],
         status="received",
     )
+    if context_resolution["clarification"]:
+        result = {
+            "answer": context_resolution["clarification"],
+            "tool_calls": [],
+            "status": "clarification_required",
+            "evidence": [],
+        }
+        database.save_chat_message(
+            session_id=session_id,
+            role="assistant",
+            content=result["answer"],
+            used_tools=[],
+            status=result["status"],
+        )
+        update_after_run(session_id=session_id, result=result, task_id=None)
+        return result
     try:
         result = await _run_agent_core(
-            message=message,
+            message=resolved_message,
             session_id=session_id,
             client=client,
             max_tool_rounds=max_tool_rounds,
             task_id=task_id,
+            context_prompt=context_resolution["context_prompt"],
         )
     except Exception:
         if task_id is not None:
@@ -727,11 +769,33 @@ async def run_agent(
         finalize_task(task_id, result)
         result["task_id"] = task_id
 
+    result["evidence"] = _collect_evidence(result.get("tool_calls") or [])
+    update_after_run(session_id=session_id, result=result, task_id=task_id)
+
     database.save_chat_message(
         session_id=session_id,
         role="assistant",
         content=result["answer"],
-        used_tools=result.get("tool_calls", []),
+        used_tools=redact_value(result.get("tool_calls", [])),
         status=result["status"],
     )
     return result
+
+
+def _collect_evidence(executed_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Expose only actual Tool provenance, deduplicated by evidence_id."""
+    collected: dict[str, dict[str, Any]] = {}
+    for call in executed_calls:
+        result = call.get("result") or {}
+        candidates = result.get("evidence_chain")
+        if candidates is None and isinstance(result.get("data"), dict):
+            candidates = result["data"].get("evidence_chain") or result["data"].get("evidence")
+        if candidates is None:
+            candidates = result.get("evidence")
+        if not isinstance(candidates, list):
+            continue
+        for item in candidates:
+            if not isinstance(item, dict) or not item.get("evidence_id"):
+                continue
+            collected[str(item["evidence_id"])] = dict(item)
+    return list(collected.values())

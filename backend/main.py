@@ -20,6 +20,8 @@ from backend.services.confirmation import (
 from backend.services.file_versioning import list_versions, preview_word_diff
 from backend.services.file_upload import save_uploaded_file
 from backend.services.batch_service import BatchArguments, get_batch, run_batch
+from backend.services.file_view import get_file_view, list_file_views
+from backend.runtime.context_manager import get_context
 from backend.schemas import (
     ActionResponse,
     ChatRequest,
@@ -108,8 +110,14 @@ async def health() -> HealthResponse:
 
 @app.get("/api/files", response_model=ToolResponse, tags=["files"])
 async def api_list_files() -> dict[str, Any] | JSONResponse:
-    """List supported files through the existing file tool."""
-    return _call_tool(list_files)
+    """List compatible Tool fields plus V2 presentation metadata."""
+    return _call_tool(list_file_views)
+
+
+@app.get("/api/files/{file_id}/details", response_model=ToolResponse, tags=["files"])
+async def api_file_details(file_id: str) -> dict[str, Any] | JSONResponse:
+    """Read lifecycle, Schema summary and writable/version presentation metadata."""
+    return _call_tool(get_file_view, file_id)
 
 
 @app.post("/api/files/upload", response_model=ToolResponse, tags=["files"])
@@ -402,6 +410,47 @@ async def api_get_task(task_id: str) -> dict[str, Any] | JSONResponse:
         },
         "error_code": None,
         "message": "任务状态读取成功",
+    }
+
+
+@app.get("/api/tasks/{task_id}/traces", response_model=ToolResponse, tags=["tasks"])
+async def api_get_task_traces(task_id: str) -> dict[str, Any] | JSONResponse:
+    """Return only observable, redacted Tool traces for one Task."""
+    task = database.get_task_record(task_id)
+    if task is None:
+        return JSONResponse(
+            status_code=404,
+            content={"ok": False, "data": None, "error_code": "TASK_NOT_FOUND", "message": "未找到指定任务"},
+        )
+    return {
+        "ok": True,
+        "data": database.get_task_trace_records(task_id),
+        "error_code": None,
+        "message": "Trace 读取成功",
+    }
+
+
+@app.get("/api/sessions/{session_id}/context", response_model=ToolResponse, tags=["sessions"])
+async def api_get_session_context(session_id: str) -> dict[str, Any]:
+    """Return bounded structured Context without chat history or hidden reasoning."""
+    return {
+        "ok": True,
+        "data": get_context(session_id),
+        "error_code": None,
+        "message": "会话上下文读取成功",
+    }
+
+
+@app.get("/api/sessions/{session_id}/traces", response_model=ToolResponse, tags=["sessions"])
+async def api_get_session_traces(
+    session_id: str, limit: int = Query(default=50, ge=1, le=500)
+) -> dict[str, Any]:
+    """Return recent redacted Trace events, including lightweight tasks."""
+    return {
+        "ok": True,
+        "data": database.get_session_trace_records(session_id, limit),
+        "error_code": None,
+        "message": "会话 Trace 读取成功",
     }
 
 
