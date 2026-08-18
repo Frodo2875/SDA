@@ -63,10 +63,11 @@ class LLMClient:
         payload = {
             "model": self.model,
             "messages": messages,
-            "tools": tools,
-            "tool_choice": "auto",
             "stream": False,
         }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",

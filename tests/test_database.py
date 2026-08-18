@@ -59,6 +59,15 @@ EXPECTED_COLUMNS = {
         "storage_path", "content_hash", "size", "task_id", "session_id",
         "change_type", "created_at", "status",
     ],
+    "batches": [
+        "batch_id", "session_id", "task_id", "action_type", "status",
+        "total", "success_count", "failed_count", "skipped_count",
+        "created_at", "completed_at",
+    ],
+    "batch_items": [
+        "item_id", "batch_id", "target_id", "status", "result_summary",
+        "error_code", "action_id",
+    ],
 }
 
 
@@ -97,9 +106,10 @@ def test_first_run_creates_database_tables_and_file_records(
             (5, "create_document_chunks"),
             (6, "create_runtime_tasks"),
             (7, "create_file_versions"),
+            (8, "create_batches"),
         ]
         assert all(row[2] for row in migrations)
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 8
 
     file_rows = database.fetch_all("files")
     assert {

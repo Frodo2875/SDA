@@ -19,6 +19,7 @@ from backend.services.confirmation import (
 )
 from backend.services.file_versioning import list_versions, preview_word_diff
 from backend.services.file_upload import save_uploaded_file
+from backend.services.batch_service import BatchArguments, get_batch, run_batch
 from backend.schemas import (
     ActionResponse,
     ChatRequest,
@@ -58,6 +59,7 @@ CLIENT_ERROR_CODES = {
 NOT_FOUND_ERROR_CODES = {
     "FILE_NOT_FOUND", "STUDENT_NOT_FOUND", "VERSION_NOT_FOUND",
     "VERSION_FILE_MISSING",
+    "BATCH_NOT_FOUND",
 }
 
 
@@ -364,6 +366,18 @@ async def api_prepare_file_rollback(
                 "message": "服务器内部错误",
             },
         )
+
+
+@app.post("/api/batches", response_model=ToolResponse, tags=["batches"])
+async def api_run_batch(request: BatchArguments) -> dict[str, Any]:
+    """Run one validated Batch with persisted per-item progress."""
+    return await run_batch(request)
+
+
+@app.get("/api/batches/{batch_id}", response_model=ToolResponse, tags=["batches"])
+async def api_get_batch(batch_id: str) -> dict[str, Any] | JSONResponse:
+    """Return Batch counts, item outcomes, and partial-failure details."""
+    return _call_tool(get_batch, batch_id)
 
 
 @app.get("/api/tasks/{task_id}", response_model=ToolResponse, tags=["tasks"])

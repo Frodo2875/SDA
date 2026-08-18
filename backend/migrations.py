@@ -333,6 +333,50 @@ def _create_file_versions(connection: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS ix_file_versions_file_id "
         "ON file_versions(file_id, version_number)"
     )
+
+
+def _create_batches(connection: sqlite3.Connection) -> None:
+    """Create durable Batch progress and per-target outcomes."""
+    status_check = "'pending', 'running', 'success', 'failed', 'skipped'"
+    connection.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS batches (
+            batch_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            task_id TEXT,
+            action_type TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ({status_check})),
+            total INTEGER NOT NULL DEFAULT 0,
+            success_count INTEGER NOT NULL DEFAULT 0,
+            failed_count INTEGER NOT NULL DEFAULT 0,
+            skipped_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            completed_at TEXT,
+            FOREIGN KEY (task_id) REFERENCES tasks(task_id)
+        )
+        """
+    )
+    connection.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS batch_items (
+            item_id TEXT PRIMARY KEY,
+            batch_id TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ({status_check})),
+            result_summary TEXT,
+            error_code TEXT,
+            action_id TEXT,
+            FOREIGN KEY (batch_id) REFERENCES batches(batch_id) ON DELETE CASCADE,
+            FOREIGN KEY (action_id) REFERENCES pending_actions(action_id)
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS ix_batches_session_id ON batches(session_id)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS ix_batch_items_batch_id ON batch_items(batch_id)"
+    )
 MIGRATIONS = (
     Migration(1, "add_files_v2_foundation", _add_files_v2_foundation),
     Migration(2, "normalize_file_lifecycle", _normalize_file_lifecycle),
@@ -341,6 +385,7 @@ MIGRATIONS = (
     Migration(5, "create_document_chunks", _create_document_chunks),
     Migration(6, "create_runtime_tasks", _create_runtime_tasks),
     Migration(7, "create_file_versions", _create_file_versions),
+    Migration(8, "create_batches", _create_batches),
 )
 
 

@@ -12,6 +12,7 @@ from backend.repositories.document_repository import DocumentRepository
 from backend.repositories.schema_repository import SchemaRepository
 from backend.repositories.task_repository import TaskRepository
 from backend.repositories.version_repository import VersionRepository
+from backend.repositories.batch_repository import BatchRepository
 from backend.tools import excel_utils
 
 
@@ -95,6 +96,7 @@ SCHEMA_REPOSITORY = SchemaRepository(_connect)
 DOCUMENT_REPOSITORY = DocumentRepository(_connect)
 TASK_REPOSITORY = TaskRepository(_connect)
 VERSION_REPOSITORY = VersionRepository(_connect)
+BATCH_REPOSITORY = BatchRepository(_connect)
 
 
 def create_base_schema(connection: sqlite3.Connection) -> None:
@@ -296,6 +298,40 @@ def commit_file_version_transition(
     )
 
 
+def create_batch_record(batch: dict[str, Any]) -> None:
+    BATCH_REPOSITORY.create(batch)
+
+
+def add_batch_item(item: dict[str, Any]) -> None:
+    BATCH_REPOSITORY.add_item(item)
+
+
+def update_batch_record(batch_id: str, **values: Any) -> bool:
+    return BATCH_REPOSITORY.update(batch_id, **values)
+
+
+def get_batch_record(batch_id: str) -> dict[str, Any] | None:
+    return BATCH_REPOSITORY.get(batch_id)
+
+
+def link_batch_action(batch_id: str, action_id: str) -> None:
+    BATCH_REPOSITORY.link_action(batch_id, action_id)
+
+
+def reclassify_batch_success_items(
+    batch_id: str, *, status: str, error_code: str, summary: str
+) -> None:
+    BATCH_REPOSITORY.reclassify_success(
+        batch_id, status=status, error_code=error_code, summary=summary
+    )
+
+
+def finish_batch_action(action_id: str, *, outcome: str) -> dict[str, Any] | None:
+    return BATCH_REPOSITORY.finish_action(
+        action_id, outcome=outcome, completed_at=utc_now()
+    )
+
+
 def save_chat_message(
     *,
     session_id: str,
@@ -482,6 +518,8 @@ def fetch_all(table_name: str) -> list[dict[str, Any]]:
         "tasks": "SELECT * FROM tasks ORDER BY created_at",
         "task_steps": "SELECT * FROM task_steps ORDER BY task_id, sequence",
         "file_versions": "SELECT * FROM file_versions ORDER BY file_id, version_number",
+        "batches": "SELECT * FROM batches ORDER BY created_at",
+        "batch_items": "SELECT * FROM batch_items ORDER BY batch_id, rowid",
     }
     query = queries.get(table_name)
     if query is None:

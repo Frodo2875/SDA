@@ -288,6 +288,7 @@ def cancel_action(action_id: str) -> dict[str, Any]:
         success=True,
     )
     _resume_runtime_action(action_id, "cancelled", success=False)
+    _finish_batch_action(action_id, "skipped")
     return _success(_deserialize_action(action), "操作已取消，文件未修改")
 
 
@@ -325,6 +326,9 @@ def confirm_action(action_id: str) -> dict[str, Any]:
     )
     _resume_runtime_action(
         action_id, terminal_status, success=bool(action_result["ok"])
+    )
+    _finish_batch_action(
+        action_id, "success" if action_result["ok"] else "failed"
     )
     if action_result["ok"]:
         is_delete = action["action_type"] == ACTION_TYPE_DELETE_FILE
@@ -382,4 +386,12 @@ def _resume_runtime_action(action_id: str, status: str, *, success: bool) -> Non
     except Exception:
         # Confirmation idempotency and the frozen file action must not be rolled
         # back merely because optional runtime bookkeeping is unavailable.
+        return
+
+
+def _finish_batch_action(action_id: str, outcome: str) -> None:
+    """Synchronize an optional whole-Batch action without weakening HITL."""
+    try:
+        database.finish_batch_action(action_id, outcome=outcome)
+    except Exception:
         return
