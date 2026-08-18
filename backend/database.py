@@ -10,6 +10,7 @@ from backend.migrations import run_migrations
 from backend.repositories.file_repository import FileRepository
 from backend.repositories.document_repository import DocumentRepository
 from backend.repositories.schema_repository import SchemaRepository
+from backend.repositories.task_repository import TaskRepository
 from backend.tools import excel_utils
 
 
@@ -91,6 +92,7 @@ def _connect() -> sqlite3.Connection:
 FILE_REPOSITORY = FileRepository(_connect)
 SCHEMA_REPOSITORY = SchemaRepository(_connect)
 DOCUMENT_REPOSITORY = DocumentRepository(_connect)
+TASK_REPOSITORY = TaskRepository(_connect)
 
 
 def create_base_schema(connection: sqlite3.Connection) -> None:
@@ -241,6 +243,30 @@ def search_document_chunks(
     *, file_ids: list[str], query: str, limit: int
 ) -> list[dict[str, Any]]:
     return DOCUMENT_REPOSITORY.search(file_ids=file_ids, query=query, limit=limit)
+
+
+def create_task_record(task: dict[str, Any], steps: list[dict[str, Any]]) -> None:
+    TASK_REPOSITORY.create(task, steps)
+
+
+def get_task_record(task_id: str) -> dict[str, Any] | None:
+    return TASK_REPOSITORY.get(task_id)
+
+
+def get_task_step_records(task_id: str) -> list[dict[str, Any]]:
+    return TASK_REPOSITORY.steps(task_id)
+
+
+def update_task_record(task_id: str, **values: Any) -> bool:
+    return TASK_REPOSITORY.update_task(task_id, **values)
+
+
+def update_task_step_record(step_id: str, **values: Any) -> bool:
+    return TASK_REPOSITORY.update_step(step_id, **values)
+
+
+def find_task_waiting_for_action(action_id: str) -> dict[str, Any] | None:
+    return TASK_REPOSITORY.waiting_for_action(action_id)
 
 
 def save_chat_message(
@@ -420,6 +446,8 @@ def fetch_all(table_name: str) -> list[dict[str, Any]]:
         "table_schemas": "SELECT * FROM table_schemas ORDER BY rowid",
         "schema_fields": "SELECT * FROM schema_fields ORDER BY rowid",
         "document_chunks": "SELECT * FROM document_chunks ORDER BY file_id, chunk_index",
+        "tasks": "SELECT * FROM tasks ORDER BY created_at",
+        "task_steps": "SELECT * FROM task_steps ORDER BY task_id, sequence",
     }
     query = queries.get(table_name)
     if query is None:

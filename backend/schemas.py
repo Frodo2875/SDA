@@ -52,6 +52,7 @@ class AgentToolCall(BaseModel):
     name: str
     arguments: dict[str, Any]
     result: dict[str, Any]
+    retry_count: int = 0
 
 
 class PendingAction(BaseModel):
@@ -76,6 +77,7 @@ class ChatResponse(BaseModel):
     tool_calls: list[AgentToolCall]
     status: str
     pending_action: PendingAction | None = None
+    task_id: str | None = None
 
 
 class ActionResponse(BaseModel):

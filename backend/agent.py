@@ -9,6 +9,9 @@ from pydantic import ValidationError
 
 from backend import database
 from backend.llm_client import LLMClient
+from backend.runtime.planner import create_plan
+from backend.runtime.task_runner import finalize_task, record_tool_execution, start_task
+from backend.runtime.tool_executor import execute_with_retry
 from backend.services.confirmation import create_pending_action
 from backend.tool_registry import TOOL_REGISTRY
 
@@ -109,9 +112,35 @@ def _execute_tool(
             result = TOOL_FUNCTIONS[name](
                 **arguments, evidence_context=evidence_context
             )
+    except OSError:
+        result = _invalid_tool_result(
+            "TEMPORARY_IO_ERROR", f"工具 {name} 遇到临时 IO 错误"
+        )
     except Exception:
         result = _invalid_tool_result("TOOL_EXECUTION_ERROR", f"工具 {name} 执行失败")
     return arguments, result
+
+
+def _execute_tool_with_retry(
+    name: str,
+    raw_arguments: Any,
+    executed_calls: list[dict[str, Any]] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], int]:
+    """Add bounded retries around the existing validated Tool execution path."""
+    spec = TOOL_REGISTRY.get(name)
+    if spec is None:
+        arguments, result = _execute_tool(name, raw_arguments, executed_calls)
+        return arguments, result, 0
+    return execute_with_retry(
+        tool_name=name,
+        raw_arguments=raw_arguments,
+        execute_once=lambda current_arguments: _execute_tool(
+            name, current_arguments, executed_calls
+        ),
+        retryable=spec.retryable,
+        read_only=spec.read_only,
+        requires_confirmation=spec.requires_confirmation,
+    )
 
 
 def _has_successful_call(
@@ -468,6 +497,7 @@ async def _run_agent_core(
     session_id: str,
     client: ChatClient | None = None,
     max_tool_rounds: int = MAX_TOOL_ROUNDS,
+    task_id: str | None = None,
 ) -> dict[str, Any]:
     """Run the model/tool loop until a final answer or the safety limit is reached."""
     llm_client = client or LLMClient()
@@ -599,10 +629,25 @@ async def _run_agent_core(
         )
         for tool_call in ordered_calls:
             name = tool_call["function"]["name"]
-            arguments, result = _execute_tool(
+            arguments, result, retry_count = _execute_tool_with_retry(
                 name, tool_call["function"]["arguments"], executed_calls
             )
-            executed_calls.append({"name": name, "arguments": arguments, "result": result})
+            executed_calls.append(
+                {
+                    "name": name,
+                    "arguments": arguments,
+                    "result": result,
+                    "retry_count": retry_count,
+                }
+            )
+            if task_id is not None:
+                record_tool_execution(
+                    task_id=task_id,
+                    tool_name=name,
+                    arguments=arguments,
+                    result=result,
+                    retry_count=retry_count,
+                )
             _log_tool_call(tool_rounds, name, arguments, result)
 
             if (
@@ -640,6 +685,13 @@ async def run_agent(
     session_id: str = "direct",
 ) -> dict[str, Any]:
     """Run one Agent request and persist both sides of the chat."""
+    plan = create_plan(message)
+    task = (
+        start_task(session_id=session_id, user_message=message, plan=plan)
+        if plan is not None
+        else None
+    )
+    task_id = task["task_id"] if task is not None else None
     database.save_chat_message(
         session_id=session_id,
         role="user",
@@ -653,8 +705,14 @@ async def run_agent(
             session_id=session_id,
             client=client,
             max_tool_rounds=max_tool_rounds,
+            task_id=task_id,
         )
     except Exception:
+        if task_id is not None:
+            finalize_task(
+                task_id,
+                {"status": "runtime_error", "answer": "请求处理失败"},
+            )
         database.save_chat_message(
             session_id=session_id,
             role="assistant",
@@ -663,6 +721,10 @@ async def run_agent(
             status="error",
         )
         raise
+
+    if task_id is not None:
+        finalize_task(task_id, result)
+        result["task_id"] = task_id
 
     database.save_chat_message(
         session_id=session_id,

@@ -4,6 +4,7 @@ from typing import Any
 from uuid import uuid4
 
 from backend import database
+from backend.runtime.task_runner import resume_after_action
 from backend.services.file_lifecycle import delete_uploaded_file
 from backend.tools.file_tools import get_file_info
 from backend.tools.word_tools import write_word
@@ -145,6 +146,7 @@ def cancel_action(action_id: str) -> dict[str, Any]:
         confirmed=False,
         success=True,
     )
+    _resume_runtime_action(action_id, "cancelled", success=False)
     return _success(action, "操作已取消，文件未修改")
 
 
@@ -179,6 +181,9 @@ def confirm_action(action_id: str) -> dict[str, Any]:
         confirmed=True,
         success=bool(action_result["ok"]),
         error_message=None if action_result["ok"] else action_result["message"],
+    )
+    _resume_runtime_action(
+        action_id, terminal_status, success=bool(action_result["ok"])
     )
     if action_result["ok"]:
         result_key = (
@@ -217,3 +222,13 @@ def _execute_frozen_action(action: dict[str, Any]) -> dict[str, Any]:
 def _operation_name(action_type: str, verb: str) -> str:
     suffix = "delete" if action_type == ACTION_TYPE_DELETE_FILE else "write"
     return f"{verb}_{suffix}"
+
+
+def _resume_runtime_action(action_id: str, status: str, *, success: bool) -> None:
+    """Keep a completed HITL action authoritative even if Task bookkeeping fails."""
+    try:
+        resume_after_action(action_id, status, success=success)
+    except Exception:
+        # Confirmation idempotency and the frozen file action must not be rolled
+        # back merely because optional runtime bookkeeping is unavailable.
+        return

@@ -175,6 +175,7 @@ TOOL_REGISTRY = ToolRegistry(
             "用白名单过滤、字段选择、排序和 limit 查询已解析 Excel Sheet。",
             QueryTableArguments,
             query_table,
+            retryable=True,
         ),
         _spec(
             "aggregate_table",
@@ -211,6 +212,7 @@ TOOL_REGISTRY = ToolRegistry(
             "从已索引 PDF 或 Word 中检索有限条材料依据，并返回可引用 Evidence。",
             RetrieveDocumentArguments,
             retrieve_document,
+            retryable=True,
         ),
         _spec(
             "evaluate_scholarship_eligibility",

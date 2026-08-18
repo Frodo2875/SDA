@@ -6,8 +6,10 @@ from typing import Annotated, Any
 from fastapi import FastAPI, File, Path, Query, UploadFile
 from fastapi.responses import JSONResponse
 
+from backend import database
 from backend.agent import run_agent
 from backend.llm_client import LLMAPIError, LLMConfigurationError
+from backend.runtime.task_runner import resume_task
 from backend.services.confirmation import (
     cancel_action,
     confirm_action,
@@ -288,3 +290,51 @@ async def api_cancel_action(action_id: str) -> dict[str, Any] | JSONResponse:
                 "message": "服务器内部错误",
             },
         )
+
+
+@app.get("/api/tasks/{task_id}", response_model=ToolResponse, tags=["tasks"])
+async def api_get_task(task_id: str) -> dict[str, Any] | JSONResponse:
+    """Return observable Task/Step state without model reasoning content."""
+    task = database.get_task_record(task_id)
+    if task is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "ok": False,
+                "data": None,
+                "error_code": "TASK_NOT_FOUND",
+                "message": "未找到指定任务",
+            },
+        )
+    return {
+        "ok": True,
+        "data": {
+            "task": task,
+            "steps": database.get_task_step_records(task_id),
+        },
+        "error_code": None,
+        "message": "任务状态读取成功",
+    }
+
+
+@app.post("/api/tasks/{task_id}/resume", response_model=ToolResponse, tags=["tasks"])
+async def api_resume_task(task_id: str) -> dict[str, Any] | JSONResponse:
+    """Resume a terminal HITL checkpoint without replaying successful reads."""
+    try:
+        result = resume_task(task_id)
+    except Exception:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "ok": False,
+                "data": None,
+                "error_code": "INTERNAL_ERROR",
+                "message": "服务器内部错误",
+            },
+        )
+    if not result["ok"]:
+        return JSONResponse(
+            status_code=404 if result.get("error_code") == "TASK_NOT_FOUND" else 409,
+            content={**result, "message": "任务无法恢复"},
+        )
+    return {**result, "message": "任务恢复状态已更新"}

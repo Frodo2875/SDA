@@ -43,6 +43,16 @@ EXPECTED_COLUMNS = {
         "chunk_id", "file_id", "page_no", "chunk_index", "chunk_text",
         "text_hash", "metadata_json",
     ],
+    "tasks": [
+        "task_id", "session_id", "user_message", "task_type", "status",
+        "current_step", "next_action", "checkpoint_data", "created_at",
+        "updated_at", "completed_at", "error_code",
+    ],
+    "task_steps": [
+        "step_id", "task_id", "sequence", "step_name", "step_type",
+        "tool_name", "arguments_json", "status", "retry_count",
+        "result_summary", "failed_reason", "started_at", "completed_at",
+    ],
 }
 
 
@@ -79,9 +89,10 @@ def test_first_run_creates_database_tables_and_file_records(
             (3, "create_excel_schema_tables"),
             (4, "add_field_semantic_mapping"),
             (5, "create_document_chunks"),
+            (6, "create_runtime_tasks"),
         ]
         assert all(row[2] for row in migrations)
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
 
     file_rows = database.fetch_all("files")
     assert {

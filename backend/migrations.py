@@ -234,12 +234,67 @@ def _create_document_chunks(connection: sqlite3.Connection) -> None:
         )
         """
     )
+
+
+def _create_runtime_tasks(connection: sqlite3.Connection) -> None:
+    """Create durable single-Agent task plans and their observable steps."""
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tasks (
+            task_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            user_message TEXT NOT NULL,
+            task_type TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (
+                status IN (
+                    'pending', 'running', 'waiting_confirmation',
+                    'success', 'failed', 'cancelled'
+                )
+            ),
+            current_step INTEGER,
+            next_action TEXT,
+            checkpoint_data TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            completed_at TEXT,
+            error_code TEXT
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS task_steps (
+            step_id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            sequence INTEGER NOT NULL,
+            step_name TEXT NOT NULL,
+            step_type TEXT NOT NULL,
+            tool_name TEXT,
+            arguments_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            result_summary TEXT,
+            failed_reason TEXT,
+            started_at TEXT,
+            completed_at TEXT,
+            FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE,
+            UNIQUE (task_id, sequence)
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS ix_tasks_session_id ON tasks(session_id)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS ix_task_steps_task_id ON task_steps(task_id)"
+    )
 MIGRATIONS = (
     Migration(1, "add_files_v2_foundation", _add_files_v2_foundation),
     Migration(2, "normalize_file_lifecycle", _normalize_file_lifecycle),
     Migration(3, "create_excel_schema_tables", _create_excel_schema_tables),
     Migration(4, "add_field_semantic_mapping", _add_field_semantic_mapping),
     Migration(5, "create_document_chunks", _create_document_chunks),
+    Migration(6, "create_runtime_tasks", _create_runtime_tasks),
 )
 
 
