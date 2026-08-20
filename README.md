@@ -96,3 +96,11 @@ student_document_agent/
 ## 当前阶段
 
 当前阶段完成了只读 Python Tools、FastAPI 接口和首次 LLM Tool Calling 循环。LLM 仅负责理解、工具选择和结果整合，学生数据与数值计算均来自 Python Tools。写文件工具未向 LLM 暴露。
+
+## 当前版本
+
+V2.99-Final-v2
+
+V3 development branch:
+
+feature/v3-development
