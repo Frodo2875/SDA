@@ -11,7 +11,14 @@ from pydantic import ValidationError
 from backend import database
 from backend.llm_client import LLMClient
 from backend.runtime.planner import create_plan
-from backend.runtime.task_runner import finalize_task, record_tool_execution, start_task
+from backend.runtime.task_runner import (
+    complete_generation_step,
+    finalize_task,
+    record_tool_execution,
+    start_generation_step,
+    start_task,
+    start_tool_step,
+)
 from backend.runtime.tool_executor import execute_with_retry
 from backend.runtime.context_manager import resolve_message, update_after_run
 from backend.services.confirmation import create_pending_action
@@ -62,6 +69,15 @@ class ChatClient(Protocol):
 
 def _invalid_tool_result(error_code: str, message: str) -> dict[str, Any]:
     return {"ok": False, "data": None, "error_code": error_code, "message": message}
+
+
+def _argument_object(raw_arguments: Any) -> dict[str, Any]:
+    """Return a non-executable preview of model arguments for Step claiming."""
+    try:
+        parsed = json.loads(raw_arguments or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _execute_tool(
@@ -515,6 +531,8 @@ async def _run_agent_core(
     incomplete_answer_retries = 0
 
     for _ in range(max_tool_rounds + 1):
+        if task_id is not None:
+            start_generation_step(task_id)
         assistant_message = await llm_client.create_chat_completion(messages, TOOL_DEFINITIONS)
         tool_calls = assistant_message.get("tool_calls") or []
         if not tool_calls:
@@ -569,6 +587,19 @@ async def _run_agent_core(
                         "tool_calls": executed_calls,
                         "status": "error",
                     }
+                if task_id is not None:
+                    complete_generation_step(task_id, "待写入内容已生成")
+                    preview_step_id = start_tool_step(
+                        task_id=task_id,
+                        tool_name="preview_word_diff",
+                        arguments={"target_file": target_file, "operation_type": "append"},
+                    )
+                    if preview_step_id is None:
+                        return {
+                            "answer": "Workflow Plan 缺少 Word Diff Step，已停止写入流程。",
+                            "tool_calls": executed_calls,
+                            "status": "workflow_plan_mismatch",
+                        }
                 action_result = create_pending_action(
                     session_id=session_id,
                     target_file=target_file,
@@ -636,9 +667,23 @@ async def _run_agent_core(
         for tool_call in ordered_calls:
             name = tool_call["function"]["name"]
             started = time.perf_counter()
-            arguments, result, retry_count = _execute_tool_with_retry(
-                name, tool_call["function"]["arguments"], executed_calls
-            )
+            step_id = None
+            if task_id is not None:
+                preview_arguments = _argument_object(tool_call["function"]["arguments"])
+                step_id = start_tool_step(
+                    task_id=task_id, tool_name=name, arguments=preview_arguments
+                )
+            if task_id is not None and step_id is None:
+                arguments = _argument_object(tool_call["function"]["arguments"])
+                result = _invalid_tool_result(
+                    "TOOL_NOT_IN_PLAN",
+                    f"Workflow Plan 未声明 Tool：{name}，本次未执行",
+                )
+                retry_count = 0
+            else:
+                arguments, result, retry_count = _execute_tool_with_retry(
+                    name, tool_call["function"]["arguments"], executed_calls
+                )
             duration_ms = max(0, round((time.perf_counter() - started) * 1000))
             executed_calls.append(
                 {
@@ -648,13 +693,14 @@ async def _run_agent_core(
                     "retry_count": retry_count,
                 }
             )
-            if task_id is not None:
+            if task_id is not None and step_id is not None:
                 record_tool_execution(
                     task_id=task_id,
                     tool_name=name,
                     arguments=arguments,
                     result=result,
                     retry_count=retry_count,
+                    step_id=step_id,
                     duration_ms=duration_ms,
                 )
             else:

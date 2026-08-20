@@ -63,7 +63,19 @@ class TaskRepository:
                 "SELECT * FROM task_steps WHERE task_id = ? ORDER BY sequence",
                 (task_id,),
             ).fetchall()
-        return [self._step(row) for row in rows]
+            task_row = connection.execute(
+                "SELECT checkpoint_data FROM tasks WHERE task_id = ?", (task_id,)
+            ).fetchone()
+        planned = self._planned_steps(task_row)
+        results = []
+        for row in rows:
+            step = self._step(row)
+            contract = planned.get(step["step_id"], {})
+            step["description"] = contract.get("description") or step["step_name"]
+            step["input"] = dict(step["arguments"])
+            step["expected_output"] = contract.get("expected_output") or ""
+            results.append(step)
+        return results
 
     def update_task(self, task_id: str, **values: Any) -> bool:
         allowed = {
@@ -127,3 +139,18 @@ class TaskRepository:
         item = dict(row)
         item["arguments"] = json.loads(item.pop("arguments_json") or "{}")
         return item
+
+    @staticmethod
+    def _planned_steps(row: sqlite3.Row | None) -> dict[str, dict[str, Any]]:
+        if row is None:
+            return {}
+        try:
+            checkpoint = json.loads(row["checkpoint_data"] or "{}")
+            steps = (checkpoint.get("plan") or {}).get("steps") or []
+        except (TypeError, json.JSONDecodeError):
+            return {}
+        return {
+            str(step["step_id"]): step
+            for step in steps
+            if isinstance(step, dict) and step.get("step_id")
+        }

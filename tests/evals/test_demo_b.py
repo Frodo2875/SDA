@@ -287,21 +287,33 @@ async def test_demo_b_identity_safety_and_full_version_chain(
     assert word_path.read_bytes() == before_cancel
 
     traces = database.get_task_trace_records(result["task_id"])
-    assert [item["tool_name"] for item in traces] == [
+    completed_tools = [
+        item["tool_name"] for item in traces if item["event_type"] == "tool_execution"
+    ]
+    assert completed_tools == [
         "search_student",
+        "get_student_info",
+        "get_student_scores",
+        "get_student_research",
         "query_table",
         "query_table",
         "retrieve_document",
         "evaluate_scholarship_eligibility",
+        "preview_word_diff",
+        "write_word",
     ]
-    assert next(item for item in traces if item["tool_name"] == "retrieve_document")["retry_count"] == 1
+    assert next(
+        item for item in traces
+        if item["tool_name"] == "retrieve_document"
+        and item["event_type"] == "tool_execution"
+    )["retry_count"] == 1
 
 
 @pytest.mark.anyio
-async def test_demo_b_records_current_combined_plan_boundary(
+async def test_demo_b_combined_plan_covers_the_full_workflow(
     demo_b_materials: dict[str, object]
 ) -> None:
-    """Evaluation guard: expose, rather than hide, the combined-plan coverage gap."""
+    """The combined Plan covers every query, analysis, HITL, and write step."""
     result = await run_agent(
         DEMO_MESSAGE,
         client=DemoBReplayClient(demo_b_materials),
@@ -312,14 +324,22 @@ async def test_demo_b_records_current_combined_plan_boundary(
 
     assert [step["step_name"] for step in steps] == [
         "确认学生身份",
+        "读取学生基本信息",
+        "读取学生成绩",
+        "读取学生科研",
         "查询学生成绩",
         "查询科研成果",
         "检索奖学金评审办法",
         "执行奖学金规则判断",
-        "生成有证据的解释",
+        "生成待写入内容",
+        "生成 Word Diff 预览",
+        "等待用户确认",
+        "执行确认写入",
     ]
     assert result["status"] == "confirmation_required", json.dumps(result, ensure_ascii=False)
     assert database.get_task_record(result["task_id"])["status"] == "waiting_confirmation"
-    assert "preview_word_diff" not in {item["tool_name"] for item in traces}
-    assert not any(step["step_type"] == "confirmation" for step in steps)
-    assert not any(step["step_type"] == "side_effect" for step in steps)
+    assert "preview_word_diff" in {item["tool_name"] for item in traces}
+    assert any(step["step_type"] == "CONFIRM" for step in steps)
+    assert any(step["step_type"] == "WRITE" for step in steps)
+    assert all(item["task_id"] == result["task_id"] for item in traces)
+    assert all(item["step_id"] for item in traces)

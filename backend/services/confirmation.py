@@ -7,6 +7,7 @@ from uuid import uuid4
 from backend import database
 from backend.runtime.planner import PlannedStep, TaskPlan
 from backend.runtime.task_runner import (
+    begin_confirmed_action,
     finalize_task,
     record_tool_execution,
     resume_after_action,
@@ -316,6 +317,7 @@ def confirm_action(action_id: str) -> dict[str, Any]:
             f"操作当前状态为 {action['status']}，不能重复执行",
             _deserialize_action(action),
         )
+    begin_confirmed_action(action_id)
     action_result = _execute_frozen_action(action)
     terminal_status = "executed" if action_result["ok"] else "failed"
     action = database.finish_pending_action(action_id, terminal_status)
