@@ -9,6 +9,12 @@ from docx import Document
 from pydantic import ValidationError
 
 from backend import database
+from backend.document_blocks import (
+    DocumentBlock,
+    blocks_from_chunks,
+    blocks_to_chunks,
+    make_document_block,
+)
 from backend.evidence import build_evidence, make_evidence_id
 from backend.repositories.file_repository import FileLifecycleStatus
 from backend.services import ocr_service
@@ -56,18 +62,26 @@ def parse_pdf(file_id: str) -> dict[str, Any]:
     pending_error = _mark_index_pending(record)
     if pending_error is not None:
         return pending_error
-    chunks = [
-        _chunk(
+    blocks = [
+        make_document_block(
             file_id=clean_file_id,
-            chunk_index=index,
-            text=text,
+            sequence=index,
+            block_type="paragraph",
+            content=text,
             page_no=page_no,
-            metadata={"source_type": "pdf", "page_no": page_no},
         )
         for index, (page_no, text) in enumerate(normalized_pages)
     ]
+    chunks = blocks_to_chunks(blocks, source_type="pdf")
     return _persist_index(
-        record, chunks, page_count=len(pages), extra_data={"ocr_used": False}
+        record,
+        chunks,
+        page_count=len(pages),
+        extra_data={
+            "ocr_used": False,
+            "block_count": len(blocks),
+            "blocks": [block.model_dump() for block in blocks],
+        },
     )
 
 
@@ -93,7 +107,15 @@ def index_document(file_id: str) -> dict[str, Any]:
         return _index_failure(record, "WORD_PARSE_ERROR", "Word 文件无法正常解析")
     if not chunks:
         return _index_failure(record, "NO_TEXT_CONTENT", "Word 文档中没有可索引文本")
-    return _persist_index(record, chunks)
+    blocks = blocks_from_chunks(chunks)
+    return _persist_index(
+        record,
+        chunks,
+        extra_data={
+            "block_count": len(blocks),
+            "blocks": [block.model_dump() for block in blocks],
+        },
+    )
 
 
 def retrieve_document(
@@ -131,10 +153,12 @@ def retrieve_document(
     evidence = []
     for row in rows:
         record = eligible[row["file_id"]]
+        metadata = row.get("metadata") or {}
+        block_id = metadata.get("block_id")
         evidence.append(
             build_evidence(
                 evidence_id=make_evidence_id(
-                    chunk_id=row["chunk_id"], query=arguments.query
+                    chunk_id=row["chunk_id"], block_id=block_id, query=arguments.query
                 ),
                 task_id=None,
                 source_type="unstructured",
@@ -143,6 +167,7 @@ def retrieve_document(
                 sheet=None,
                 page_no=row["page_no"],
                 chunk_id=row["chunk_id"],
+                block_id=block_id,
                 field=None,
                 record_key=None,
                 value_summary=_excerpt(row["chunk_text"], arguments.query),
@@ -225,27 +250,30 @@ def _parse_scanned_pdf(
     )
     if not indexing["ok"]:
         return _index_failure(record, "INDEX_STATE_ERROR", indexing["message"])
-    blocks = recognized["data"]["blocks"]
-    chunks = [
-        _chunk(
+    ocr_results = recognized["data"]["blocks"]
+    blocks = [
+        make_document_block(
             file_id=record["file_id"],
-            chunk_index=index,
-            text=block["text"],
+            sequence=index,
+            block_type="paragraph",
+            content=block["text"],
             page_no=block["page"],
-            metadata={
-                "source_type": "ocr",
-                "page_no": block["page"],
-                "confidence": block["confidence"],
-                "bbox": block["bbox"],
-            },
+            confidence=block["confidence"],
+            bbox=block["bbox"],
         )
-        for index, block in enumerate(blocks)
+        for index, block in enumerate(ocr_results)
     ]
+    chunks = blocks_to_chunks(blocks, source_type="ocr")
     return _persist_index(
         record,
         chunks,
         page_count=page_count,
-        extra_data={"ocr_used": True, "ocr_results": blocks},
+        extra_data={
+            "ocr_used": True,
+            "ocr_results": ocr_results,
+            "block_count": len(blocks),
+            "blocks": [block.model_dump() for block in blocks],
+        },
     )
 
 
@@ -261,7 +289,8 @@ def _resume_failed_index(record: dict[str, Any]) -> dict[str, Any] | None:
 
 def _word_chunks(file_id: str, path: Path) -> list[dict[str, Any]]:
     document = Document(path)
-    blocks = []
+    blocks: list[DocumentBlock] = []
+    metadata_by_block: dict[str, dict[str, Any]] = {}
     current_section: str | None = None
     for paragraph_no, paragraph in enumerate(document.paragraphs, start=1):
         text = paragraph.text.strip()
@@ -271,71 +300,57 @@ def _word_chunks(file_id: str, path: Path) -> list[dict[str, Any]]:
         is_heading = style_name.casefold().startswith("heading") or style_name.startswith("标题")
         if is_heading:
             current_section = text
-        blocks.append(
-            {
-                "text": text,
+        block = make_document_block(
+            file_id=file_id,
+            sequence=len(blocks),
+            block_type="title" if is_heading else "paragraph",
+            content=text,
+        )
+        blocks.append(block)
+        metadata_by_block[block.block_id] = {
                 "paragraph_no": paragraph_no,
                 "heading": text if is_heading else None,
                 "section": current_section,
-            }
+                "paragraph_start": paragraph_no,
+                "paragraph_end": paragraph_no,
+        }
+
+    for table_no, table in enumerate(document.tables, start=1):
+        rows = [
+            [cell.text.strip() for cell in row.cells]
+            for row in table.rows
+        ]
+        table_content = "\n".join("\t".join(row) for row in rows)
+        table_block = make_document_block(
+            file_id=file_id,
+            sequence=len(blocks),
+            block_type="table",
+            content=table_content,
         )
-
-    chunks: list[dict[str, Any]] = []
-    current: list[dict[str, Any]] = []
-    current_length = 0
-
-    def flush() -> None:
-        nonlocal current, current_length
-        if not current:
-            return
-        text = "\n".join(item["text"] for item in current)
-        chunks.append(
-            _chunk(
-                file_id=file_id,
-                chunk_index=len(chunks),
-                text=text,
-                page_no=None,
-                metadata={
-                    "source_type": "word",
-                    "paragraph_start": current[0]["paragraph_no"],
-                    "paragraph_end": current[-1]["paragraph_no"],
-                    "heading": next((item["heading"] for item in current if item["heading"]), None),
-                    "section": current[-1]["section"],
-                },
-            )
-        )
-        current = []
-        current_length = 0
-
-    for block in blocks:
-        if block["heading"] and current:
-            flush()
-        if len(block["text"]) > WORD_CHUNK_SIZE:
-            flush()
-            for part in _split_long_text(block["text"]):
-                chunks.append(
-                    _chunk(
-                        file_id=file_id,
-                        chunk_index=len(chunks),
-                        text=part,
-                        page_no=None,
-                        metadata={
-                            "source_type": "word",
-                            "paragraph_start": block["paragraph_no"],
-                            "paragraph_end": block["paragraph_no"],
-                            "heading": block["heading"],
-                            "section": block["section"],
-                        },
-                    )
+        blocks.append(table_block)
+        metadata_by_block[table_block.block_id] = {"table_no": table_no}
+        for row_no, row in enumerate(rows, start=1):
+            for column_no, content in enumerate(row, start=1):
+                if not content:
+                    continue
+                cell_block = make_document_block(
+                    file_id=file_id,
+                    sequence=len(blocks),
+                    block_type="cell",
+                    content=content,
                 )
-            continue
-        added_length = len(block["text"]) + (1 if current else 0)
-        if current and current_length + added_length > WORD_CHUNK_SIZE:
-            flush()
-        current.append(block)
-        current_length += added_length
-    flush()
-    return chunks
+                blocks.append(cell_block)
+                metadata_by_block[cell_block.block_id] = {
+                    "table_no": table_no,
+                    "row_no": row_no,
+                    "column_no": column_no,
+                }
+
+    return blocks_to_chunks(
+        blocks,
+        source_type="word",
+        metadata_by_block=metadata_by_block,
+    )
 
 
 def _split_long_text(text: str) -> list[str]:

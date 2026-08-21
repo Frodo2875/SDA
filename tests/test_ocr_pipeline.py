@@ -130,14 +130,18 @@ def test_scanned_pdf_enters_ocr_and_preserves_real_block_metadata(
     assert result["data"]["ocr_results"] == blocks
     chunks = database.get_document_chunks(pdf_record["file_id"])
     assert [chunk["page_no"] for chunk in chunks] == [1, 2]
+    document_blocks = result["data"]["blocks"]
     assert [chunk["metadata"] for chunk in chunks] == [
         {
             "source_type": "ocr",
+            "block_id": document_block["block_id"],
+            "block_type": "paragraph",
+            "block": document_block,
             "page_no": block["page"],
             "confidence": block["confidence"],
             "bbox": block["bbox"],
         }
-        for block in blocks
+        for block, document_block in zip(blocks, document_blocks)
     ]
     traces = database.get_session_trace_records(
         f"{TRACE_SESSION_PREFIX}{pdf_record['file_id']}"

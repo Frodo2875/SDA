@@ -289,7 +289,10 @@ def _formal_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
         "record_key",
         "value_summary",
     )
-    return {key: evidence.get(key) for key in keys}
+    formal = {key: evidence.get(key) for key in keys}
+    if evidence.get("block_id") is not None:
+        formal["block_id"] = evidence["block_id"]
+    return formal
 
 
 def _award_section(text: str, award_name: str) -> str:

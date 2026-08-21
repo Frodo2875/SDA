@@ -205,7 +205,7 @@ def _evidence_refs(evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 key: item.get(key)
                 for key in (
                     "evidence_id", "source_type", "file_id", "file_name", "sheet",
-                    "page_no", "chunk_id", "field", "record_key",
+                    "page_no", "chunk_id", "block_id", "field", "record_key",
                 )
                 if item.get(key) is not None
             }

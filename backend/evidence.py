@@ -20,6 +20,7 @@ class Evidence(BaseModel):
     sheet: str | None = None
     page_no: int | None = None
     chunk_id: str | None = None
+    block_id: str | None = None
     field: str | None = None
     record_key: str | None = None
     value_summary: str
@@ -32,4 +33,7 @@ def make_evidence_id(**parts: Any) -> str:
 
 
 def build_evidence(**values: Any) -> dict[str, Any]:
-    return Evidence(**values).model_dump()
+    evidence = Evidence(**values).model_dump()
+    if evidence["block_id"] is None:
+        evidence.pop("block_id")
+    return evidence
