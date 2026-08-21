@@ -2,6 +2,7 @@
 
 import sqlite3
 from collections.abc import Callable
+from enum import Enum
 from typing import Any
 from uuid import uuid4
 
@@ -17,6 +18,60 @@ LIFECYCLE_STATUSES = {
 }
 PARSE_STATUSES = {"pending", "processing", "parsed", "failed", "not_required"}
 INDEX_STATUSES = {"not_required", "pending", "indexed", "failed"}
+
+
+class FileLifecycleStatus(str, Enum):
+    """Canonical V3.3 document lifecycle states."""
+
+    UPLOADED = "UPLOADED"
+    DETECTING = "DETECTING"
+    PARSING = "PARSING"
+    OCR_PROCESSING = "OCR_PROCESSING"
+    LAYOUT_PROCESSING = "LAYOUT_PROCESSING"
+    INDEXING = "INDEXING"
+    QUERYABLE = "QUERYABLE"
+    FAILED = "FAILED"
+
+
+DocumentLifecycleStatus = FileLifecycleStatus
+CANONICAL_STATUSES = {status.value for status in FileLifecycleStatus}
+ALLOWED_TRANSITIONS = {
+    FileLifecycleStatus.UPLOADED: {
+        FileLifecycleStatus.DETECTING,
+        FileLifecycleStatus.FAILED,
+    },
+    FileLifecycleStatus.DETECTING: {
+        FileLifecycleStatus.PARSING,
+        FileLifecycleStatus.OCR_PROCESSING,
+        FileLifecycleStatus.FAILED,
+    },
+    FileLifecycleStatus.PARSING: {
+        FileLifecycleStatus.OCR_PROCESSING,
+        FileLifecycleStatus.LAYOUT_PROCESSING,
+        FileLifecycleStatus.INDEXING,
+        FileLifecycleStatus.QUERYABLE,
+        FileLifecycleStatus.FAILED,
+    },
+    FileLifecycleStatus.OCR_PROCESSING: {
+        FileLifecycleStatus.LAYOUT_PROCESSING,
+        FileLifecycleStatus.INDEXING,
+        FileLifecycleStatus.FAILED,
+    },
+    FileLifecycleStatus.LAYOUT_PROCESSING: {
+        FileLifecycleStatus.INDEXING,
+        FileLifecycleStatus.QUERYABLE,
+        FileLifecycleStatus.FAILED,
+    },
+    FileLifecycleStatus.INDEXING: {
+        FileLifecycleStatus.QUERYABLE,
+        FileLifecycleStatus.FAILED,
+    },
+    FileLifecycleStatus.QUERYABLE: {
+        FileLifecycleStatus.INDEXING,
+        FileLifecycleStatus.FAILED,
+    },
+    FileLifecycleStatus.FAILED: set(),
+}
 
 
 class FileRepository:
@@ -176,6 +231,69 @@ class FileRepository:
                 )
             return cursor.rowcount == 1
 
+    def transition_lifecycle(
+        self,
+        *,
+        file_id: str,
+        target_status: FileLifecycleStatus,
+        updated_at: str,
+        resume_status: FileLifecycleStatus | None = None,
+    ) -> dict[str, Any] | None:
+        """Atomically apply one legal canonical transition and mirror V2 fields."""
+        with self._connection_factory() as connection:
+            row = connection.execute(
+                "SELECT * FROM files WHERE file_id = ?", (file_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            record = dict(row)
+            current_status = canonical_lifecycle_status(record)
+            if current_status == target_status:
+                return {
+                    "changed": False,
+                    "from_status": current_status.value,
+                    "to_status": target_status.value,
+                }
+            allowed = ALLOWED_TRANSITIONS[current_status]
+            is_resume = (
+                current_status == FileLifecycleStatus.FAILED
+                and resume_status == target_status
+                and target_status != FileLifecycleStatus.FAILED
+            )
+            if target_status not in allowed and not is_resume:
+                raise ValueError(
+                    f"非法文件状态转换：{current_status.value} -> {target_status.value}"
+                )
+
+            lifecycle, parse, queryable, index = _legacy_state_fields(
+                record, current_status, target_status
+            )
+            cursor = connection.execute(
+                """
+                UPDATE files
+                SET status = ?, lifecycle_status = ?, parse_status = ?,
+                    queryable = ?, index_status = ?, updated_at = ?
+                WHERE file_id = ? AND status = ?
+                """,
+                (
+                    target_status.value,
+                    lifecycle,
+                    parse,
+                    int(queryable),
+                    index,
+                    updated_at,
+                    file_id,
+                    record["status"],
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("文件状态已被其他流程更新")
+            return {
+                "changed": True,
+                "from_status": current_status.value,
+                "to_status": target_status.value,
+            }
+
     @staticmethod
     def _validate_states(
         lifecycle_status: str,
@@ -222,3 +340,53 @@ class FileRepository:
                 (file_name, file_path, updated_at, file_id),
             )
             return cursor.rowcount == 1
+
+
+def canonical_lifecycle_status(record: dict[str, Any]) -> FileLifecycleStatus:
+    """Resolve canonical status for both V3.3 and legacy V2 records."""
+    stored = str(record.get("status") or "").upper()
+    if stored in CANONICAL_STATUSES:
+        return FileLifecycleStatus(stored)
+    lifecycle = record.get("lifecycle_status")
+    if lifecycle == "uploaded":
+        return FileLifecycleStatus.UPLOADED
+    if lifecycle == "processing":
+        if record.get("index_status") == "pending":
+            return FileLifecycleStatus.INDEXING
+        return FileLifecycleStatus.PARSING
+    if lifecycle == "failed":
+        return FileLifecycleStatus.FAILED
+    return FileLifecycleStatus.QUERYABLE
+
+
+def _legacy_state_fields(
+    record: dict[str, Any],
+    current_status: FileLifecycleStatus,
+    target_status: FileLifecycleStatus,
+) -> tuple[str, str, bool, str]:
+    """Mirror canonical state into the unchanged V2 lifecycle columns."""
+    if target_status == FileLifecycleStatus.UPLOADED:
+        return "uploaded", "pending", False, "not_required"
+    if target_status in {
+        FileLifecycleStatus.DETECTING,
+        FileLifecycleStatus.PARSING,
+        FileLifecycleStatus.OCR_PROCESSING,
+        FileLifecycleStatus.LAYOUT_PROCESSING,
+    }:
+        return "processing", "processing", False, "not_required"
+    if target_status == FileLifecycleStatus.INDEXING:
+        return "ready", "parsed", False, "pending"
+    if target_status == FileLifecycleStatus.QUERYABLE:
+        index_status = record.get("index_status") or "not_required"
+        if index_status in {"pending", "failed"}:
+            index_status = (
+                "indexed"
+                if record.get("file_type") in {"word", "pdf"}
+                else "not_required"
+            )
+        return "ready", "parsed", True, index_status
+
+    index_status = record.get("index_status") or "not_required"
+    if current_status == FileLifecycleStatus.INDEXING:
+        index_status = "failed"
+    return "failed", "failed", False, index_status

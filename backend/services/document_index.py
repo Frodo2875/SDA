@@ -10,6 +10,8 @@ from pydantic import ValidationError
 
 from backend import database
 from backend.evidence import build_evidence, make_evidence_id
+from backend.repositories.file_repository import FileLifecycleStatus
+from backend.services.file_lifecycle import transition_file_lifecycle
 from backend.services.file_locator import FileLocatorError, resolve_by_file_id
 from backend.tool_models import FileIdArguments, RetrieveDocumentArguments
 from backend.tools.excel_utils import failure, success
@@ -300,13 +302,11 @@ def _persist_index(
 ) -> dict[str, Any]:
     try:
         database.replace_document_chunks(record["file_id"], chunks)
-        database.update_file_state(
-            file_id=record["file_id"],
-            lifecycle_status="ready",
-            parse_status="parsed",
-            queryable=True,
-            index_status="indexed",
+        transitioned = transition_file_lifecycle(
+            record["file_id"], FileLifecycleStatus.QUERYABLE
         )
+        if not transitioned["ok"]:
+            raise RuntimeError(transitioned["message"])
     except Exception:
         return _index_failure(record, "INDEX_WRITE_ERROR", "文档索引保存失败")
     return success(
@@ -323,13 +323,10 @@ def _persist_index(
 
 def _mark_index_pending(record: dict[str, Any]) -> dict[str, Any] | None:
     try:
-        updated = database.update_file_state(
-            file_id=record["file_id"],
-            lifecycle_status=record["lifecycle_status"],
-            parse_status=record["parse_status"],
-            queryable=False,
-            index_status="pending",
+        transition = transition_file_lifecycle(
+            record["file_id"], FileLifecycleStatus.INDEXING
         )
+        updated = transition["ok"]
     except Exception:
         updated = False
     if not updated:
@@ -346,12 +343,11 @@ def _index_failure(
 ) -> dict[str, Any]:
     try:
         database.delete_document_chunks(record["file_id"])
-        database.update_file_state(
-            file_id=record["file_id"],
-            lifecycle_status="failed" if record["file_type"] == "pdf" else record["lifecycle_status"],
-            parse_status="failed" if record["file_type"] == "pdf" else record["parse_status"],
-            queryable=False,
-            index_status="failed",
+        transition_file_lifecycle(
+            record["file_id"],
+            FileLifecycleStatus.FAILED,
+            error_code=error_code,
+            error_message=message,
         )
     except Exception:
         pass

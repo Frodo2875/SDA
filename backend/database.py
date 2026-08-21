@@ -8,6 +8,7 @@ from typing import Any
 
 from backend.migrations import run_migrations
 from backend.repositories.file_repository import FileRepository
+from backend.repositories.file_repository import FileLifecycleStatus
 from backend.repositories.document_repository import DocumentRepository
 from backend.repositories.schema_repository import SchemaRepository
 from backend.repositories.task_repository import TaskRepository
@@ -209,6 +210,21 @@ def update_file_state(
         index_status=index_status,
         updated_at=utc_now(),
         expected_lifecycle=expected_lifecycle,
+    )
+
+
+def transition_file_lifecycle(
+    *,
+    file_id: str,
+    target_status: FileLifecycleStatus,
+    resume_status: FileLifecycleStatus | None = None,
+) -> dict[str, Any] | None:
+    """Persist one canonical V3.3 transition through the repository."""
+    return FILE_REPOSITORY.transition_lifecycle(
+        file_id=file_id,
+        target_status=target_status,
+        resume_status=resume_status,
+        updated_at=utc_now(),
     )
 
 
