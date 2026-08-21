@@ -11,7 +11,13 @@ from pydantic import ValidationError
 from backend import database
 from backend.evidence import build_evidence, make_evidence_id
 from backend.repositories.file_repository import FileLifecycleStatus
-from backend.services.file_lifecycle import transition_file_lifecycle
+from backend.services import ocr_service
+from backend.services.file_lifecycle import (
+    get_file_lifecycle,
+    resume_file_lifecycle,
+    start_ocr_processing,
+    transition_file_lifecycle,
+)
 from backend.services.file_locator import FileLocatorError, resolve_by_file_id
 from backend.tool_models import FileIdArguments, RetrieveDocumentArguments
 from backend.tools.excel_utils import failure, success
@@ -25,13 +31,13 @@ OCR_NOT_SUPPORTED_MESSAGE = "当前版本不支持扫描 PDF / OCR。"
 
 
 def parse_pdf(file_id: str) -> dict[str, Any]:
-    """Extract a registered text PDF page by page and persist page-preserving chunks."""
+    """Index embedded PDF text or route an image-only PDF through local OCR."""
     clean_file_id, record, error = _validated_document(file_id, expected_type="pdf")
     if error is not None:
         return error
-    pending_error = _mark_index_pending(record)
-    if pending_error is not None:
-        return pending_error
+    resume_error = _resume_failed_index(record)
+    if resume_error is not None:
+        return resume_error
     try:
         path = resolve_by_file_id(clean_file_id)
         pages = _load_pdf_pages(path)
@@ -46,7 +52,10 @@ def parse_pdf(file_id: str) -> dict[str, Any]:
 
     normalized_pages = [(page_no, text.strip()) for page_no, text in pages]
     if not any(text for _, text in normalized_pages):
-        return _index_failure(record, "OCR_NOT_SUPPORTED", OCR_NOT_SUPPORTED_MESSAGE)
+        return _parse_scanned_pdf(record, path, page_count=len(pages))
+    pending_error = _mark_index_pending(record)
+    if pending_error is not None:
+        return pending_error
     chunks = [
         _chunk(
             file_id=clean_file_id,
@@ -57,7 +66,9 @@ def parse_pdf(file_id: str) -> dict[str, Any]:
         )
         for index, (page_no, text) in enumerate(normalized_pages)
     ]
-    return _persist_index(record, chunks, page_count=len(pages))
+    return _persist_index(
+        record, chunks, page_count=len(pages), extra_data={"ocr_used": False}
+    )
 
 
 def index_document(file_id: str) -> dict[str, Any]:
@@ -67,6 +78,9 @@ def index_document(file_id: str) -> dict[str, Any]:
         return error
     if record["file_type"] == "pdf":
         return parse_pdf(clean_file_id)
+    resume_error = _resume_failed_index(record)
+    if resume_error is not None:
+        return resume_error
     pending_error = _mark_index_pending(record)
     if pending_error is not None:
         return pending_error
@@ -171,28 +185,78 @@ def retrieve_document(
 
 def _load_pdf_pages(path: Path) -> list[tuple[int, str]]:
     """Adapter boundary kept replaceable for the selected PDF parser."""
-    try:
-        from pypdf import PdfReader
-    except ImportError as exc:
-        raise PdfDependencyError from exc
-    reader = PdfReader(path, strict=False)
+    detected = ocr_service.detect_pdf_text(path)
+    if not detected["ok"]:
+        if detected.get("error_code") == "PDF_DEPENDENCY_MISSING":
+            raise PdfDependencyError
+        raise PdfParseError(detected.get("message") or "PDF 文件无法正常解析")
     return [
-        (page_no, page.extract_text() or "")
-        for page_no, page in enumerate(reader.pages, start=1)
+        (int(page["page"]), str(page.get("text") or ""))
+        for page in detected["data"]["pages"]
     ]
 
 
 def validate_pdf_file(path: Path) -> dict[str, Any] | None:
-    """Validate a temporary upload and explicitly reject image-only PDFs."""
+    """Validate PDF structure; image-only PDFs are accepted for the OCR branch."""
     try:
         pages = _load_pdf_pages(path)
     except PdfDependencyError:
         return failure("PDF_DEPENDENCY_MISSING", "缺少 pypdf，无法解析普通文本 PDF")
     except Exception:
         return failure("INVALID_FILE_CONTENT", "文件不是可正常打开的 PDF 文档")
-    if not any(text.strip() for _, text in pages):
-        return failure("OCR_NOT_SUPPORTED", OCR_NOT_SUPPORTED_MESSAGE)
     return None
+
+
+def _parse_scanned_pdf(
+    record: dict[str, Any], path: Path, *, page_count: int
+) -> dict[str, Any]:
+    started = start_ocr_processing(record["file_id"])
+    if not started["ok"]:
+        return failure("OCR_STATE_ERROR", started["message"], {"file_id": record["file_id"]})
+    recognized = ocr_service.ocr_pdf(path)
+    if not recognized["ok"]:
+        return _index_failure(
+            record,
+            recognized.get("error_code") or "OCR_PROCESSING_ERROR",
+            recognized.get("message") or "OCR 识别失败",
+        )
+    indexing = transition_file_lifecycle(
+        record["file_id"], FileLifecycleStatus.INDEXING
+    )
+    if not indexing["ok"]:
+        return _index_failure(record, "INDEX_STATE_ERROR", indexing["message"])
+    blocks = recognized["data"]["blocks"]
+    chunks = [
+        _chunk(
+            file_id=record["file_id"],
+            chunk_index=index,
+            text=block["text"],
+            page_no=block["page"],
+            metadata={
+                "source_type": "ocr",
+                "page_no": block["page"],
+                "confidence": block["confidence"],
+                "bbox": block["bbox"],
+            },
+        )
+        for index, block in enumerate(blocks)
+    ]
+    return _persist_index(
+        record,
+        chunks,
+        page_count=page_count,
+        extra_data={"ocr_used": True, "ocr_results": blocks},
+    )
+
+
+def _resume_failed_index(record: dict[str, Any]) -> dict[str, Any] | None:
+    lifecycle = get_file_lifecycle(record["file_id"])
+    if not lifecycle["ok"]:
+        return lifecycle
+    if lifecycle["data"]["status"] != FileLifecycleStatus.FAILED.value:
+        return None
+    resumed = resume_file_lifecycle(record["file_id"])
+    return None if resumed["ok"] else resumed
 
 
 def _word_chunks(file_id: str, path: Path) -> list[dict[str, Any]]:
@@ -298,7 +362,10 @@ def _chunk(
 
 
 def _persist_index(
-    record: dict[str, Any], chunks: list[dict[str, Any]], page_count: int | None = None
+    record: dict[str, Any],
+    chunks: list[dict[str, Any]],
+    page_count: int | None = None,
+    extra_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
         database.replace_document_chunks(record["file_id"], chunks)
@@ -309,16 +376,15 @@ def _persist_index(
             raise RuntimeError(transitioned["message"])
     except Exception:
         return _index_failure(record, "INDEX_WRITE_ERROR", "文档索引保存失败")
-    return success(
-        {
+    data = {
             "status": "indexed",
             "file_id": record["file_id"],
             "file_name": record["file_name"],
             "page_count": page_count,
             "chunk_count": len(chunks),
-        },
-        "文档索引建立成功",
-    )
+        }
+    data.update(extra_data or {})
+    return success(data, "文档索引建立成功")
 
 
 def _mark_index_pending(record: dict[str, Any]) -> dict[str, Any] | None:
@@ -390,4 +456,8 @@ def _validation_message(exc: ValidationError) -> str:
 
 
 class PdfDependencyError(RuntimeError):
+    pass
+
+
+class PdfParseError(RuntimeError):
     pass

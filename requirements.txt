@@ -10,3 +10,5 @@ python-dotenv
 httpx
 python-multipart
 pypdf
+PyMuPDF
+rapidocr-onnxruntime

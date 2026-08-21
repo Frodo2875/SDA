@@ -119,6 +119,11 @@ def resume_file_lifecycle(file_id: str) -> dict[str, Any]:
     )
 
 
+def start_ocr_processing(file_id: str) -> dict[str, Any]:
+    """Enter the OCR phase through the shared restricted state machine."""
+    return transition_file_lifecycle(file_id, FileLifecycleStatus.OCR_PROCESSING)
+
+
 def process_uploaded_file(
     file_id: str,
     path: Path,

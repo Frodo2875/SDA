@@ -8,7 +8,6 @@ from docx import Document
 from backend import agent, database
 from backend.services import document_index
 from backend.services.document_index import (
-    OCR_NOT_SUPPORTED_MESSAGE,
     index_document,
     parse_pdf,
     retrieve_document,
@@ -105,12 +104,22 @@ def test_r02_scanned_pdf_returns_explicit_ocr_message_and_no_chunks(
         "_load_pdf_pages",
         lambda path: [(1, ""), (2, "   ")],
     )
+    monkeypatch.setattr(
+        document_index.ocr_service,
+        "ocr_pdf",
+        lambda path: {
+            "ok": False,
+            "data": None,
+            "error_code": "OCR_PROCESSING_ERROR",
+            "message": "OCR 识别过程失败",
+        },
+    )
 
     result = parse_pdf(file_id)
 
     assert result["ok"] is False
-    assert result["error_code"] == "OCR_NOT_SUPPORTED"
-    assert result["message"] == OCR_NOT_SUPPORTED_MESSAGE
+    assert result["error_code"] == "OCR_PROCESSING_ERROR"
+    assert result["message"] == "OCR 识别过程失败"
     assert database.get_document_chunks(file_id) == []
     record = database.get_file_record_by_id(file_id)
     assert record["parse_status"] == "failed"

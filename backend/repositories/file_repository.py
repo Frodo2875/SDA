@@ -67,6 +67,7 @@ ALLOWED_TRANSITIONS = {
         FileLifecycleStatus.FAILED,
     },
     FileLifecycleStatus.QUERYABLE: {
+        FileLifecycleStatus.OCR_PROCESSING,
         FileLifecycleStatus.INDEXING,
         FileLifecycleStatus.FAILED,
     },
@@ -387,6 +388,9 @@ def _legacy_state_fields(
         return "ready", "parsed", True, index_status
 
     index_status = record.get("index_status") or "not_required"
-    if current_status == FileLifecycleStatus.INDEXING:
+    if current_status in {
+        FileLifecycleStatus.INDEXING,
+        FileLifecycleStatus.OCR_PROCESSING,
+    }:
         index_status = "failed"
     return "failed", "failed", False, index_status
