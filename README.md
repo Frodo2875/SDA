@@ -36,6 +36,9 @@ Swagger 地址：`http://127.0.0.1:8000/docs`
 LLM_API_KEY=
 LLM_BASE_URL=
 LLM_MODEL=
+# 可选：仅用于 Trace Cost 统计，单位 USD / 1M tokens
+LLM_INPUT_COST_PER_1M=0
+LLM_OUTPUT_COST_PER_1M=0
 ```
 
 聊天接口：
@@ -58,7 +61,7 @@ POST /api/chat
 另开一个终端，在同一项目目录下执行：
 
 ```bash
-streamlit run frontend/app.py
+python -m streamlit run frontend/app.py
 ```
 
 ## 当前项目结构
@@ -104,3 +107,16 @@ V2.99-Final-v2
 V3 development branch:
 
 feature/v3-development
+
+## V3.10 Trace Evaluation
+
+当前开发分支已增加不改变业务执行的可观测指标：
+
+- Tool 调用次数、成功率、错误率和耗时；
+- Retrieval 模式、Fallback、结果数和 Top score；
+- Workflow Task/Step 状态与完成率；
+- Provider 返回的输入、输出和总 Token；
+- 基于显式环境变量单价计算的 USD Cost。
+
+固定离线评估案例位于 `evals/v3_10_cases.json`，最新 V3.10 接受结果位于
+`evals/v3_10_results.json`。未配置 Token 单价时 Cost 固定记录为 0，不推测模型价格。

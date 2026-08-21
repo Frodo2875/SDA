@@ -105,8 +105,11 @@ async def test_e05_trace_records_observable_fields_and_redacts_phone() -> None:
     traces = database.get_session_trace_records("e05")
 
     assert result["status"] == "completed"
-    assert len(traces) == 2
-    safety_trace, trace = traces
+    assert len(traces) == 4
+    first_llm, safety_trace, trace, final_llm = traces
+    assert first_llm["event_type"] == "llm_call"
+    assert final_llm["event_type"] == "llm_call"
+    assert all(item["total_tokens"] == 0 for item in (first_llm, final_llm))
     assert safety_trace["event_type"] == "safety_policy_check"
     assert safety_trace["result_status"] == "allow"
     assert trace["event_type"] == "tool_execution"
@@ -117,6 +120,8 @@ async def test_e05_trace_records_observable_fields_and_redacts_phone() -> None:
     assert phone not in json.dumps(trace, ensure_ascii=False)
     assert "138****5678" in trace["arguments_summary"]
     assert phone not in json.dumps(safety_trace, ensure_ascii=False)
+    assert phone not in json.dumps(first_llm, ensure_ascii=False)
+    assert phone not in json.dumps(final_llm, ensure_ascii=False)
     assistant = database.fetch_all("chat_messages")[-1]
     assert phone not in assistant["used_tools"]
 

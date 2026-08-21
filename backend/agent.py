@@ -28,7 +28,7 @@ from backend.runtime.safety_policy import (
 from backend.runtime.context_manager import resolve_message, update_after_run
 from backend.services.confirmation import create_pending_action
 from backend.services.redaction import redacted_json, redact_value
-from backend.services.trace_service import record_trace
+from backend.services.trace_service import llm_usage_metrics, record_trace
 from backend.tool_registry import TOOL_REGISTRY
 
 
@@ -567,7 +567,38 @@ async def _run_agent_core(
     for _ in range(max_tool_rounds + 1):
         if task_id is not None:
             start_generation_step(task_id)
-        assistant_message = await llm_client.create_chat_completion(messages, TOOL_DEFINITIONS)
+        llm_started = time.perf_counter()
+        assistant_message = dict(
+            await llm_client.create_chat_completion(messages, TOOL_DEFINITIONS)
+        )
+        llm_duration_ms = max(
+            0, round((time.perf_counter() - llm_started) * 1000)
+        )
+        usage = llm_usage_metrics(assistant_message.pop("_usage", {}))
+        model_name = str(assistant_message.pop("_model", "") or "unknown")
+        try:
+            record_trace(
+                session_id=session_id,
+                task_id=task_id,
+                step_id=_current_step_id(task_id),
+                event_type="llm_call",
+                tool_name="llm",
+                arguments={
+                    "message_count": len(messages),
+                    "available_tool_count": len(TOOL_DEFINITIONS),
+                    "model": model_name,
+                },
+                result={"ok": True, "status": "success", "message": "LLM 响应完成"},
+                duration_ms=llm_duration_ms,
+                result_status="success",
+                input_tokens=usage["input_tokens"],
+                output_tokens=usage["output_tokens"],
+                total_tokens=usage["total_tokens"],
+                cost_usd=usage["cost_usd"],
+                metrics={"pricing_configured": usage["pricing_configured"]},
+            )
+        except Exception:
+            pass
         tool_calls = assistant_message.get("tool_calls") or []
         if not tool_calls:
             answer = assistant_message.get("content")
@@ -787,6 +818,22 @@ async def _run_agent_core(
         "tool_calls": executed_calls,
         "status": "max_tool_rounds_exceeded",
     }
+
+
+def _current_step_id(task_id: str | None) -> str | None:
+    if task_id is None:
+        return None
+    task = database.get_task_record(task_id)
+    if task is None or task.get("current_step") is None:
+        return None
+    return next(
+        (
+            step["step_id"]
+            for step in database.get_task_step_records(task_id)
+            if step["sequence"] == task["current_step"]
+        ),
+        None,
+    )
 
 
 async def run_agent(

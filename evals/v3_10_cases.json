@@ -1,0 +1,32 @@
+[
+  {
+    "case_id": "T01",
+    "name": "Tool latency",
+    "metric": "tool.average_duration_ms",
+    "test": "tests/evals/test_trace_evaluation_v3.py::test_tool_duration_and_retrieval_metrics_are_persisted"
+  },
+  {
+    "case_id": "T02",
+    "name": "Retrieval metrics",
+    "metric": "retrieval.calls/fallback_rate/average_top_score",
+    "test": "tests/evals/test_trace_evaluation_v3.py::test_tool_duration_and_retrieval_metrics_are_persisted"
+  },
+  {
+    "case_id": "T03",
+    "name": "Workflow status",
+    "metric": "workflow.task_status/status_counts/completion_rate",
+    "test": "tests/evals/test_trace_evaluation_v3.py::test_workflow_status_is_summarized_from_task_steps"
+  },
+  {
+    "case_id": "T04",
+    "name": "Token and cost",
+    "metric": "tokens/cost",
+    "test": "tests/evals/test_trace_evaluation_v3.py::test_llm_usage_and_configured_cost_are_recorded"
+  },
+  {
+    "case_id": "T05",
+    "name": "Evaluation rates",
+    "metric": "success_rate/error_rate",
+    "test": "tests/evals/test_trace_evaluation_v3.py::test_eval_cases_publish_success_and_error_rates"
+  }
+]

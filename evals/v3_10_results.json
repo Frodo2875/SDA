@@ -1,0 +1,9 @@
+{
+  "scope": "V3.10 trace evaluation acceptance cases",
+  "total_cases": 5,
+  "successful_cases": 5,
+  "failed_cases": 0,
+  "success_rate": 1.0,
+  "error_rate": 0.0,
+  "note": "固定离线评估结果；完整 pytest 结果记录在 V3.10 Demo 文档。"
+}

@@ -24,7 +24,9 @@ def _utc_now() -> str:
 
 
 def _column_names(connection: sqlite3.Connection, table_name: str) -> set[str]:
-    if table_name not in {"files", "schema_fields", "pending_actions", "tasks"}:
+    if table_name not in {
+        "files", "schema_fields", "pending_actions", "tasks", "traces"
+    }:
         raise ValueError("不允许检查未知数据表")
     return {
         str(row[1])
@@ -447,6 +449,23 @@ def _add_async_task_runtime(connection: sqlite3.Connection) -> None:
     )
 
 
+def _add_trace_evaluation_metrics(connection: sqlite3.Connection) -> None:
+    """Add bounded runtime metrics to existing observable Trace records."""
+    columns = _column_names(connection, "traces")
+    additions = (
+        ("input_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("output_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("total_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("cost_usd", "REAL NOT NULL DEFAULT 0"),
+        ("metrics_json", "TEXT NOT NULL DEFAULT '{}'"),
+    )
+    for column_name, column_type in additions:
+        if column_name not in columns:
+            connection.execute(
+                f"ALTER TABLE traces ADD COLUMN {column_name} {column_type}"
+            )
+
+
 MIGRATIONS = (
     Migration(1, "add_files_v2_foundation", _add_files_v2_foundation),
     Migration(2, "normalize_file_lifecycle", _normalize_file_lifecycle),
@@ -458,6 +477,7 @@ MIGRATIONS = (
     Migration(8, "create_batches", _create_batches),
     Migration(9, "create_traces_and_context", _create_traces_and_context),
     Migration(10, "add_async_task_runtime", _add_async_task_runtime),
+    Migration(11, "add_trace_evaluation_metrics", _add_trace_evaluation_metrics),
 )
 
 

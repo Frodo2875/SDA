@@ -93,4 +93,7 @@ class LLMClient:
             raise LLMAPIError("模型 API 响应缺少 choices[0].message") from exc
         if not isinstance(message, dict):
             raise LLMAPIError("模型 API 返回了无效消息")
-        return message
+        result = dict(message)
+        result["_usage"] = body.get("usage") if isinstance(body.get("usage"), dict) else {}
+        result["_model"] = str(body.get("model") or self.model)
+        return result

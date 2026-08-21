@@ -31,3 +31,10 @@ V2.99-Final-v2
   - test
   - git commit
   - git tag
+
+## V3.10 Trace Evaluation
+
+- Trace 增加 Tool/Retrieval/Token/Cost 指标。
+- Workflow 评估从现有 Task/Step 状态确定性汇总。
+- `evals/` 增加 V3.10 固定案例、成功率和错误率结果。
+- 不记录完整 Chain-of-Thought，不根据模型名称推测价格。

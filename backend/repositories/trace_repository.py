@@ -19,8 +19,10 @@ class TraceRepository:
                 INSERT INTO traces (
                     trace_id, task_id, session_id, step_id, event_type,
                     tool_name, arguments_summary, result_summary, duration_ms,
-                    retry_count, result_status, error_code, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    retry_count, result_status, error_code, created_at,
+                    input_tokens, output_tokens, total_tokens, cost_usd,
+                    metrics_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     trace["trace_id"], trace.get("task_id"), trace["session_id"],
@@ -29,6 +31,11 @@ class TraceRepository:
                     max(0, int(trace.get("duration_ms", 0))),
                     max(0, int(trace.get("retry_count", 0))),
                     trace["result_status"], trace.get("error_code"), trace["created_at"],
+                    max(0, int(trace.get("input_tokens", 0))),
+                    max(0, int(trace.get("output_tokens", 0))),
+                    max(0, int(trace.get("total_tokens", 0))),
+                    max(0.0, float(trace.get("cost_usd", 0.0))),
+                    trace.get("metrics_json") or "{}",
                 ),
             )
 
