@@ -12,12 +12,99 @@ ActionHandler = Callable[[dict[str, Any]], None]
 FILE_TYPES = {"excel": "Excel", "word": "Word", "pdf": "PDF"}
 LIFECYCLE_LABELS = {
     "uploaded": "已上传",
+    "detecting": "检测中",
+    "parsing": "解析中",
+    "ocr_processing": "OCR处理中",
+    "layout_processing": "Layout处理中",
+    "indexing": "索引中",
+    "queryable": "可查询",
     "processing": "处理中",
     "ready": "可用",
     "failed": "失败",
     "deleted": "已删除",
     "cleanup_failed": "清理失败",
 }
+LIFECYCLE_FILTERS = {
+    "全部状态": None,
+    "UPLOADED": "uploaded",
+    "DETECTING": "detecting",
+    "PARSING": "parsing",
+    "OCR_PROCESSING": "ocr_processing",
+    "LAYOUT_PROCESSING": "layout_processing",
+    "INDEXING": "indexing",
+    "QUERYABLE": "queryable",
+    "READY（兼容）": "ready",
+    "FAILED": "failed",
+}
+
+
+def format_file_size(value: Any) -> str:
+    size = max(0, int(value or 0))
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size / (1024 * 1024):.1f} MB"
+
+
+def file_card_fields(item: dict[str, Any]) -> dict[str, str]:
+    lifecycle = str(item.get("lifecycle_status") or "—").casefold()
+    return {
+        "file_name": str(item.get("file_name") or "未命名文件"),
+        "file_type": FILE_TYPES.get(item.get("file_type"), str(item.get("file_type") or "未知")),
+        "size": format_file_size(item.get("size")),
+        "created_time": str(item.get("created_time") or item.get("uploaded_at") or "—"),
+        "lifecycle_status": LIFECYCLE_LABELS.get(lifecycle, lifecycle),
+        "index_status": str(item.get("index_status") or "—"),
+        "queryable": "是" if item.get("queryable") else "否",
+    }
+
+
+def filter_files_by_lifecycle(
+    files: list[dict[str, Any]], selected_label: str
+) -> list[dict[str, Any]]:
+    expected = LIFECYCLE_FILTERS.get(selected_label)
+    if expected is None:
+        return files
+    return [
+        item
+        for item in files
+        if str(item.get("lifecycle_status") or "").casefold() == expected
+    ]
+
+
+def file_detail_sections(
+    detail: dict[str, Any], versions: list[dict[str, Any]] | None = None
+) -> dict[str, dict[str, Any]]:
+    """Map API fields to type-specific V3 detail rows without inventing values."""
+    file_type = detail.get("file_type")
+    if file_type == "pdf":
+        summary = detail.get("document_summary") or {}
+        return {"PDF": {
+            "页数": detail.get("page_count", summary.get("page_count", "暂无数据")),
+            "OCR状态": detail.get("ocr_status", "暂无数据"),
+            "Layout状态": detail.get("layout_status", "暂无数据"),
+            "Block数量": detail.get("block_count", summary.get("block_count", "暂无数据")),
+            "Chunk数量": detail.get("chunk_count", summary.get("chunk_count", "暂无数据")),
+        }}
+    if file_type == "excel":
+        schema = detail.get("schema_summary") or {}
+        sheets = schema.get("sheets") or []
+        return {"Excel": {
+            "Sheet": ", ".join(str(item.get("sheet_name")) for item in sheets) or "暂无数据",
+            "Schema": "已识别" if schema else "暂无数据",
+            "字段": schema.get("field_count", "暂无数据"),
+            "质量检查结果": detail.get("quality_status", "暂无检查结果"),
+        }}
+    if file_type == "word":
+        version_rows = versions or []
+        latest = version_rows[-1] if version_rows else None
+        return {"Word": {
+            "版本": latest.get("version_number") if latest else "暂无版本",
+            "Diff": detail.get("diff_status", "操作确认时展示"),
+            "写入状态": detail.get("write_status", "无待执行写入"),
+        }}
+    return {}
 
 
 def render_file_panel(
@@ -25,25 +112,31 @@ def render_file_panel(
     files: list[dict[str, Any]],
     session_id: str,
     uploader_version: int,
-    upload_notice: dict[str, Any] | None,
+    upload_notice: list[dict[str, Any]] | None,
     files_error: str | None,
-    on_upload: Callable[[Any], None],
+    on_upload: Callable[[list[Any]], None],
     on_refresh: Callable[[], None],
     on_version_action: ActionHandler,
 ) -> None:
-    st.title("学生材料智能文档助手")
-    st.caption("Student Document Agent V2")
-    st.divider()
-    st.subheader("文档工作区")
+    st.subheader("Document Workspace")
+    st.caption("文件、生命周期、解析与索引状态")
     uploaded = st.file_uploader(
-        "上传材料", type=["xlsx", "docx", "pdf"], accept_multiple_files=False,
-        help="支持 Excel、Word 和普通文本 PDF；扫描 PDF / OCR 暂不支持。",
+        "拖拽或选择多个材料",
+        type=["xlsx", "docx", "pdf"],
+        accept_multiple_files=True,
+        help="支持 Excel、Word、文本 PDF 和扫描 PDF。文件将逐个上传并显示结果。",
         key=f"material-uploader-{uploader_version}",
     )
-    if st.button("上传文件", type="primary", use_container_width=True, disabled=uploaded is None):
-        on_upload(uploaded)
-    if upload_notice:
-        (st.success if upload_notice.get("ok") else st.error)(upload_notice.get("message", ""))
+    if st.button(
+        "上传所选文件",
+        type="primary",
+        use_container_width=True,
+        disabled=not uploaded,
+    ):
+        on_upload(list(uploaded or []))
+    for outcome in upload_notice or []:
+        renderer = st.success if outcome.get("status") == "success" else st.error
+        renderer(f"{outcome.get('file_name', '文件')}：{outcome.get('message', '')}")
     if st.button("刷新文件列表", use_container_width=True, icon="🔄"):
         on_refresh()
     st.text_input(
@@ -59,7 +152,7 @@ def render_file_panel(
     )
     filter_columns[1].selectbox(
         "生命周期",
-        ["全部状态", "已上传", "处理中", "可用", "失败", "已删除", "清理失败"],
+        list(LIFECYCLE_FILTERS),
         key="workspace_lifecycle",
     )
     st.selectbox(
@@ -93,22 +186,15 @@ def _render_file(
     item: dict[str, Any], session_id: str, on_version_action: ActionHandler
 ) -> None:
     with st.container(border=True):
-        st.markdown(f"**{item.get('file_name', '未命名文件')}**")
-        file_type = FILE_TYPES.get(item.get("file_type"), item.get("file_type", "未知"))
-        st.caption(f"{file_type} · {int(item.get('size') or 0):,} bytes")
-        lifecycle = item.get("lifecycle_status", "—")
-        lifecycle_label = LIFECYCLE_LABELS.get(lifecycle, lifecycle)
-        st.markdown(
-            f"`{lifecycle_label}` · `解析 {item.get('parse_status', '—')}` · "
-            f"`索引 {item.get('index_status', '—')}`"
-        )
+        fields = file_card_fields(item)
+        st.markdown(f"**{fields['file_name']}**")
+        st.caption(f"{fields['file_type']} · {fields['size']}")
+        st.markdown(f"`{fields['lifecycle_status']}` · `索引 {fields['index_status']}`")
         st.caption(
-            f"记录状态：{item.get('status', '—')} · "
-            f"可查询：{'是' if item.get('queryable') else '否'} · "
+            f"可查询：{fields['queryable']} · "
             f"来源：{'系统' if item.get('source_type') == 'system' else '上传'}"
         )
-        if item.get("created_time") or item.get("uploaded_at"):
-            st.caption(f"上传/登记时间：{item.get('created_time') or item['uploaded_at']}")
+        st.caption(f"上传/登记时间：{fields['created_time']}")
         schema = item.get("schema_summary") or {}
         if item.get("file_type") == "excel":
             st.caption(
@@ -148,6 +234,16 @@ def _render_file_details(file_id: str) -> None:
             f"解析 `{detail.get('parse_status', '—')}` · "
             f"索引 `{detail.get('index_status', '—')}`"
         )
+        versions = []
+        if detail.get("file_type") == "word":
+            try:
+                versions = api_client.list_versions(file_id)
+            except RuntimeError:
+                versions = []
+        for title, rows in file_detail_sections(detail, versions).items():
+            st.markdown(f"**{title} 详情**")
+            for label, value in rows.items():
+                st.caption(f"{label}：{value}")
 
 
 def _render_versions(

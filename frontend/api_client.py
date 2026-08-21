@@ -63,6 +63,32 @@ def upload_file(uploaded_file: Any) -> dict[str, Any]:
     )
 
 
+def upload_files(uploaded_files: list[Any]) -> list[dict[str, Any]]:
+    """Upload selected files independently and preserve each visible outcome."""
+    outcomes = []
+    for uploaded_file in uploaded_files:
+        try:
+            result = upload_file(uploaded_file)
+            outcomes.append(
+                {
+                    "file_name": uploaded_file.name,
+                    "status": "success",
+                    "message": result.get("message") or "上传成功",
+                    "data": result.get("data") or {},
+                }
+            )
+        except RuntimeError as exc:
+            outcomes.append(
+                {
+                    "file_name": uploaded_file.name,
+                    "status": "failed",
+                    "message": str(exc),
+                    "data": {},
+                }
+            )
+    return outcomes
+
+
 def chat(session_id: str, message: str) -> dict[str, Any]:
     return request("POST", "/api/chat", json={"session_id": session_id, "message": message})
 
