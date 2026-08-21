@@ -209,7 +209,7 @@ TOOL_REGISTRY = ToolRegistry(
         ),
         _spec(
             "retrieve_document",
-            "从已索引 PDF 或 Word 中检索有限条材料依据，并返回可引用 Evidence。",
+            "通过文件、类型和页码过滤，从 PDF 或 Word 执行关键词与语义混合检索并返回 Evidence。",
             RetrieveDocumentArguments,
             retrieve_document,
             retryable=True,

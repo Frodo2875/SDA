@@ -269,6 +269,18 @@ def search_document_chunks(
     return DOCUMENT_REPOSITORY.search(file_ids=file_ids, query=query, limit=limit)
 
 
+def search_document_chunks_filtered(
+    *, file_ids: list[str], query: str, limit: int, page_no: int | None = None
+) -> list[dict[str, Any]]:
+    """Add metadata filtering without replacing the legacy FTS5 entry point."""
+    return DOCUMENT_REPOSITORY.search_filtered(
+        file_ids=file_ids,
+        query=query,
+        limit=limit,
+        page_no=page_no,
+    )
+
+
 def create_task_record(task: dict[str, Any], steps: list[dict[str, Any]]) -> None:
     TASK_REPOSITORY.create(task, steps)
 

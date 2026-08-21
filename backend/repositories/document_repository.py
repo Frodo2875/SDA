@@ -91,19 +91,75 @@ class DocumentRepository:
             results.append(item)
         return results
 
+    def search_filtered(
+        self,
+        *,
+        file_ids: list[str],
+        query: str,
+        limit: int,
+        page_no: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Run the existing FTS5 retrieval with an optional page predicate."""
+        if page_no is None:
+            return self.search(file_ids=file_ids, query=query, limit=limit)
+        if not file_ids:
+            return []
+        placeholders = ",".join("?" for _ in file_ids)
+        quoted_query = f'"{query.replace(chr(34), chr(34) * 2)}"'
+        sql = f"""
+            SELECT c.*, bm25(document_chunks_fts) AS rank
+            FROM document_chunks_fts
+            JOIN document_chunks AS c
+              ON c.chunk_id = document_chunks_fts.chunk_id
+            WHERE document_chunks_fts MATCH ?
+              AND c.file_id IN ({placeholders})
+              AND c.page_no = ?
+            ORDER BY rank, c.chunk_index
+            LIMIT ?
+        """
+        try:
+            with self._connection_factory() as connection:
+                rows = connection.execute(
+                    sql, (quoted_query, *file_ids, page_no, limit)
+                ).fetchall()
+        except sqlite3.OperationalError:
+            return self._search_like(
+                file_ids=file_ids,
+                query=query,
+                limit=limit,
+                page_no=page_no,
+            )
+        results = []
+        for row in rows:
+            item = self._deserialize(row)
+            item["rank"] = float(row["rank"])
+            results.append(item)
+        return results
+
     def _search_like(
-        self, *, file_ids: list[str], query: str, limit: int
+        self,
+        *,
+        file_ids: list[str],
+        query: str,
+        limit: int,
+        page_no: int | None = None,
     ) -> list[dict[str, Any]]:
         placeholders = ",".join("?" for _ in file_ids)
         escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        page_clause = " AND page_no = ?" if page_no is not None else ""
         sql = f"""
             SELECT *, 0.0 AS rank FROM document_chunks
             WHERE file_id IN ({placeholders})
               AND chunk_text LIKE ? ESCAPE '\\'
+              {page_clause}
             ORDER BY chunk_index LIMIT ?
         """
+        parameters: tuple[Any, ...] = (*file_ids, f"%{escaped}%")
+        if page_no is not None:
+            parameters = (*parameters, page_no)
+        parameters = (*parameters, limit)
         with self._connection_factory() as connection:
-            rows = connection.execute(sql, (*file_ids, f"%{escaped}%", limit)).fetchall()
+            rows = connection.execute(sql, parameters).fetchall()
         results = []
         for row in rows:
             item = self._deserialize(row)

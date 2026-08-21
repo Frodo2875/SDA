@@ -25,6 +25,7 @@ from backend.services.file_lifecycle import (
     transition_file_lifecycle,
 )
 from backend.services.file_locator import FileLocatorError, resolve_by_file_id
+from backend.services.hybrid_retrieval import hybrid_retrieve
 from backend.tool_models import FileIdArguments, RetrieveDocumentArguments
 from backend.tools.excel_utils import failure, success
 
@@ -139,17 +140,24 @@ def retrieve_document(
         if requested_ids is not None and record["file_id"] not in requested_ids:
             continue
         if (
+            arguments.scope.file_type is not None
+            and record["file_type"] != arguments.scope.file_type
+        ):
+            continue
+        if (
             record["file_type"] in SUPPORTED_DOCUMENT_TYPES
             and record["lifecycle_status"] == "ready"
             and record["index_status"] == "indexed"
             and bool(record["queryable"])
         ):
             eligible[record["file_id"]] = record
-    rows = database.search_document_chunks(
+    retrieval = hybrid_retrieve(
         file_ids=list(eligible),
         query=arguments.query,
         limit=arguments.top_k,
+        page_no=arguments.scope.page,
     )
+    rows = retrieval["rows"]
     evidence = []
     for row in rows:
         record = eligible[row["file_id"]]
@@ -173,7 +181,12 @@ def retrieve_document(
                 value_summary=_excerpt(row["chunk_text"], arguments.query),
             )
         )
-        evidence[-1]["score"] = round(1.0 / (1.0 + abs(float(row["rank"]))), 6)
+        evidence[-1]["score"] = round(
+            float(row.get("retrieval_score"))
+            if row.get("retrieval_score") is not None
+            else 1.0 / (1.0 + abs(float(row["rank"]))),
+            6,
+        )
         evidence[-1]["text_excerpt"] = evidence[-1]["value_summary"]
     if not evidence:
         result = success(
@@ -181,12 +194,18 @@ def retrieve_document(
                 "status": "not_found",
                 "query": arguments.query,
                 "evidence": [],
+                "retrieval_mode": retrieval["retrieval_mode"],
+                "fallback_used": retrieval["fallback_used"],
                 "result_summary": NO_EVIDENCE_MESSAGE,
             },
             NO_EVIDENCE_MESSAGE,
         )
         result.update(
-            {"evidence": [], "warnings": [], "result_summary": NO_EVIDENCE_MESSAGE}
+            {
+                "evidence": [],
+                "warnings": [retrieval["warning"]] if retrieval["warning"] else [],
+                "result_summary": NO_EVIDENCE_MESSAGE,
+            }
         )
         return result
     result = success(
@@ -194,6 +213,8 @@ def retrieve_document(
             "status": "found",
             "query": arguments.query,
             "evidence": evidence,
+            "retrieval_mode": retrieval["retrieval_mode"],
+            "fallback_used": retrieval["fallback_used"],
             "result_summary": f"找到 {len(evidence)} 条材料依据",
         },
         "文档检索完成",
@@ -201,7 +222,7 @@ def retrieve_document(
     result.update(
         {
             "evidence": evidence,
-            "warnings": [],
+            "warnings": [retrieval["warning"]] if retrieval["warning"] else [],
             "result_summary": f"找到 {len(evidence)} 条材料依据",
         }
     )
