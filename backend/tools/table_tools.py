@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
 from pydantic import ValidationError
 
 from backend import database
@@ -304,6 +305,9 @@ def _structured_evidence(
         )
         for field in selected_fields:
             value = _json_value(row.get(field))
+            source_index = int(context["fields"][field]["source_index"])
+            cell = f"{get_column_letter(source_index)}{row_number}"
+            table = context["schema"]["sheet_name"]
             evidence.append(
                 build_evidence(
                     evidence_id=make_evidence_id(
@@ -311,6 +315,8 @@ def _structured_evidence(
                         sheet=context["schema"]["sheet_name"],
                         row=row_number,
                         field=field,
+                        table=table,
+                        cell=cell,
                         value=value,
                     ),
                     source_type="structured",
@@ -319,6 +325,9 @@ def _structured_evidence(
                     sheet=context["schema"]["sheet_name"],
                     page_no=None,
                     chunk_id=None,
+                    table=table,
+                    cell=cell,
+                    confidence=float(context["schema"]["confidence"]),
                     field=field,
                     record_key=record_key,
                     value_summary=str(value) if value is not None else "null",

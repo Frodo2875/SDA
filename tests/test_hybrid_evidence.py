@@ -29,6 +29,7 @@ FORMAL_EVIDENCE_FIELDS = {
     "record_key",
     "value_summary",
 }
+EVIDENCE_2_LOCATOR_FIELDS = {"block_id", "table", "cell", "bbox", "confidence"}
 
 
 @pytest.fixture
@@ -213,7 +214,13 @@ def test_e01_formal_evidence_chain_contains_only_values_used_for_conclusion(hybr
 
     chain = result["data"]["evidence_chain"]
     assert chain
-    assert all(set(item) == FORMAL_EVIDENCE_FIELDS for item in chain)
+    assert all(FORMAL_EVIDENCE_FIELDS <= set(item) for item in chain)
+    assert all(
+        set(item) <= FORMAL_EVIDENCE_FIELDS | EVIDENCE_2_LOCATOR_FIELDS
+        for item in chain
+    )
+    structured = [item for item in chain if item["source_type"] == "structured"]
+    assert all({"table", "cell", "confidence"} <= set(item) for item in structured)
     assert {item["source_type"] for item in chain} == {"structured", "unstructured"}
     assert "英语" not in {item["field"] for item in chain}
     assert "未使用的住宿办法.pdf" not in {item["file_name"] for item in chain}

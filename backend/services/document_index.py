@@ -163,6 +163,17 @@ def retrieve_document(
         record = eligible[row["file_id"]]
         metadata = row.get("metadata") or {}
         block_id = metadata.get("block_id")
+        table = (
+            f"table:{metadata['table_no']}"
+            if metadata.get("table_no") is not None
+            else None
+        )
+        cell = (
+            f"R{metadata['row_no']}C{metadata['column_no']}"
+            if metadata.get("row_no") is not None
+            and metadata.get("column_no") is not None
+            else None
+        )
         evidence.append(
             build_evidence(
                 evidence_id=make_evidence_id(
@@ -176,6 +187,10 @@ def retrieve_document(
                 page_no=row["page_no"],
                 chunk_id=row["chunk_id"],
                 block_id=block_id,
+                table=table,
+                cell=cell,
+                bbox=metadata.get("bbox"),
+                confidence=metadata.get("confidence"),
                 field=None,
                 record_key=None,
                 value_summary=_excerpt(row["chunk_text"], arguments.query),

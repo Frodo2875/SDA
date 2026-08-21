@@ -290,8 +290,9 @@ def _formal_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
         "value_summary",
     )
     formal = {key: evidence.get(key) for key in keys}
-    if evidence.get("block_id") is not None:
-        formal["block_id"] = evidence["block_id"]
+    for key in ("block_id", "table", "cell", "bbox", "confidence"):
+        if evidence.get(key) is not None:
+            formal[key] = evidence[key]
     return formal
 
 
