@@ -19,6 +19,11 @@ def initialize_state() -> None:
         "files_error": None,
         "upload_notice": None,
         "uploader_version": 0,
+        "workspace_search": "",
+        "workspace_file_type": "全部类型",
+        "workspace_lifecycle": "全部状态",
+        "workspace_sort": "登记时间（新到旧）",
+        "workspace_selected_file_id": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -27,7 +32,30 @@ def initialize_state() -> None:
 
 def refresh_files() -> None:
     try:
-        st.session_state.files = api_client.list_files()
+        file_types = {"全部类型": None, "Excel": "excel", "Word": "word", "PDF": "pdf"}
+        lifecycle_states = {
+            "全部状态": None,
+            "已上传": "uploaded",
+            "处理中": "processing",
+            "可用": "ready",
+            "失败": "failed",
+            "已删除": "deleted",
+            "清理失败": "cleanup_failed",
+        }
+        sorting = {
+            "登记时间（新到旧）": ("created_time", "desc"),
+            "登记时间（旧到新）": ("created_time", "asc"),
+            "文件大小（大到小）": ("size", "desc"),
+            "文件大小（小到大）": ("size", "asc"),
+        }
+        sort_by, sort_order = sorting[st.session_state.workspace_sort]
+        st.session_state.files = api_client.list_files(
+            search=st.session_state.workspace_search,
+            file_type=file_types[st.session_state.workspace_file_type],
+            lifecycle_status=lifecycle_states[st.session_state.workspace_lifecycle],
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
         st.session_state.files_error = None
     except RuntimeError as exc:
         st.session_state.files = []

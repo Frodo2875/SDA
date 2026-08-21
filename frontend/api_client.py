@@ -24,11 +24,36 @@ def request(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
     return payload
 
 
-def list_files() -> list[dict[str, Any]]:
-    result = request("GET", "/api/files")
+def list_files(
+    *,
+    search: str | None = None,
+    file_type: str | None = None,
+    lifecycle_status: str | None = None,
+    sort_by: str | None = None,
+    sort_order: str = "desc",
+) -> list[dict[str, Any]]:
+    params = {
+        key: value
+        for key, value in {
+            "search": search,
+            "file_type": file_type,
+            "lifecycle_status": lifecycle_status,
+            "sort_by": sort_by,
+            "sort_order": sort_order if sort_by else None,
+        }.items()
+        if value not in {None, ""}
+    }
+    result = request("GET", "/api/files", params=params)
     if not result.get("ok"):
         raise RuntimeError(result.get("message") or "文件列表读取失败")
     return result.get("data") or []
+
+
+def get_file_detail(file_id: str) -> dict[str, Any]:
+    result = request("GET", f"/api/files/{file_id}")
+    if not result.get("ok"):
+        raise RuntimeError(result.get("message") or "文件详情读取失败")
+    return result.get("data") or {}
 
 
 def upload_file(uploaded_file: Any) -> dict[str, Any]:

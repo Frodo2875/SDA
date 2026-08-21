@@ -7,11 +7,38 @@ from backend.tools.excel_utils import failure, success
 from backend.tools.file_tools import list_files
 
 
-def list_file_views() -> dict[str, Any]:
+def list_file_views(
+    *,
+    search: str | None = None,
+    file_type: str | None = None,
+    lifecycle_status: str | None = None,
+    sort_by: str | None = None,
+    sort_order: str = "desc",
+) -> dict[str, Any]:
+    """Return workspace files after deterministic Python filtering and sorting."""
     result = list_files()
     if not result["ok"]:
         return result
-    return success([_enrich(item) for item in result["data"]], result["message"])
+    items = [_enrich(item) for item in result["data"]]
+    clean_search = (search or "").strip().casefold()
+    if clean_search:
+        items = [
+            item for item in items
+            if clean_search in str(item.get("file_name") or "").casefold()
+        ]
+    if file_type:
+        items = [item for item in items if item.get("file_type") == file_type]
+    if lifecycle_status:
+        items = [
+            item for item in items
+            if item.get("lifecycle_status") == lifecycle_status
+        ]
+    if sort_by:
+        items.sort(
+            key=lambda item: _sort_value(item, sort_by),
+            reverse=sort_order == "desc",
+        )
+    return success(items, f"找到 {len(items)} 个受支持文件")
 
 
 def get_file_view(file_id: str) -> dict[str, Any]:
@@ -37,7 +64,9 @@ def _enrich(item: dict[str, Any]) -> dict[str, Any]:
         else database.get_file_record(item["file_name"])
     )
     enriched["uploaded_at"] = record.get("created_at") if record else None
+    enriched["created_time"] = record.get("created_at") if record else None
     enriched["updated_at"] = record.get("updated_at") if record else None
+    enriched["status"] = record.get("status") if record else "active"
     enriched["writable"] = bool(record.get("writable")) if record else False
     enriched["deletable"] = bool(record.get("deletable")) if record else False
     enriched["schema_summary"] = None
@@ -57,3 +86,9 @@ def _enrich(item: dict[str, Any]) -> dict[str, Any]:
             ],
         } if schemas else None
     return enriched
+
+
+def _sort_value(item: dict[str, Any], sort_by: str) -> Any:
+    if sort_by == "size":
+        return int(item.get("size") or 0)
+    return str(item.get("created_time") or "")

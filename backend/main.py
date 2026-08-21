@@ -1,7 +1,7 @@
 """FastAPI application entry point."""
 
 from collections.abc import Callable
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import FastAPI, File, Path, Query, UploadFile
 from fastapi.responses import JSONResponse
@@ -77,10 +77,12 @@ def _tool_http_status(result: dict[str, Any]) -> int:
     return 500
 
 
-def _call_tool(tool: Callable[..., dict[str, Any]], *args: Any) -> dict[str, Any] | JSONResponse:
+def _call_tool(
+    tool: Callable[..., dict[str, Any]], *args: Any, **kwargs: Any
+) -> dict[str, Any] | JSONResponse:
     """Call one existing tool and prevent internal exceptions from reaching clients."""
     try:
-        result = tool(*args)
+        result = tool(*args, **kwargs)
     except Exception:
         return JSONResponse(
             status_code=500,
@@ -109,9 +111,40 @@ async def health() -> HealthResponse:
 
 
 @app.get("/api/files", response_model=ToolResponse, tags=["files"])
-async def api_list_files() -> dict[str, Any] | JSONResponse:
+async def api_list_files(
+    search: str | None = Query(default=None, max_length=255),
+    file_type: Literal["excel", "word", "pdf"] | None = Query(default=None),
+    lifecycle_status: Literal[
+        "uploaded", "processing", "ready", "failed", "deleted", "cleanup_failed"
+    ] | None = Query(default=None),
+    sort_by: Literal["created_time", "size"] | None = Query(default=None),
+    sort_order: Literal["asc", "desc"] = Query(default="desc"),
+) -> dict[str, Any] | JSONResponse:
     """List compatible Tool fields plus V2 presentation metadata."""
-    return _call_tool(list_file_views)
+    return _call_tool(
+        list_file_views,
+        search=search,
+        file_type=file_type,
+        lifecycle_status=lifecycle_status,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+
+
+@app.get("/api/files/{file_id}", response_model=ToolResponse, tags=["files"])
+async def api_file_workspace_details(
+    file_id: Annotated[
+        str,
+        Path(
+            min_length=32,
+            max_length=32,
+            pattern=r"^[0-9a-fA-F]{32}$",
+            description="稳定文件标识",
+        ),
+    ],
+) -> dict[str, Any] | JSONResponse:
+    """Read one file's workspace, lifecycle, parse and index metadata."""
+    return _call_tool(get_file_view, file_id)
 
 
 @app.get("/api/files/{file_id}/details", response_model=ToolResponse, tags=["files"])
