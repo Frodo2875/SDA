@@ -305,6 +305,10 @@ def find_task_waiting_for_action(action_id: str) -> dict[str, Any] | None:
     return TASK_REPOSITORY.waiting_for_action(action_id)
 
 
+def claim_async_task_record(task_id: str) -> dict[str, Any] | None:
+    return TASK_REPOSITORY.claim_async(task_id)
+
+
 def list_file_versions(file_id: str) -> list[dict[str, Any]]:
     return VERSION_REPOSITORY.list_for_file(file_id)
 

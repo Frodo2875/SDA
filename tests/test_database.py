@@ -47,7 +47,8 @@ EXPECTED_COLUMNS = {
     "tasks": [
         "task_id", "session_id", "user_message", "task_type", "status",
         "current_step", "next_action", "checkpoint_data", "created_at",
-        "updated_at", "completed_at", "error_code",
+        "updated_at", "completed_at", "error_code", "task_status",
+        "progress", "message",
     ],
     "task_steps": [
         "step_id", "task_id", "sequence", "step_name", "step_type",
@@ -119,9 +120,10 @@ def test_first_run_creates_database_tables_and_file_records(
             (7, "create_file_versions"),
             (8, "create_batches"),
             (9, "create_traces_and_context"),
+            (10, "add_async_task_runtime"),
         ]
         assert all(row[2] for row in migrations)
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 9
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
 
     file_rows = database.fetch_all("files")
     assert {

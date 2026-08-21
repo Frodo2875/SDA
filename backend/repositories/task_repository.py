@@ -3,6 +3,7 @@
 import json
 import sqlite3
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -20,15 +21,17 @@ class TaskRepository:
                 INSERT INTO tasks (
                     task_id, session_id, user_message, task_type, status,
                     current_step, next_action, checkpoint_data, created_at,
-                    updated_at, completed_at, error_code
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    updated_at, completed_at, error_code, task_status,
+                    progress, message
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task["task_id"], task["session_id"], task["user_message"],
                     task["task_type"], task["status"], task.get("current_step"),
                     task.get("next_action"), json.dumps(task.get("checkpoint_data") or {}, ensure_ascii=False),
                     task["created_at"], task["updated_at"], task.get("completed_at"),
-                    task.get("error_code"),
+                    task.get("error_code"), task.get("task_status"),
+                    task.get("progress", 0), task.get("message"),
                 ),
             )
             for step in steps:
@@ -80,10 +83,13 @@ class TaskRepository:
     def update_task(self, task_id: str, **values: Any) -> bool:
         allowed = {
             "status", "current_step", "next_action", "checkpoint_data",
-            "updated_at", "completed_at", "error_code",
+            "updated_at", "completed_at", "error_code", "task_status",
+            "progress", "message",
         }
         if not values or not set(values) <= allowed:
             raise ValueError("包含非法 Task 更新字段")
+        if "progress" in values and not 0 <= int(values["progress"]) <= 100:
+            raise ValueError("Task progress 必须在 0 到 100 之间")
         serialized = dict(values)
         if "checkpoint_data" in serialized:
             serialized["checkpoint_data"] = json.dumps(
@@ -96,6 +102,42 @@ class TaskRepository:
                 (*serialized.values(), task_id),
             )
         return cursor.rowcount == 1
+
+    def claim_async(self, task_id: str) -> dict[str, Any] | None:
+        """Atomically claim one queued asynchronous task exactly once."""
+        now_row: sqlite3.Row | None = None
+        connection = self._connection_factory()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM tasks WHERE task_id = ?", (task_id,)
+            ).fetchone()
+            if (
+                row is None
+                or row["task_status"] != "created"
+                or row["status"] != "pending"
+            ):
+                connection.rollback()
+                return None
+            connection.execute(
+                """
+                UPDATE tasks
+                SET status = 'running', task_status = 'running',
+                    message = '任务开始执行', updated_at = ?
+                WHERE task_id = ?
+                """,
+                (datetime.now(timezone.utc).isoformat(), task_id),
+            )
+            now_row = connection.execute(
+                "SELECT * FROM tasks WHERE task_id = ?", (task_id,)
+            ).fetchone()
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return self._task(now_row) if now_row is not None else None
 
     def update_step(self, step_id: str, **values: Any) -> bool:
         allowed = {

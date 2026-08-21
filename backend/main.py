@@ -3,13 +3,20 @@
 from collections.abc import Callable
 from typing import Annotated, Any, Literal
 
-from fastapi import FastAPI, File, Path, Query, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Path, Query, UploadFile
 from fastapi.responses import JSONResponse
 
 from backend import database
 from backend.agent import run_agent
 from backend.llm_client import LLMAPIError, LLMConfigurationError
-from backend.runtime.task_runner import resume_task
+from backend.runtime.task_runner import resume_task as resume_workflow_task
+from backend.runtime.async_task_runtime import (
+    cancel_async_task,
+    enqueue_async_task,
+    resume_async_task,
+    retry_async_task,
+    run_async_task,
+)
 from backend.services.confirmation import (
     cancel_action,
     confirm_action,
@@ -24,6 +31,7 @@ from backend.services.file_view import get_file_view, list_file_views
 from backend.runtime.context_manager import get_context
 from backend.schemas import (
     ActionResponse,
+    AsyncTaskCreateRequest,
     ChatRequest,
     ChatResponse,
     CompareStudentsRequest,
@@ -446,6 +454,45 @@ async def api_get_task(task_id: str) -> dict[str, Any] | JSONResponse:
     }
 
 
+@app.post("/api/tasks", response_model=ToolResponse, tags=["tasks"])
+async def api_create_async_task(
+    request: AsyncTaskCreateRequest,
+    background_tasks: BackgroundTasks,
+) -> dict[str, Any] | JSONResponse:
+    """Queue one validated long task and execute it with the lightweight worker."""
+    result = enqueue_async_task(request)
+    if not result["ok"]:
+        return JSONResponse(status_code=400, content=result)
+    task_id = result["data"]["task"]["task_id"]
+    background_tasks.add_task(run_async_task, task_id)
+    return result
+
+
+@app.post("/api/tasks/{task_id}/cancel", response_model=ToolResponse, tags=["tasks"])
+async def api_cancel_async_task(task_id: str) -> dict[str, Any] | JSONResponse:
+    result = cancel_async_task(task_id)
+    if result["ok"]:
+        return result
+    return JSONResponse(
+        status_code=404 if result.get("error_code") == "TASK_NOT_FOUND" else 409,
+        content=result,
+    )
+
+
+@app.post("/api/tasks/{task_id}/retry", response_model=ToolResponse, tags=["tasks"])
+async def api_retry_async_task(
+    task_id: str, background_tasks: BackgroundTasks
+) -> dict[str, Any] | JSONResponse:
+    result = retry_async_task(task_id)
+    if not result["ok"]:
+        return JSONResponse(
+            status_code=404 if result.get("error_code") == "TASK_NOT_FOUND" else 409,
+            content=result,
+        )
+    background_tasks.add_task(run_async_task, task_id)
+    return result
+
+
 @app.get("/api/tasks/{task_id}/traces", response_model=ToolResponse, tags=["tasks"])
 async def api_get_task_traces(task_id: str) -> dict[str, Any] | JSONResponse:
     """Return only observable, redacted Tool traces for one Task."""
@@ -488,10 +535,14 @@ async def api_get_session_traces(
 
 
 @app.post("/api/tasks/{task_id}/resume", response_model=ToolResponse, tags=["tasks"])
-async def api_resume_task(task_id: str) -> dict[str, Any] | JSONResponse:
+async def api_resume_task(
+    task_id: str, background_tasks: BackgroundTasks
+) -> dict[str, Any] | JSONResponse:
     """Resume a terminal HITL checkpoint without replaying successful reads."""
     try:
-        result = resume_task(task_id)
+        task = database.get_task_record(task_id)
+        is_async = task is not None and task.get("task_status") is not None
+        result = resume_async_task(task_id) if is_async else resume_workflow_task(task_id)
     except Exception:
         return JSONResponse(
             status_code=500,
@@ -507,4 +558,6 @@ async def api_resume_task(task_id: str) -> dict[str, Any] | JSONResponse:
             status_code=404 if result.get("error_code") == "TASK_NOT_FOUND" else 409,
             content={**result, "message": "任务无法恢复"},
         )
+    if is_async:
+        background_tasks.add_task(run_async_task, task_id)
     return {**result, "message": "任务恢复状态已更新"}

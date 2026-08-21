@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class HealthResponse(BaseModel):
@@ -50,6 +50,16 @@ class VersionActionRequest(BaseModel):
     """Session context for a confirmed undo or rollback."""
 
     session_id: str = Field(min_length=1, description="版本操作的客户端会话标识")
+
+
+class AsyncTaskCreateRequest(BaseModel):
+    """Validated request for one allow-listed long-running Python task."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    session_id: str = Field(min_length=1, max_length=128)
+    task_type: Literal["ocr", "index", "batch"]
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class WordDiffOperationRequest(BaseModel):
