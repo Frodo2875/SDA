@@ -20,6 +20,11 @@ from backend.runtime.task_runner import (
     start_tool_step,
 )
 from backend.runtime.tool_executor import execute_with_retry
+from backend.runtime.safety_policy import (
+    PolicyDecision,
+    assess_tool_execution,
+    record_safety_trace,
+)
 from backend.runtime.context_manager import resolve_message, update_after_run
 from backend.services.confirmation import create_pending_action
 from backend.services.redaction import redacted_json, redact_value
@@ -84,6 +89,7 @@ def _execute_tool(
     name: str,
     raw_arguments: Any,
     executed_calls: list[dict[str, Any]] | None = None,
+    policy_context: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Validate model-generated arguments and execute an allow-listed tool."""
     spec = TOOL_REGISTRY.get(name)
@@ -103,6 +109,31 @@ def _execute_tool(
             "INVALID_TOOL_ARGUMENTS", f"工具 {name} 的参数未通过 Schema 校验"
         )
     arguments = validated.model_dump()
+    assessment = assess_tool_execution(
+        tool_name=name,
+        arguments=arguments,
+        read_only=spec.read_only,
+        requires_confirmation=spec.requires_confirmation,
+    )
+    context = policy_context or {}
+    try:
+        record_safety_trace(
+            assessment,
+            session_id=str(context.get("session_id") or "agent-policy"),
+            task_id=context.get("task_id"),
+            step_id=context.get("step_id"),
+            tool_name=name,
+        )
+    except Exception:
+        pass
+    if assessment.decision == PolicyDecision.BLOCK:
+        return arguments, _invalid_tool_result(
+            "SAFETY_POLICY_BLOCKED", assessment.reason
+        )
+    if assessment.decision == PolicyDecision.CONFIRMATION_REQUIRED:
+        return arguments, _invalid_tool_result(
+            "CONFIRMATION_REQUIRED", assessment.reason
+        )
     if name == "compare_students":
         student_ids = arguments["student_ids"]
         if len(student_ids) < 2 or any(not isinstance(item, str) or not item.strip() for item in student_ids):
@@ -145,17 +176,20 @@ def _execute_tool_with_retry(
     name: str,
     raw_arguments: Any,
     executed_calls: list[dict[str, Any]] | None = None,
+    policy_context: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], int]:
     """Add bounded retries around the existing validated Tool execution path."""
     spec = TOOL_REGISTRY.get(name)
     if spec is None:
-        arguments, result = _execute_tool(name, raw_arguments, executed_calls)
+        arguments, result = _execute_tool(
+            name, raw_arguments, executed_calls, policy_context
+        )
         return arguments, result, 0
     return execute_with_retry(
         tool_name=name,
         raw_arguments=raw_arguments,
         execute_once=lambda current_arguments: _execute_tool(
-            name, current_arguments, executed_calls
+            name, current_arguments, executed_calls, policy_context
         ),
         retryable=spec.retryable,
         read_only=spec.read_only,
@@ -682,7 +716,14 @@ async def _run_agent_core(
                 retry_count = 0
             else:
                 arguments, result, retry_count = _execute_tool_with_retry(
-                    name, tool_call["function"]["arguments"], executed_calls
+                    name,
+                    tool_call["function"]["arguments"],
+                    executed_calls,
+                    {
+                        "session_id": session_id,
+                        "task_id": task_id,
+                        "step_id": step_id,
+                    },
                 )
             duration_ms = max(0, round((time.perf_counter() - started) * 1000))
             executed_calls.append(

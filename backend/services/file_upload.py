@@ -167,6 +167,7 @@ def save_uploaded_file(file_name: str, content: bytes) -> dict[str, Any]:
             "exists": True,
             "status": "active",
             "source_type": file_record["source_type"],
+            "trust_level": "unknown",
             "lifecycle_status": file_record["lifecycle_status"],
             "parse_status": file_record["parse_status"],
             "queryable": bool(file_record["queryable"]),

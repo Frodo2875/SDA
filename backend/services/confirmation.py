@@ -14,6 +14,12 @@ from backend.runtime.task_runner import (
     start_task,
 )
 from backend.runtime.context_manager import clear_pending_action, set_pending_action
+from backend.runtime.safety_policy import (
+    PolicyDecision,
+    SafetyAssessment,
+    assess_high_risk_action,
+    record_safety_trace,
+)
 from backend.services.file_versioning import (
     WordDiffOperation,
     execute_versioned_word_action,
@@ -140,6 +146,19 @@ def _create_pending_word_action(
     finalize_standalone: bool,
 ) -> dict[str, Any]:
     preview_data = preview["data"]
+    assessment = assess_high_risk_action(
+        action_type=action_type,
+        file_id=preview_data["file_id"],
+        file_name=preview_data["target_file"],
+    )
+    _record_action_safety(
+        assessment,
+        session_id=session_id,
+        task_id=task_id,
+        action_type=action_type,
+    )
+    if assessment.decision != PolicyDecision.CONFIRMATION_REQUIRED:
+        return _failure("SAFETY_POLICY_BLOCKED", assessment.reason)
     if task_id is not None and database.get_task_record(task_id) is None:
         return _failure("TASK_NOT_FOUND", "关联 Task 不存在")
     if finalize_standalone:
@@ -229,6 +248,19 @@ def create_pending_delete_action(*, session_id: str, file_id: str) -> dict[str, 
         return _failure("FILE_DELETE_FORBIDDEN", "系统固定文件禁止删除")
     if record["lifecycle_status"] == "deleted":
         return _failure("FILE_ALREADY_DELETED", "文件已经删除")
+    assessment = assess_high_risk_action(
+        action_type=ACTION_TYPE_DELETE_FILE,
+        file_id=record["file_id"],
+        file_name=record["file_name"],
+    )
+    _record_action_safety(
+        assessment,
+        session_id=session_id,
+        task_id=None,
+        action_type=ACTION_TYPE_DELETE_FILE,
+    )
+    if assessment.decision != PolicyDecision.CONFIRMATION_REQUIRED:
+        return _failure("SAFETY_POLICY_BLOCKED", assessment.reason)
 
     action = {
         "action_id": uuid4().hex,
@@ -241,6 +273,11 @@ def create_pending_delete_action(*, session_id: str, file_id: str) -> dict[str, 
         "created_at": database.utc_now(),
         "status": "pending",
         "executed_at": None,
+        "file_id": record["file_id"],
+        "operation_json": None,
+        "diff_json": None,
+        "target_version_id": None,
+        "task_id": None,
     }
     database.insert_pending_action(action)
     _set_context_action(session_id, action["action_id"])
@@ -352,6 +389,29 @@ def confirm_action(action_id: str) -> dict[str, Any]:
 
 
 def _execute_frozen_action(action: dict[str, Any]) -> dict[str, Any]:
+    file_id = str(
+        action.get("file_id")
+        or (
+            action.get("content")
+            if action.get("action_type") == ACTION_TYPE_DELETE_FILE
+            else ""
+        )
+        or ""
+    ).strip()
+    assessment = assess_high_risk_action(
+        action_type=str(action.get("action_type") or ""),
+        file_id=file_id or None,
+        file_name=str(action.get("target_file") or "") or None,
+        confirmation_granted=action.get("status") == "confirmed",
+    )
+    _record_action_safety(
+        assessment,
+        session_id=str(action.get("session_id") or "direct"),
+        task_id=action.get("task_id"),
+        action_type=str(action.get("action_type") or "file_action"),
+    )
+    if assessment.decision != PolicyDecision.ALLOW:
+        return _failure("SAFETY_POLICY_BLOCKED", assessment.reason)
     if action["action_type"] == ACTION_TYPE_DELETE_FILE:
         try:
             return delete_uploaded_file(action)
@@ -377,6 +437,35 @@ def _operation_name(action_type: str, verb: str) -> str:
         ACTION_TYPE_ROLLBACK_WORD: "rollback",
     }.get(action_type, "write")
     return f"{verb}_{suffix}"
+
+
+def _record_action_safety(
+    assessment: SafetyAssessment,
+    *,
+    session_id: str,
+    task_id: str | None,
+    action_type: str,
+) -> None:
+    try:
+        step_id = None
+        if task_id is not None:
+            running_steps = [
+                step
+                for step in database.get_task_step_records(task_id)
+                if step.get("status") == "running"
+            ]
+            if running_steps:
+                step_id = running_steps[-1]["step_id"]
+        record_safety_trace(
+            assessment,
+            session_id=session_id,
+            task_id=task_id,
+            step_id=step_id,
+            tool_name=action_type,
+        )
+    except Exception:
+        # Trace is observable but never authoritative over a policy decision.
+        pass
 
 
 def _deserialize_action(action: dict[str, Any]) -> dict[str, Any]:

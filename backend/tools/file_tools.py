@@ -3,6 +3,7 @@
 from typing import Any
 
 from backend import database
+from backend.runtime.safety_policy import classify_file_record
 from backend.services.file_locator import FileLocatorError, resolve_by_file_name
 from backend.tools import excel_utils
 from backend.tools.excel_utils import failure, resolve_data_file, success
@@ -102,6 +103,7 @@ def _lifecycle_fields(
             "parse_status": "pending" if is_upload else "not_required",
             "queryable": not is_upload,
             "index_status": "not_required",
+            "trust_level": "unknown",
         }
     return {
         "file_id": record["file_id"],
@@ -110,4 +112,5 @@ def _lifecycle_fields(
         "parse_status": record["parse_status"],
         "queryable": bool(record["queryable"]),
         "index_status": record["index_status"],
+        "trust_level": classify_file_record(record).value,
     }

@@ -82,8 +82,9 @@ class BombClient:
 
 
 class EvidenceClient:
-    def __init__(self) -> None:
+    def __init__(self, file_id: str = "a" * 32) -> None:
         self.round = 0
+        self.file_id = file_id
 
     async def create_chat_completion(self, messages, tools):
         self.round += 1
@@ -91,7 +92,7 @@ class EvidenceClient:
             return {
                 "role": "assistant", "content": None,
                 "tool_calls": [_call("evidence", "query_table", {
-                    "file_id": "a" * 32, "sheet": "学生", "filters": [],
+                    "file_id": self.file_id, "sheet": "学生", "filters": [],
                     "select": ["姓名"], "limit": 1,
                 })],
             }
@@ -104,8 +105,10 @@ async def test_e05_trace_records_observable_fields_and_redacts_phone() -> None:
     traces = database.get_session_trace_records("e05")
 
     assert result["status"] == "completed"
-    assert len(traces) == 1
-    trace = traces[0]
+    assert len(traces) == 2
+    safety_trace, trace = traces
+    assert safety_trace["event_type"] == "safety_policy_check"
+    assert safety_trace["result_status"] == "allow"
     assert trace["event_type"] == "tool_execution"
     assert trace["tool_name"] == "search_student"
     assert trace["result_status"] == "success"
@@ -113,6 +116,7 @@ async def test_e05_trace_records_observable_fields_and_redacts_phone() -> None:
     assert trace["retry_count"] == 0
     assert phone not in json.dumps(trace, ensure_ascii=False)
     assert "138****5678" in trace["arguments_summary"]
+    assert phone not in json.dumps(safety_trace, ensure_ascii=False)
     assistant = database.fetch_all("chat_messages")[-1]
     assert phone not in assistant["used_tools"]
 
@@ -120,9 +124,18 @@ async def test_e05_trace_records_observable_fields_and_redacts_phone() -> None:
 async def test_e06_agent_returns_real_evidence_and_context_keeps_reference_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    database.register_file(
+        file_name="上传表.xlsx",
+        file_type="excel",
+        file_path="data/uploads/上传表.xlsx",
+        lifecycle_status="ready",
+        parse_status="parsed",
+        queryable=True,
+    )
+    file_id = database.get_file_record("上传表.xlsx")["file_id"]
     evidence = {
         "evidence_id": "ev-001", "source_type": "structured",
-        "file_id": "a" * 32, "file_name": "上传表.xlsx", "sheet": "学生",
+        "file_id": file_id, "file_name": "上传表.xlsx", "sheet": "学生",
         "page_no": None, "chunk_id": None, "field": "姓名",
         "record_key": "S001", "value_summary": "张三",
     }
@@ -135,11 +148,13 @@ async def test_e06_agent_returns_real_evidence_and_context_keeps_reference_only(
         },
     )
 
-    result = await run_agent("查询上传表", client=EvidenceClient(), session_id="e06")
+    result = await run_agent(
+        "查询上传表", client=EvidenceClient(file_id), session_id="e06"
+    )
     context = get_context("e06")
 
     assert result["evidence"] == [evidence]
-    assert context["current_file"] == {"file_id": "a" * 32, "file_name": "上传表.xlsx"}
+    assert context["current_file"] == {"file_id": file_id, "file_name": "上传表.xlsx"}
     assert context["evidence_refs"] == [
         {key: evidence[key] for key in (
             "evidence_id", "source_type", "file_id", "file_name", "sheet",
