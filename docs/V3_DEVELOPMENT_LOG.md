@@ -154,3 +154,72 @@ pytest: 251 passed, 0 failed, 0 skipped, 11.42s
 V1 Regression: 66 passed, 1 deselected, PASS
 V2 coverage manifest: 60 passed, PASS
 ```
+
+## V3.15 Workflow Runtime Core Completion
+
+### Task/Step 与 Workflow Node
+
+- 保留 V2 `tasks` / `task_steps` 表、状态和 API；简单 Tool Calling 仍不强制创建
+  Workflow。
+- Task/Step 继续承担持久化、Trace 和兼容职责；Workflow Node 在其上增加图执行语义：
+  `workflow_id`、`node_id`、`node_type`、`depends_on`、`input_ref`、
+  `output_ref`、`condition` 和 `run_if`。
+- Node 契约与最小结果引用保存在已有 `checkpoint_data.plan/node_results` 中，未增加
+  migration。
+
+### Dependency Gating
+
+- Tool、Generation、Approval 和 Write 执行前均检查 `depends_on`。
+- 前置 Node 未达到 `SUCCESS` / `CONFIRMED` 时，后置 Node 无法认领或执行。
+- A → B → C 的后置节点不再能按 Tool 名称绕过依赖提前执行。
+
+### Parallel / Aggregate
+
+- Runtime 按依赖关系计算 ready wave；同一 wave 的无依赖 Node 通过受限
+  `ThreadPoolExecutor` 并发执行。
+- 所有并行结果落库后才进入下一 wave，Aggregate 必须等待其声明的全部前置 Node。
+- 并发测试使用线程同步屏障验证成绩与科研查询真实重叠，而非只检查节点类型字段。
+
+### Conditional
+
+- 新增结构化 Condition Node，仅允许 `eq`、`ne`、`gt`、`gte`、`lt`、
+  `lte`、`in`、`not_in`、`exists`。
+- 条件输入只能通过安全的结构化 dotted reference 读取；未使用 `eval()`、`exec()`、
+  任意 Python expression 或 SQL。
+- `run_if` 选择一个分支，未选分支明确记录为 `CANCELLED / condition_not_selected`。
+
+### Approval
+
+- Approval 是 `node_type=approval` 的真实 Node；到达后进入
+  `WAITING_CONFIRMATION`，后续高风险 Write 仍不可执行。
+- Confirm 继续复用现有冻结 action 和幂等执行链路；Cancel 将 Approval/Write 标为
+  `CANCELLED`，不会触发真实数据修改。
+
+### Retry / Checkpoint / Resume
+
+- 继续复用 `MAX_RETRIES` 有界重试，达到上限后 Node 持久化 `FAILED`、
+  `retry_count` 和 `failed_reason`，不会自动无限循环。
+- 每个成功 Node 在 checkpoint 保存最小结果、`output_ref` 和关联文件版本指纹。
+- Resume 跳过仍有效的成功 Node，从未完成/失败 Node 继续；成功 Write 永不自动失效或
+  重放。
+- 只有输入文件版本指纹改变时，相关只读 Node 及其非写入下游才失效并重新执行。
+
+### 新增测试
+
+- WF01：Sequential dependency gating。
+- WF02：Parallel 真实并发与 Aggregate 等待。
+- WF03：缺材料分支 `report_missing`。
+- WF04：材料完整分支 `eligibility_check`。
+- WF05：Approval 等待与 Cancel 不执行 Write。
+- WF06：有界 Retry 达到上限后 FAILED。
+- WF07：Resume 跳过成功 Node，成功 Write 不重复执行；文件版本变化时仅使相关只读
+  Node 及其下游失效。
+
+### 测试结果
+
+```text
+pytest: 259 passed, 0 failed, 0 skipped, 11.71s
+V1 Regression: 66 passed, 1 deselected, PASS
+V2 Regression: included in full pytest, PASS
+WF01-WF07: 8 passed, PASS
+```

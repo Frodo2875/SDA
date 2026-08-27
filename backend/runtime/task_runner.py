@@ -1,12 +1,18 @@
 """Durable Task/Step checkpoints around the existing single-Agent loop."""
 
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from typing import Any
 from uuid import uuid4
 
 from backend import database
-from backend.runtime.planner import StepType, TaskPlan
+from backend.runtime.planner import NodeType, StepType, TaskPlan
+from backend.runtime.workflow_condition import (
+    REFERENCE_MISSING,
+    evaluate_condition,
+    resolve_reference,
+)
 from backend.services.trace_service import record_trace
 
 
@@ -68,8 +74,11 @@ def start_tool_step(
     task = database.get_task_record(task_id)
     if task is None:
         raise ValueError("Task 不存在")
-    step = _matching_step(database.get_task_step_records(task_id), tool_name, arguments)
+    steps = database.get_task_step_records(task_id)
+    step = _matching_step(steps, tool_name, arguments)
     if step is None:
+        return None
+    if not _step_is_ready(step, steps, task["checkpoint_data"]):
         return None
     _mark_step_running(task, step, arguments)
     return str(step["step_id"])
@@ -91,6 +100,9 @@ def complete_generation_step(task_id: str, summary: str) -> None:
     )
     if step is None:
         return
+    steps = database.get_task_step_records(task_id)
+    if not _step_is_ready(step, steps, task["checkpoint_data"]):
+        return
     if step["status"] != StepStatus.RUNNING.value:
         _mark_step_running(task, step, {"source": "agent_generation"})
     now = database.utc_now()
@@ -111,10 +123,12 @@ def start_generation_step(task_id: str) -> str | None:
     task = database.get_task_record(task_id)
     if task is None:
         raise ValueError("Task 不存在")
+    steps = database.get_task_step_records(task_id)
     step = next(
         (
-            item for item in database.get_task_step_records(task_id)
+            item for item in steps
             if item["status"] not in {StepStatus.SUCCESS.value, StepStatus.CANCELLED.value}
+            and _step_is_ready(item, steps, task["checkpoint_data"])
         ),
         None,
     )
@@ -148,7 +162,8 @@ def begin_confirmed_action(action_id: str) -> dict[str, Any] | None:
             result_status=StepStatus.CONFIRMED.value,
             result={"ok": True, "message": "用户已确认"},
         )
-    if write_step and write_step["status"] not in {
+    steps = database.get_task_step_records(task["task_id"])
+    if write_step and _step_is_ready(write_step, steps, task["checkpoint_data"]) and write_step["status"] not in {
         StepStatus.SUCCESS.value, StepStatus.RUNNING.value
     }:
         _mark_step_running(
@@ -179,6 +194,8 @@ def record_tool_execution(
     if task is None:
         raise ValueError("Task 不存在")
     if step["status"] not in {StepStatus.RUNNING.value, StepStatus.SUCCESS.value}:
+        if not _step_is_ready(step, steps, task["checkpoint_data"]):
+            raise ValueError(f"Workflow Node 依赖尚未满足：{step['step_id']}")
         _mark_step_running(task, step, arguments)
     now = database.utc_now()
     ok = result.get("ok") is True
@@ -203,7 +220,146 @@ def record_tool_execution(
     except Exception:
         # Observability must never alter the authoritative Tool outcome.
         pass
+    _save_node_result(task_id, {**step, "step_id": step["step_id"]}, result)
     _refresh_checkpoint(task_id)
+
+
+def evaluate_condition_node(
+    *, task_id: str, node_id: str, structured_state: dict[str, Any]
+) -> bool:
+    """Execute a condition node with an allow-listed schema and select its branch."""
+    task = database.get_task_record(task_id)
+    if task is None:
+        raise ValueError("Task 不存在")
+    steps = database.get_task_step_records(task_id)
+    step = next((item for item in steps if item["step_id"] == node_id), None)
+    if step is None or step.get("node_type") != NodeType.CONDITION.value:
+        raise ValueError("Condition Node 不存在")
+    if not _step_is_ready(step, steps, task["checkpoint_data"]):
+        raise ValueError(f"Workflow Node 依赖尚未满足：{node_id}")
+    _mark_step_running(task, step, {"source": "structured_state"})
+    try:
+        selected = evaluate_condition(step.get("condition") or {}, structured_state)
+    except ValueError as exc:
+        database.update_task_step_record(
+            node_id, status=StepStatus.FAILED.value, failed_reason=str(exc),
+            completed_at=database.utc_now(),
+        )
+        _refresh_checkpoint(task_id)
+        raise
+    database.update_task_step_record(
+        node_id, status=StepStatus.SUCCESS.value,
+        result_summary=f"condition={str(selected).lower()}",
+        completed_at=database.utc_now(),
+    )
+    checkpoint = database.get_task_record(task_id)["checkpoint_data"]
+    node_results = dict(checkpoint.get("node_results") or {})
+    node_results[node_id] = {"ok": True, "data": selected, "output_ref": step.get("output_ref")}
+    database.update_task_record(
+        task_id, checkpoint_data={**checkpoint, "node_results": node_results},
+        updated_at=database.utc_now(),
+    )
+    _record_step_trace(
+        task=task, step=step, event_type="condition_evaluated",
+        result_status=StepStatus.SUCCESS.value,
+        arguments={"operator": (step.get("condition") or {}).get("operator")},
+        result={"ok": True, "selected": selected},
+    )
+    _skip_unselected_branches(task_id, node_id, selected)
+    _refresh_checkpoint(task_id)
+    return selected
+
+
+def execute_workflow(
+    task_id: str,
+    step_executor: StepExecutor,
+    *,
+    structured_state: dict[str, Any] | None = None,
+    max_workers: int = 4,
+) -> dict[str, Any]:
+    """Run ready nodes in dependency waves; independent nodes execute concurrently."""
+    task = database.get_task_record(task_id)
+    if task is None:
+        return {"ok": False, "error_code": "TASK_NOT_FOUND", "data": None}
+    if task["status"] in {"success", "cancelled", "waiting_confirmation"}:
+        return {"ok": True, "error_code": None, "data": task}
+    database.update_task_record(
+        task_id, status="running", completed_at=None, error_code=None,
+        updated_at=database.utc_now(),
+    )
+    state = dict(structured_state or {})
+    while True:
+        task = database.get_task_record(task_id)
+        steps = database.get_task_step_records(task_id)
+        ready = [
+            step for step in steps
+            if step["status"] in {StepStatus.CREATED.value, StepStatus.FAILED.value}
+            and _step_is_ready(step, steps, task["checkpoint_data"])
+        ]
+        conditions = [step for step in ready if step.get("node_type") == NodeType.CONDITION.value]
+        for step in conditions:
+            evaluate_condition_node(
+                task_id=task_id, node_id=step["step_id"],
+                structured_state=_condition_context(task_id, state),
+            )
+        if conditions:
+            continue
+        approval = next(
+            (step for step in ready if step.get("node_type") == NodeType.APPROVAL.value), None
+        )
+        if approval is not None:
+            _mark_step_running(task, approval, {"action": "await_user_decision"})
+            database.update_task_step_record(
+                approval["step_id"], status=StepStatus.WAITING_CONFIRMATION.value
+            )
+            database.update_task_record(
+                task_id, status="waiting_confirmation", current_step=approval["sequence"],
+                next_action="等待用户确认", updated_at=database.utc_now(),
+            )
+            return {"ok": True, "error_code": None, "data": database.get_task_record(task_id)}
+        executable = [
+            step for step in ready
+            if step["step_type"] in {StepType.QUERY.value, StepType.ANALYSIS.value}
+        ]
+        if not executable:
+            break
+        for step in executable:
+            arguments = _resolved_arguments(step, _condition_context(task_id, state))
+            _mark_step_running(task, step, arguments, update_task=False)
+            step["arguments"] = arguments
+        with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(executable)))) as pool:
+            futures = [(step, pool.submit(_invoke_step_executor, step_executor, step)) for step in executable]
+            outcomes = [(step, future.result()) for step, future in futures]
+        failed = None
+        for step, (result, retry_count) in outcomes:
+            record_tool_execution(
+                task_id=task_id, step_id=step["step_id"],
+                tool_name=step.get("tool_name") or "workflow_node",
+                arguments=step["arguments"], result=result, retry_count=retry_count,
+            )
+            if result.get("ok") is not True and failed is None:
+                failed = (step, result)
+        if failed is not None:
+            step, result = failed
+            database.update_task_record(
+                task_id, status="failed", next_action=step["step_name"],
+                updated_at=database.utc_now(),
+                error_code=result.get("error_code") or "STEP_FAILED",
+            )
+            return {"ok": False, "error_code": result.get("error_code"), "data": database.get_task_record(task_id)}
+    steps = database.get_task_step_records(task_id)
+    unfinished = [
+        step for step in steps
+        if step["status"] not in {StepStatus.SUCCESS.value, StepStatus.CANCELLED.value}
+    ]
+    if unfinished:
+        return {"ok": True, "error_code": None, "data": database.get_task_record(task_id)}
+    now = database.utc_now()
+    database.update_task_record(
+        task_id, status="success", current_step=None, next_action=None,
+        updated_at=now, completed_at=now, error_code=None,
+    )
+    return {"ok": True, "error_code": None, "data": database.get_task_record(task_id)}
 
 
 def finalize_task(task_id: str, result: dict[str, Any]) -> dict[str, Any]:
@@ -370,45 +526,8 @@ def resume_task(
         return {"ok": True, "error_code": None, "data": task}
     if step_executor is None or task["status"] in {"success", "cancelled"}:
         return {"ok": True, "error_code": None, "data": task}
-
-    database.update_task_record(
-        task_id, status="running", updated_at=database.utc_now(), completed_at=None,
-        error_code=None,
-    )
-    for step in database.get_task_step_records(task_id):
-        if step["status"] == StepStatus.SUCCESS.value or step["step_type"] not in {
-            StepType.QUERY.value, StepType.ANALYSIS.value
-        }:
-            continue
-        step_id = start_tool_step(
-            task_id=task_id, tool_name=step["tool_name"], arguments=step["arguments"]
-        )
-        if step_id is None:
-            continue
-        result, retry_count = step_executor(step)
-        record_tool_execution(
-            task_id=task_id,
-            tool_name=step["tool_name"],
-            arguments=step["arguments"],
-            result=result,
-            retry_count=retry_count,
-            step_id=step_id,
-        )
-        if result.get("ok") is not True:
-            database.update_task_record(
-                task_id, status="failed", next_action=step["step_name"],
-                updated_at=database.utc_now(), error_code=result.get("error_code") or "STEP_FAILED",
-            )
-            return {"ok": False, "error_code": result.get("error_code"), "data": database.get_task_record(task_id)}
-    database.update_task_record(
-        task_id, status="success", current_step=None, next_action=None,
-        checkpoint_data={
-            **task["checkpoint_data"],
-            "completed_steps": _successful_sequences(task_id),
-        },
-        updated_at=database.utc_now(), completed_at=database.utc_now(), error_code=None,
-    )
-    return {"ok": True, "error_code": None, "data": database.get_task_record(task_id)}
+    _invalidate_changed_file_inputs(task_id)
+    return execute_workflow(task_id, step_executor)
 
 
 def _matching_step(
@@ -424,6 +543,172 @@ def _matching_step(
         wanted = "查询科研成果" if selected.intersection({"论文数", "专利数", "竞赛数"}) else "查询学生成绩"
         return next((step for step in candidates if step["step_name"] == wanted), candidates[0])
     return candidates[0] if candidates else None
+
+
+def _step_is_ready(
+    step: dict[str, Any],
+    steps: list[dict[str, Any]],
+    checkpoint: dict[str, Any],
+) -> bool:
+    """Return true only when dependencies and an optional branch selection permit execution."""
+    statuses = {item["step_id"]: item for item in steps}
+    for dependency_id in step.get("depends_on") or []:
+        dependency = statuses.get(dependency_id)
+        if dependency is None:
+            return False
+        if dependency["status"] not in {StepStatus.SUCCESS.value, StepStatus.CONFIRMED.value}:
+            if not (
+                dependency["status"] == StepStatus.CANCELLED.value
+                and dependency.get("failed_reason") == "condition_not_selected"
+            ):
+                return False
+    node_results = checkpoint.get("node_results") or {}
+    for condition_id, expected in (step.get("run_if") or {}).items():
+        result = node_results.get(condition_id)
+        if not isinstance(result, dict) or result.get("data") is not bool(expected):
+            return False
+    return True
+
+
+def _skip_unselected_branches(task_id: str, condition_id: str, selected: bool) -> None:
+    now = database.utc_now()
+    for step in database.get_task_step_records(task_id):
+        expected = (step.get("run_if") or {}).get(condition_id)
+        if expected is not None and bool(expected) is not selected and step["status"] == StepStatus.CREATED.value:
+            database.update_task_step_record(
+                step["step_id"], status=StepStatus.CANCELLED.value,
+                failed_reason="condition_not_selected", completed_at=now,
+                result_summary="条件分支未选中",
+            )
+
+
+def _condition_context(task_id: str, state: dict[str, Any]) -> dict[str, Any]:
+    task = database.get_task_record(task_id)
+    return {
+        **state,
+        "state": state,
+        "nodes": dict((task["checkpoint_data"].get("node_results") or {})),
+    }
+
+
+def _resolved_arguments(step: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    arguments = dict(step.get("arguments") or {})
+    for target, reference in (step.get("input_ref") or {}).items():
+        value = resolve_reference(context, reference)
+        # Missing references are rejected by dependency/condition design and are not injected.
+        if value is not REFERENCE_MISSING:
+            arguments[target] = value
+    return arguments
+
+
+def _invoke_step_executor(
+    step_executor: StepExecutor, step: dict[str, Any]
+) -> tuple[dict[str, Any], int]:
+    try:
+        return step_executor(step)
+    except Exception as exc:
+        return ({
+            "ok": False,
+            "data": None,
+            "error_code": "WORKFLOW_NODE_EXECUTION_ERROR",
+            "message": str(exc)[:500] or "Workflow Node 执行失败",
+        }, 0)
+
+
+def _save_node_result(
+    task_id: str, step: dict[str, Any], result: dict[str, Any]
+) -> None:
+    task = database.get_task_record(task_id)
+    if task is None:
+        return
+    checkpoint = task["checkpoint_data"]
+    node_results = dict(checkpoint.get("node_results") or {})
+    node_results[step["step_id"]] = {
+        "ok": result.get("ok") is True,
+        "data": result.get("data"),
+        "error_code": result.get("error_code"),
+        "message": str(result.get("message") or "")[:500],
+        "output_ref": step.get("output_ref"),
+        "file_fingerprints": _file_fingerprints(step.get("arguments") or {}),
+    }
+    database.update_task_record(
+        task_id, checkpoint_data={**checkpoint, "node_results": node_results},
+        updated_at=database.utc_now(),
+    )
+
+
+def _file_fingerprints(arguments: dict[str, Any]) -> dict[str, str]:
+    file_ids: set[str] = set()
+
+    def collect(value: Any, key: str | None = None) -> None:
+        if key == "file_id" and isinstance(value, str) and value:
+            file_ids.add(value)
+        elif key == "file_ids" and isinstance(value, list):
+            file_ids.update(item for item in value if isinstance(item, str) and item)
+        elif isinstance(value, dict):
+            for child_key, child in value.items():
+                collect(child, str(child_key))
+        elif isinstance(value, list):
+            for child in value:
+                collect(child)
+
+    collect(arguments)
+    fingerprints = {}
+    for file_id in file_ids:
+        version = database.get_latest_file_version(file_id)
+        if version is not None:
+            fingerprints[file_id] = str(version.get("version_id") or version.get("content_hash"))
+            continue
+        record = database.get_file_record_by_id(file_id)
+        if record is not None:
+            fingerprints[file_id] = str(record.get("created_at") or record.get("file_path") or file_id)
+    return fingerprints
+
+
+def _invalidate_changed_file_inputs(task_id: str) -> None:
+    """Invalidate read nodes whose referenced file version changed, never replay writes."""
+    task = database.get_task_record(task_id)
+    if task is None:
+        return
+    steps = database.get_task_step_records(task_id)
+    results = dict(task["checkpoint_data"].get("node_results") or {})
+    invalid: set[str] = set()
+    for step in steps:
+        saved = results.get(step["step_id"]) or {}
+        fingerprints = saved.get("file_fingerprints") or {}
+        if (
+            step["status"] == StepStatus.SUCCESS.value
+            and step["step_type"] != StepType.WRITE.value
+            and fingerprints
+            and _file_fingerprints(step.get("arguments") or {}) != fingerprints
+        ):
+            invalid.add(step["step_id"])
+    changed = True
+    while changed:
+        changed = False
+        for step in steps:
+            if (
+                step["step_id"] not in invalid
+                and step["step_type"] != StepType.WRITE.value
+                and set(step.get("depends_on") or []).intersection(invalid)
+            ):
+                invalid.add(step["step_id"])
+                changed = True
+    for step in steps:
+        if step["step_id"] in invalid:
+            database.update_task_step_record(
+                step["step_id"], status=StepStatus.CREATED.value, retry_count=0,
+                result_summary=None, failed_reason=None, started_at=None, completed_at=None,
+            )
+            results.pop(step["step_id"], None)
+    if invalid:
+        checkpoint = task["checkpoint_data"]
+        database.update_task_record(
+            task_id,
+            checkpoint_data={**checkpoint, "node_results": results,
+                             "invalidated_nodes": sorted(invalid)},
+            updated_at=database.utc_now(),
+        )
 
 
 def _refresh_checkpoint(task_id: str) -> None:

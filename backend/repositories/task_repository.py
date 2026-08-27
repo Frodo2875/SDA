@@ -77,6 +77,14 @@ class TaskRepository:
             step["description"] = contract.get("description") or step["step_name"]
             step["input"] = dict(step["arguments"])
             step["expected_output"] = contract.get("expected_output") or ""
+            step["node_id"] = contract.get("node_id") or step["step_id"]
+            step["workflow_id"] = contract.get("workflow_id")
+            step["node_type"] = contract.get("node_type") or "tool"
+            step["depends_on"] = list(contract.get("depends_on") or [])
+            step["input_ref"] = dict(contract.get("input_ref") or {})
+            step["output_ref"] = contract.get("output_ref")
+            step["condition"] = contract.get("condition")
+            step["run_if"] = dict(contract.get("run_if") or {})
             results.append(step)
         return results
 
