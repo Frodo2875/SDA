@@ -40,6 +40,11 @@ def build_evidence(**values: Any) -> dict[str, Any]:
     evidence = Evidence(**values).model_dump()
     if not is_evidence_locatable(evidence):
         raise ValueError("Evidence 缺少可定位的原文引用")
+    # Import lazily to keep the canonical schema independent from persistence.
+    # The opaque ID must be resolvable by a later frontend HTTP request.
+    from backend import database
+
+    database.save_evidence_location(evidence)
     for key in ("block_id", "table", "cell", "bbox", "confidence"):
         if evidence[key] is None:
             evidence.pop(key)

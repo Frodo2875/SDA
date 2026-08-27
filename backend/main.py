@@ -29,6 +29,7 @@ from backend.services.file_upload import save_uploaded_file
 from backend.services.document_index import reindex_document, reprocess_document
 from backend.services.batch_service import BatchArguments, get_batch, run_batch
 from backend.services.file_view import get_file_preview, get_file_view, list_file_views
+from backend.services.evidence_locator import locate_evidence
 from backend.runtime.context_manager import get_context
 from backend.schemas import (
     ActionResponse,
@@ -67,11 +68,14 @@ CLIENT_ERROR_CODES = {
     "INVALID_DIFF_OPERATION",
     "INVALID_TARGET_FILE",
     "UNSUPPORTED_FILE_TYPE",
+    "INVALID_EVIDENCE_ID",
 }
 NOT_FOUND_ERROR_CODES = {
     "FILE_NOT_FOUND", "STUDENT_NOT_FOUND", "VERSION_NOT_FOUND",
     "VERSION_FILE_MISSING",
     "BATCH_NOT_FOUND",
+    "EVIDENCE_LOCATION_NOT_FOUND", "EVIDENCE_SOURCE_UNAVAILABLE",
+    "EVIDENCE_PREVIEW_UNAVAILABLE",
 }
 
 
@@ -174,6 +178,22 @@ async def api_file_preview(
 ) -> dict[str, Any] | JSONResponse:
     """Return a bounded read-only preview; never expose a client file path."""
     return _call_tool(get_file_preview, file_id)
+
+
+@app.get(
+    "/api/evidence/{evidence_id}/locate",
+    response_model=ToolResponse,
+    tags=["evidence"],
+)
+async def api_locate_evidence(
+    evidence_id: Annotated[
+        str,
+        Path(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"),
+    ],
+    session_id: str | None = Query(default=None, min_length=1, max_length=128),
+) -> dict[str, Any] | JSONResponse:
+    """Resolve one answer Evidence ID to a bounded, read-only source preview."""
+    return _call_tool(locate_evidence, evidence_id, session_id=session_id)
 
 
 @app.post(

@@ -410,3 +410,54 @@ Retrieval Eval and focused regression: 41 passed, 0 failed, 2.99s
 pytest: 278 passed, 0 failed, 0 skipped, 14.07s
 V1/V2/V3 regression: PASS
 ```
+
+## V3.19 Evidence 2.0 Source Navigation
+
+### Evidence Locator
+
+- 保留现有 Evidence Schema，并新增最小 migration 13：`evidence_locations`。
+- 每条由 Tool 真实生成的 Evidence 将 opaque `evidence_id` 与后端校验后的 locator
+  持久化；前端不能提交或覆盖 file/page/cell/path 等定位字段。
+- 新增 `locate_evidence(evidence_id)` 和只读
+  `GET /api/evidence/{evidence_id}/locate`，响应不暴露服务器文件路径。
+- Evidence 对应文件删除、活动 Chunk 被替换、Sheet/Cell 消失或标识不存在时，返回
+  “来源存在，但当前无法打开对应预览位置”，不修改原答案。
+- 定位失败记录 `evidence_location / locate_evidence` Trace、失败状态和明确 error code。
+
+### Type-specific Preview
+
+- PDF：返回准确 `file_id/page_no/block_id/bbox`，扫描 PDF 同时保留
+  `confidence`；前端打开对应页信息，并用稳定文本高亮层标记原文与 BBox。
+- Excel：从当前真实工作簿打开目标 Sheet/Cell，返回目标行、列、记录标识、字段、
+  当前单元格值和有限行预览；前端突出目标记录与字段。
+- Word：从活动 Chunk/Block 返回段落号或 Block 位置以及真实段落文本。
+- Table/Cell：统一返回 `table_id/cell_id/row_index/column_index/bbox`（存在时），
+  继续兼容旧 `table/cell` Evidence 字段。
+- 未引入 PDF/Office 在线编辑器，也未重构现有三栏 Workspace。
+
+### Evidence Truthfulness
+
+- Retrieval 仍只把 rerank 后最终 Top-K 作为 Evidence。
+- 当结论 Tool 明确返回 `evidence_chain + used_tools` 时，Agent 回答来源以该链为准，
+  不再把此前检索但未用于结论的候选自动追加到来源列表。
+- 点击定位仅更新右栏预览状态，不改变回答文本或当前回答的 Evidence 列表。
+
+### 新增测试
+
+- R206：PDF 点击定位到正确 page/block/bbox，并保留 OCR confidence。
+- R207：Excel 定位到正确 Sheet、Cell、行、列、记录标识和字段。
+- R208：Word 定位到活动 Block 和真实段落。
+- R209：定位失败保持固定提示并写入失败 Trace。
+- 未使用 Retrieval source 不进入最终回答来源。
+- Streamlit 回答 Evidence 点击后显示 PDF 页码与 BBox 高亮提示。
+- 定位 API 失败响应和 Trace 可观测性。
+
+### 测试结果
+
+```text
+Evidence/Frontend focused tests: 26 passed, 0 failed, 3.37s
+Agent/Evidence compatibility: 38 passed, 0 failed, 2.38s
+Migration/API regression: 28 passed, 0 failed, 1.29s
+pytest: 285 passed, 0 failed, 0 skipped, 17.20s
+V1/V2/V3 regression: PASS
+```

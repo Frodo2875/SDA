@@ -29,6 +29,8 @@ def initialize_state() -> None:
         "workspace_preview_file_id": None,
         "known_tasks": {},
         "latest_evidence": [],
+        "selected_evidence_location": None,
+        "evidence_location_error": None,
         "show_document_workspace": True,
         "show_insight_panel": True,
     }
@@ -160,6 +162,21 @@ def add_version_action(result: dict[str, Any]) -> None:
     st.rerun()
 
 
+def handle_evidence_location(evidence: dict[str, Any]) -> None:
+    """Open one cited source without changing the answer or its Evidence list."""
+    try:
+        st.session_state.selected_evidence_location = api_client.locate_evidence(
+            evidence["evidence_id"], st.session_state.session_id
+        )
+        st.session_state.evidence_location_error = None
+    except (KeyError, RuntimeError):
+        st.session_state.selected_evidence_location = None
+        st.session_state.evidence_location_error = (
+            "来源存在，但当前无法打开对应预览位置"
+        )
+    st.rerun()
+
+
 st.set_page_config(
     page_title="学生材料智能文档助手", page_icon="🎓", layout="wide",
     initial_sidebar_state="expanded",
@@ -221,14 +238,19 @@ with chat_column:
     if not st.session_state.messages:
         with st.chat_message("assistant", avatar="🎓"):
             st.markdown("欢迎使用。你可以尝试输入：`综合分析 S001`。")
-    render_messages(st.session_state.messages, handle_action)
+    render_messages(st.session_state.messages, handle_action, handle_evidence_location)
     if prompt := st.chat_input("输入问题，例如：那他的科研呢？", key="workspace-chat"):
         submit_message(prompt.strip())
         st.rerun()
 
 if insight_column is not None:
     with insight_column:
-        render_evidence_preview(st.session_state.latest_evidence)
+        render_evidence_preview(
+            st.session_state.latest_evidence,
+            location=st.session_state.selected_evidence_location,
+            location_error=st.session_state.evidence_location_error,
+            on_locate=handle_evidence_location,
+        )
         st.divider()
         render_task_center(
             list(st.session_state.known_tasks.values()),

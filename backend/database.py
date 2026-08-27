@@ -17,6 +17,7 @@ from backend.repositories.batch_repository import BatchRepository
 from backend.repositories.context_repository import ContextRepository
 from backend.repositories.trace_repository import TraceRepository
 from backend.repositories.ocr_repository import OCRRepository
+from backend.repositories.evidence_repository import EvidenceRepository
 from backend.tools import excel_utils
 
 
@@ -104,6 +105,7 @@ BATCH_REPOSITORY = BatchRepository(_connect)
 TRACE_REPOSITORY = TraceRepository(_connect)
 CONTEXT_REPOSITORY = ContextRepository(_connect)
 OCR_REPOSITORY = OCRRepository(_connect)
+EVIDENCE_REPOSITORY = EvidenceRepository(_connect)
 
 
 def create_base_schema(connection: sqlite3.Connection) -> None:
@@ -282,6 +284,14 @@ def get_document_ocr_pages(file_id: str) -> list[dict[str, Any]]:
 
 def get_document_ocr_page(file_id: str, page_no: int) -> dict[str, Any] | None:
     return OCR_REPOSITORY.get_page(file_id, page_no)
+
+
+def save_evidence_location(evidence: dict[str, Any]) -> None:
+    EVIDENCE_REPOSITORY.save(evidence, created_at=utc_now())
+
+
+def get_evidence_location(evidence_id: str) -> dict[str, Any] | None:
+    return EVIDENCE_REPOSITORY.get(evidence_id)
 
 
 def replace_document_ocr_pages(file_id: str, pages: list[dict[str, Any]]) -> None:

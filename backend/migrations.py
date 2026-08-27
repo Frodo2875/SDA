@@ -494,6 +494,25 @@ def _create_document_ocr_pages(connection: sqlite3.Connection) -> None:
     )
 
 
+def _create_evidence_locations(connection: sqlite3.Connection) -> None:
+    """Persist opaque Evidence IDs and their validated source locators."""
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS evidence_locations (
+            evidence_id TEXT PRIMARY KEY,
+            file_id TEXT NOT NULL,
+            locator_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (file_id) REFERENCES files(file_id) ON DELETE CASCADE
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS ix_evidence_locations_file_id "
+        "ON evidence_locations(file_id, created_at)"
+    )
+
+
 MIGRATIONS = (
     Migration(1, "add_files_v2_foundation", _add_files_v2_foundation),
     Migration(2, "normalize_file_lifecycle", _normalize_file_lifecycle),
@@ -507,6 +526,7 @@ MIGRATIONS = (
     Migration(10, "add_async_task_runtime", _add_async_task_runtime),
     Migration(11, "add_trace_evaluation_metrics", _add_trace_evaluation_metrics),
     Migration(12, "create_document_ocr_pages", _create_document_ocr_pages),
+    Migration(13, "create_evidence_locations", _create_evidence_locations),
 )
 
 

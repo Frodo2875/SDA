@@ -56,7 +56,9 @@ def comparison_tables(response: dict[str, Any]) -> list[list[dict[str, Any]]]:
 
 
 def render_messages(
-    messages: list[dict[str, Any]], on_action: Callable[[int, str], None]
+    messages: list[dict[str, Any]],
+    on_action: Callable[[int, str], None],
+    on_evidence: Callable[[dict[str, Any]], None] | None = None,
 ) -> None:
     for index, message in enumerate(messages):
         avatar = "🎓" if message["role"] == "assistant" else "👤"
@@ -71,7 +73,11 @@ def render_messages(
                 st.dataframe(table, use_container_width=True, hide_index=True)
             render_task(message.get("task"))
             render_batch(message.get("batch"))
-            render_evidence(message.get("evidence") or [])
+            render_evidence(
+                message.get("evidence") or [],
+                on_locate=on_evidence,
+                key_prefix=f"message-evidence-{index}",
+            )
             render_trace(message.get("traces") or [])
             if message.get("version_id"):
                 st.success(f"新版本：{message['version_id']}")

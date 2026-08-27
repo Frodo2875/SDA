@@ -68,6 +68,22 @@ async def test_file_detail_and_redacted_trace_endpoints(client: httpx.AsyncClien
     assert traces.json()["data"] == []
 
 
+async def test_evidence_location_failure_endpoint_records_trace(
+    client: httpx.AsyncClient,
+) -> None:
+    evidence_id = "f" * 24
+    response = await client.get(
+        f"/api/evidence/{evidence_id}/locate",
+        params={"session_id": "api-evidence"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["message"] == "来源存在，但当前无法打开对应预览位置"
+    traces = await client.get("/api/sessions/api-evidence/traces")
+    assert traces.status_code == 200
+    assert traces.json()["data"][0]["tool_name"] == "locate_evidence"
+
+
 async def test_search_student(client: httpx.AsyncClient) -> None:
     response = await client.get("/api/students/search", params={"q": "张三"})
 

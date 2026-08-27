@@ -918,16 +918,36 @@ async def run_agent(
 
 def _collect_evidence(executed_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Expose only actual Tool provenance, deduplicated by evidence_id."""
+    authoritative = [
+        ((call.get("result") or {}).get("data") or {}).get("evidence_chain")
+        for call in executed_calls
+        if isinstance((call.get("result") or {}).get("data"), dict)
+        and isinstance(
+            ((call.get("result") or {}).get("data") or {}).get("evidence_chain"),
+            list,
+        )
+        and isinstance(
+            ((call.get("result") or {}).get("data") or {}).get("used_tools"),
+            list,
+        )
+    ]
+    # A conclusion Tool explicitly declares the Evidence it actually used. In
+    # that case earlier retrieval candidates must not leak into answer sources.
+    if authoritative:
+        candidates_by_call = [authoritative[-1]]
+    else:
+        candidates_by_call = []
+        for call in executed_calls:
+            result = call.get("result") or {}
+            candidates = result.get("evidence_chain")
+            if candidates is None and isinstance(result.get("data"), dict):
+                candidates = result["data"].get("evidence_chain") or result["data"].get("evidence")
+            if candidates is None:
+                candidates = result.get("evidence")
+            if isinstance(candidates, list):
+                candidates_by_call.append(candidates)
     collected: dict[str, dict[str, Any]] = {}
-    for call in executed_calls:
-        result = call.get("result") or {}
-        candidates = result.get("evidence_chain")
-        if candidates is None and isinstance(result.get("data"), dict):
-            candidates = result["data"].get("evidence_chain") or result["data"].get("evidence")
-        if candidates is None:
-            candidates = result.get("evidence")
-        if not isinstance(candidates, list):
-            continue
+    for candidates in candidates_by_call:
         for item in candidates:
             if not isinstance(item, dict) or not item.get("evidence_id"):
                 continue

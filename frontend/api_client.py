@@ -61,6 +61,15 @@ def get_file_preview(file_id: str) -> dict[str, Any]:
     return result.get("data") or {}
 
 
+def locate_evidence(evidence_id: str, session_id: str) -> dict[str, Any]:
+    result = request(
+        "GET",
+        f"/api/evidence/{evidence_id}/locate",
+        params={"session_id": session_id},
+    )
+    return result.get("data") or {}
+
+
 def reprocess_file(file_id: str) -> dict[str, Any]:
     return request("POST", f"/api/files/{file_id}/reprocess")
 

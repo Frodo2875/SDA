@@ -175,12 +175,18 @@ def test_workspace_file_operation_capabilities_and_api_routes(monkeypatch) -> No
     monkeypatch.setattr(api_client, "request", fake_request)
     file_id = upload["file_id"]
     assert api_client.get_file_preview(file_id)["action_id"] == "action-1"
+    assert api_client.locate_evidence("evidence-1", "session-1")["action_id"] == "action-1"
     api_client.reprocess_file(file_id)
     api_client.reindex_file(file_id)
     api_client.prepare_delete(file_id, "session-1")
 
     assert observed == [
         ("GET", f"/api/files/{file_id}/preview", {}),
+        (
+            "GET",
+            "/api/evidence/evidence-1/locate",
+            {"params": {"session_id": "session-1"}},
+        ),
         ("POST", f"/api/files/{file_id}/reprocess", {}),
         ("POST", f"/api/files/{file_id}/reindex", {}),
         (
@@ -309,3 +315,50 @@ def test_f11_workspace_delete_shows_target_and_can_be_cancelled(monkeypatch) -> 
     next(button for button in app.button if button.label == "取消").click().run(timeout=10)
     assert not app.exception
     assert any("已取消，目标文件没有变化" in item.value for item in app.markdown)
+
+
+def test_answer_evidence_click_opens_pdf_page_and_bbox_preview(monkeypatch) -> None:
+    evidence = {
+        "evidence_id": "evidence-r206",
+        "source_type": "unstructured",
+        "file_id": "a" * 32,
+        "file_name": "规则.pdf",
+        "page_no": 4,
+        "block_id": "block-4",
+        "bbox": [10, 20, 100, 60],
+        "value_summary": "奖学金规则原文",
+    }
+    monkeypatch.setattr(api_client, "list_files", lambda **kwargs: [])
+    monkeypatch.setattr(
+        api_client,
+        "chat",
+        lambda session_id, message: {
+            "answer": "根据原文回答。",
+            "status": "success",
+            "evidence": [evidence],
+            "tool_calls": [],
+        },
+    )
+    monkeypatch.setattr(api_client, "get_traces", lambda **kwargs: [])
+    monkeypatch.setattr(
+        api_client,
+        "locate_evidence",
+        lambda evidence_id, session_id: {
+            **evidence,
+            "location_type": "pdf",
+            "text": "奖学金规则原文",
+            "confidence": 0.91,
+            "highlight": {"bbox": evidence["bbox"]},
+        },
+    )
+
+    app = AppTest.from_file(PROJECT_ROOT / "frontend" / "app.py").run(timeout=10)
+    app.chat_input[0].set_value("查询规则").run(timeout=10)
+
+    assert not app.exception
+    source_buttons = [button for button in app.button if button.label == "打开原文"]
+    assert source_buttons
+    source_buttons[0].click().run(timeout=10)
+    assert not app.exception
+    assert any("高亮区域 BBox" in warning.value for warning in app.warning)
+    assert any("PDF · 第 4 页" in caption.value for caption in app.caption)

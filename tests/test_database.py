@@ -48,6 +48,9 @@ EXPECTED_COLUMNS = {
         "file_id", "page_no", "text", "bbox_json", "confidence", "status",
         "error", "source_type", "blocks_json", "updated_at",
     ],
+    "evidence_locations": [
+        "evidence_id", "file_id", "locator_json", "created_at",
+    ],
     "tasks": [
         "task_id", "session_id", "user_message", "task_type", "status",
         "current_step", "next_action", "checkpoint_data", "created_at",
@@ -129,9 +132,10 @@ def test_first_run_creates_database_tables_and_file_records(
             (10, "add_async_task_runtime"),
             (11, "add_trace_evaluation_metrics"),
             (12, "create_document_ocr_pages"),
+            (13, "create_evidence_locations"),
         ]
         assert all(row[2] for row in migrations)
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 12
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 13
 
     file_rows = database.fetch_all("files")
     assert {
