@@ -2,6 +2,7 @@
 
 import hashlib
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,7 @@ from backend.services.file_lifecycle import (
 )
 from backend.services.file_locator import FileLocatorError, resolve_by_file_id
 from backend.services.hybrid_retrieval import hybrid_retrieve
+from backend.services.trace_service import record_trace
 from backend.tool_models import FileIdArguments, RetrieveDocumentArguments
 from backend.tools.excel_utils import failure, success
 
@@ -56,10 +58,12 @@ def parse_pdf(
     operation_error = _begin_candidate_build(record, reprocess=_reprocess)
     if operation_error is not None:
         return operation_error
+    parse_started = time.perf_counter()
     try:
         path = resolve_by_file_id(clean_file_id)
         pages = _load_pdf_pages(path)
     except PdfDependencyError:
+        _record_document_stage(record, "parse", parse_started, "failed", error_code="PDF_DEPENDENCY_MISSING")
         return _index_failure(
             record,
             "PDF_DEPENDENCY_MISSING",
@@ -67,10 +71,12 @@ def parse_pdf(
             failure_stage="parse",
         )
     except FileLocatorError as exc:
+        _record_document_stage(record, "parse", parse_started, "failed", error_code="FILE_NOT_FOUND")
         return _index_failure(
             record, "FILE_NOT_FOUND", str(exc), failure_stage="parse"
         )
     except Exception:
+        _record_document_stage(record, "parse", parse_started, "failed", error_code="PDF_PARSE_ERROR")
         return _index_failure(
             record,
             "PDF_PARSE_ERROR",
@@ -79,6 +85,10 @@ def parse_pdf(
         )
 
     normalized_pages = [(page_no, text.strip()) for page_no, text in pages]
+    _record_document_stage(
+        record, "parse", parse_started, "success",
+        metrics={"page_count": len(normalized_pages)},
+    )
     text_page_count = sum(bool(text) for _, text in normalized_pages)
     if text_page_count != len(normalized_pages):
         pdf_type = "scanned" if text_page_count == 0 else "mixed"
@@ -92,6 +102,7 @@ def parse_pdf(
     pending_error = _mark_index_pending(record)
     if pending_error is not None:
         return pending_error
+    layout_started = time.perf_counter()
     blocks = [
         make_document_block(
             file_id=clean_file_id,
@@ -104,6 +115,10 @@ def parse_pdf(
         for index, (page_no, text) in enumerate(normalized_pages)
     ]
     chunks = blocks_to_chunks(blocks, source_type="pdf")
+    _record_document_stage(
+        record, "layout", layout_started, "success",
+        metrics={"block_count": len(blocks)},
+    )
     return _persist_index(
         record,
         chunks,
@@ -151,14 +166,17 @@ def _index_document(file_id: str, *, reprocess: bool) -> dict[str, Any]:
     operation_error = _begin_candidate_build(record, reprocess=reprocess)
     if operation_error is not None:
         return operation_error
+    parse_started = time.perf_counter()
     try:
         path = resolve_by_file_id(clean_file_id)
         chunks = _word_chunks(clean_file_id, path)
     except FileLocatorError as exc:
+        _record_document_stage(record, "parse", parse_started, "failed", error_code="FILE_NOT_FOUND")
         return _index_failure(
             record, "FILE_NOT_FOUND", str(exc), failure_stage="parse"
         )
     except Exception:
+        _record_document_stage(record, "parse", parse_started, "failed", error_code="WORD_PARSE_ERROR")
         return _index_failure(
             record,
             "WORD_PARSE_ERROR",
@@ -166,6 +184,7 @@ def _index_document(file_id: str, *, reprocess: bool) -> dict[str, Any]:
             failure_stage="parse",
         )
     if not chunks:
+        _record_document_stage(record, "parse", parse_started, "failed", error_code="NO_TEXT_CONTENT")
         return _index_failure(
             record,
             "NO_TEXT_CONTENT",
@@ -176,6 +195,10 @@ def _index_document(file_id: str, *, reprocess: bool) -> dict[str, Any]:
     if pending_error is not None:
         return pending_error
     blocks = blocks_from_chunks(chunks)
+    _record_document_stage(
+        record, "layout", parse_started, "success",
+        metrics={"block_count": len(blocks)},
+    )
     return _persist_index(
         record,
         chunks,
@@ -321,6 +344,11 @@ def retrieve_document(
                 "keyword_candidate_count": retrieval["keyword_candidate_count"],
                 "vector_candidate_count": retrieval["vector_candidate_count"],
                 "top_n_count": retrieval["top_n_count"],
+                "top_k_count": retrieval["top_k_count"],
+                "hybrid_retrieval_duration_ms": retrieval[
+                    "hybrid_retrieval_duration_ms"
+                ],
+                "rerank_duration_ms": retrieval["rerank_duration_ms"],
                 "score_details": [],
                 "result_summary": NO_EVIDENCE_MESSAGE,
             },
@@ -347,6 +375,11 @@ def retrieve_document(
             "keyword_candidate_count": retrieval["keyword_candidate_count"],
             "vector_candidate_count": retrieval["vector_candidate_count"],
             "top_n_count": retrieval["top_n_count"],
+            "top_k_count": retrieval["top_k_count"],
+            "hybrid_retrieval_duration_ms": retrieval[
+                "hybrid_retrieval_duration_ms"
+            ],
+            "rerank_duration_ms": retrieval["rerank_duration_ms"],
             "score_details": [
                 {
                     "chunk_id": row["chunk_id"],
@@ -459,6 +492,7 @@ def _parse_ocr_pdf(
         return failure("OCR_STATE_ERROR", started["message"], {"file_id": record["file_id"]})
     recognized: dict[str, Any] | None = None
     if selected:
+        ocr_started = time.perf_counter()
         recognized = (
             ocr_service.ocr_pdf(path)
             if pdf_type == "scanned" and requested_pages is None
@@ -466,6 +500,20 @@ def _parse_ocr_pdf(
         )
         recognized_pages = _recognized_page_results(
             recognized, selected, existing=existing
+        )
+        failed_selected = sum(page.get("status") == "failed" for page in recognized_pages)
+        _record_document_stage(
+            record,
+            "ocr",
+            ocr_started,
+            "partial_success" if failed_selected and failed_selected < len(recognized_pages)
+            else "failed" if failed_selected else "success",
+            metrics={
+                "total_pages": len(recognized_pages),
+                "successful_pages": len(recognized_pages) - failed_selected,
+                "failed_pages": failed_selected,
+            },
+            error_code=(recognized or {}).get("error_code") if failed_selected else None,
         )
         candidate_pages.update({page["page_no"]: page for page in recognized_pages})
 
@@ -797,8 +845,14 @@ def _persist_index(
     extra_data: dict[str, Any] | None = None,
     ocr_pages: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    index_started = time.perf_counter()
     validation_error = _validate_candidate_chunks(record["file_id"], chunks)
     if validation_error is not None:
+        _record_document_stage(
+            record, "index", index_started, "failed",
+            metrics={"candidate_count": len(chunks)},
+            error_code="INDEX_VALIDATION_ERROR",
+        )
         return _index_failure(
             record,
             "INDEX_VALIDATION_ERROR",
@@ -815,6 +869,10 @@ def _persist_index(
             to_status=FileLifecycleStatus.QUERYABLE,
         )
     except Exception:
+        _record_document_stage(
+            record, "index", index_started, "failed",
+            metrics={"candidate_count": len(chunks)}, error_code="INDEX_WRITE_ERROR",
+        )
         return _index_failure(
             record,
             "INDEX_WRITE_ERROR",
@@ -829,7 +887,37 @@ def _persist_index(
             "chunk_count": len(chunks),
         }
     data.update(extra_data or {})
+    _record_document_stage(
+        record, "index", index_started, "success",
+        metrics={"candidate_count": len(chunks), "active_chunk_count": len(chunks)},
+    )
     return success(data, "文档索引建立成功")
+
+
+def _record_document_stage(
+    record: dict[str, Any],
+    stage: str,
+    started: float,
+    status: str,
+    *,
+    metrics: dict[str, Any] | None = None,
+    error_code: str | None = None,
+) -> None:
+    """Persist stage observability without making Trace authoritative."""
+    try:
+        record_trace(
+            session_id=f"document:{record['file_id']}",
+            event_type="document_stage",
+            tool_name=f"{stage}_document",
+            arguments={"file_id": record["file_id"], "stage": stage},
+            result={"status": status, "file_id": record["file_id"]},
+            duration_ms=max(0, int((time.perf_counter() - started) * 1000)),
+            result_status=status,
+            error_code=error_code,
+            metrics={"stage": stage, **(metrics or {})},
+        )
+    except Exception:
+        pass
 
 
 def _mark_index_pending(record: dict[str, Any]) -> dict[str, Any] | None:

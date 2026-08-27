@@ -1,0 +1,21 @@
+ backend/agent.py                         |   5 [32m+[m[31m-[m
+ backend/runtime/async_task_runtime.py    |  46 [32m++++[m
+ backend/runtime/task_runner.py           |   6 [32m+[m
+ backend/services/document_index.py       |  88 [32m++++++++[m
+ backend/services/evaluation_service.py   | 118 [32m++++++++++[m[31m-[m
+ backend/services/evidence_locator.py     |  20 [32m+[m[31m-[m
+ backend/services/hybrid_retrieval.py     |  16 [32m++[m
+ backend/services/trace_service.py        |  24 [32m+++[m
+ docs/V3_DEVELOPMENT_LOG.md               |  45 [32m++++[m
+ docs/V3_FINAL_ACCEPTANCE.md              | 161 [32m++++++++++++++[m
+ docs/V3_REQUIREMENT_TEST_TRACEABILITY.md |  97 [32m+++++++++[m
+ evals/README.md                          |  23 [32m++[m
+ evals/__init__.py                        |   1 [32m+[m
+ evals/run_v3_final_evaluation.py         | 223 [32m++++++++++++++++++++[m
+ evals/run_v3_requirement_tests.py        |  41 [32m++++[m
+ evals/v3_final_manifest.json             |  58 [32m+++++[m
+ evals/v3_final_results.json              |  26 [32m+++[m
+ evals/v3_requirement_traceability.json   |  54 [32m+++++[m
+ tests/evals/test_trace_evaluation_v3.py  |  43 [32m+++[m[31m-[m
+ tests/evals/test_v3_final_evaluation.py  |  99 [32m+++++++++[m
+ 20 files changed, 1189 insertions(+), 5 deletions(-)

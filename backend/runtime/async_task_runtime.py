@@ -5,6 +5,7 @@ import inspect
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -925,6 +926,15 @@ def _trace(
     error_code: str | None = None,
 ) -> None:
     try:
+        current_steps = database.get_task_step_records(task["task_id"])
+        current_step = next(
+            (item for item in current_steps if item["step_id"] == step["step_id"]),
+            step,
+        )
+        started_at = current_step.get("started_at")
+        completed_at = current_step.get("completed_at") or task.get("completed_at")
+        async_meta = (task.get("checkpoint_data") or {}).get("async_task") or {}
+        timing = _async_timing(task.get("created_at"), started_at, completed_at)
         record_trace(
             task_id=task["task_id"],
             session_id=task["session_id"],
@@ -935,6 +945,42 @@ def _trace(
             result=result or {"status": result_status, "message": task.get("message")},
             result_status=result_status,
             error_code=error_code,
+            metrics={
+                "stage": event_type,
+                "queue_time_ms": timing["queue_time_ms"],
+                "execution_time_ms": timing["execution_time_ms"],
+                "task_total_duration_ms": timing["task_total_duration_ms"],
+                "progress_detail": async_meta.get("progress_detail") or {},
+            },
         )
     except Exception:
         pass
+
+
+def _async_timing(
+    created_at: Any, started_at: Any, completed_at: Any
+) -> dict[str, int | None]:
+    created = _timestamp(created_at)
+    started = _timestamp(started_at)
+    completed = _timestamp(completed_at)
+    return {
+        "queue_time_ms": _delta_ms(created, started),
+        "execution_time_ms": _delta_ms(started, completed),
+        "task_total_duration_ms": _delta_ms(created, completed),
+    }
+
+
+def _timestamp(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _delta_ms(start: datetime | None, end: datetime | None) -> int | None:
+    if start is None or end is None:
+        return None
+    return max(0, int((end - start).total_seconds() * 1000))

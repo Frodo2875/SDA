@@ -17,3 +17,26 @@
 成功率定义为 `successful_cases / total_cases`，错误率定义为
 `failed_cases / total_cases`。Token 仅使用模型 API 返回的 usage；Cost 仅使用显式配置的
 USD/1M tokens 单价，未配置时为 0。
+
+## V3 Final Evaluation
+
+- `v3_final_manifest.json`：OCR、Table、Retrieval、Evidence、Workflow、Async 与
+  Safety 固定验收数据集；每项只引用真实 pytest 节点。
+- `run_v3_final_evaluation.py`：逐指标执行 Manifest，以本次 JUnit 结果计算分子、分母、
+  成功率、平均延迟和 P95；同时通过隔离数据库运行固定 Trace workload 统计 Tool/LLM
+  调用次数。
+- `v3_requirement_traceability.json`：F01-F12、O01-O10、R201-R210、WF01-WF10、
+  S01-S10 到既有测试的机器可读映射。
+- `run_v3_requirement_tests.py`：按正式类别去重并执行映射中的真实测试。
+- `v3_final_results.json`：V3.22 本次实际运行结果快照，不作为后续运行的预设期待值。
+
+运行命令：
+
+```bash
+python evals/run_v3_final_evaluation.py
+python evals/run_v3_requirement_tests.py
+```
+
+这里的 accuracy/rate 分母是 Manifest 中的固定、受控验收案例，不代表开放世界生产数据的
+统计精度。自然语言表达质量继续人工复核。Token usage 或价格不可获得时输出
+`unavailable`，不以 0 伪装为真实用量或成本。

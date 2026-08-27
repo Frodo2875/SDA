@@ -1,6 +1,7 @@
 """Resolve persisted Evidence 2.0 IDs into bounded, read-only previews."""
 
 import re
+import time
 from typing import Any
 
 from openpyxl import load_workbook
@@ -21,6 +22,7 @@ def locate_evidence(
     """Return a trusted locator and preview for one actual answer Evidence."""
     clean_id = str(evidence_id or "").strip()
     trace_session = str(session_id or "evidence-preview")[:128]
+    started = time.perf_counter()
     if not EVIDENCE_ID_PATTERN.fullmatch(clean_id):
         return _location_failure(
             clean_id, trace_session, "INVALID_EVIDENCE_ID", "Evidence 标识无效"
@@ -56,7 +58,23 @@ def locate_evidence(
             "EVIDENCE_PREVIEW_UNAVAILABLE",
             "来源存在，但当前无法打开对应预览位置",
         )
-    return success(location, "Evidence 原文定位成功")
+    result = success(location, "Evidence 原文定位成功")
+    record_trace(
+        session_id=trace_session,
+        event_type="evidence_location",
+        tool_name="locate_evidence",
+        arguments={"evidence_id": clean_id},
+        result=result,
+        duration_ms=max(0, int((time.perf_counter() - started) * 1000)),
+        result_status="success",
+        metrics={
+            "evidence_id": clean_id,
+            "location_type": location.get("location_type"),
+            "page_no": location.get("page_no"),
+            "has_bbox": location.get("bbox") is not None,
+        },
+    )
+    return result
 
 
 def _locate_document(

@@ -596,7 +596,10 @@ async def _run_agent_core(
                 output_tokens=usage["output_tokens"],
                 total_tokens=usage["total_tokens"],
                 cost_usd=usage["cost_usd"],
-                metrics={"pricing_configured": usage["pricing_configured"]},
+                metrics={
+                    "pricing_configured": usage["pricing_configured"],
+                    "usage_available": usage["usage_available"],
+                },
             )
         except Exception:
             pass

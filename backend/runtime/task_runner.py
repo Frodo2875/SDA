@@ -873,6 +873,12 @@ def _record_step_trace(
             tool_name=step.get("tool_name"), arguments=arguments, result=result,
             duration_ms=duration_ms, retry_count=retry_count,
             result_status=result_status, error_code=error_code,
+            metrics={
+                "workflow_id": step.get("workflow_id"),
+                "node_id": step.get("node_id") or step.get("step_id"),
+                "node_type": step.get("node_type") or "tool",
+                "step_type": step.get("step_type"),
+            },
         )
     except Exception:
         # Trace remains non-authoritative and must not alter Task execution.

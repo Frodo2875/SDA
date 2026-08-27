@@ -59,6 +59,13 @@ def record_trace(
 def llm_usage_metrics(usage: Any) -> dict[str, Any]:
     """Normalize provider usage and estimate cost only from configured rates."""
     data = usage if isinstance(usage, dict) else {}
+    usage_available = any(
+        key in data
+        for key in (
+            "prompt_tokens", "input_tokens", "completion_tokens",
+            "output_tokens", "total_tokens",
+        )
+    )
     input_tokens = _token_value(data, "prompt_tokens", "input_tokens")
     output_tokens = _token_value(data, "completion_tokens", "output_tokens")
     total_tokens = max(
@@ -76,6 +83,7 @@ def llm_usage_metrics(usage: Any) -> dict[str, Any]:
         "total_tokens": total_tokens,
         "cost_usd": round(cost_usd, 10),
         "pricing_configured": input_rate > 0 or output_rate > 0,
+        "usage_available": usage_available,
     }
 
 
@@ -116,8 +124,24 @@ def _runtime_metrics(tool_name: str | None, result: Any) -> dict[str, Any]:
         "keyword_candidate_count": int(data.get("keyword_candidate_count") or 0),
         "vector_candidate_count": int(data.get("vector_candidate_count") or 0),
         "top_n_count": int(data.get("top_n_count") or 0),
+        "top_k_count": int(data.get("top_k_count") or len(evidence)),
+        "hybrid_retrieval_duration_ms": _optional_duration(
+            data.get("hybrid_retrieval_duration_ms")
+        ),
+        "rerank_duration_ms": _optional_duration(data.get("rerank_duration_ms")),
+        "evidence_ids": [
+            str(item.get("evidence_id"))
+            for item in evidence
+            if isinstance(item, dict) and item.get("evidence_id")
+        ],
         "top_score": max(scores) if scores else None,
     }
+
+
+def _optional_duration(value: Any) -> int | None:
+    if not isinstance(value, (int, float)):
+        return None
+    return max(0, int(value))
 
 
 def _token_value(data: dict[str, Any], *keys: str) -> int:

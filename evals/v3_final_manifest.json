@@ -1,0 +1,58 @@
+{
+  "ocr_page_success_rate": [
+    "tests/test_ocr_pipeline.py::test_o04_mixed_pdf_only_ocrs_pages_without_text",
+    "tests/test_ocr_pipeline.py::test_o05_o07_page_ledger_partial_success_and_failed_pages",
+    "tests/test_ocr_pipeline.py::test_o08_retry_only_failed_page_preserves_successful_pages"
+  ],
+  "ocr_key_field_accuracy": [
+    "tests/test_ocr_pipeline.py::test_ocr_service_returns_page_text_confidence_and_bbox",
+    "tests/test_ocr_pipeline.py::test_o05_o07_page_ledger_partial_success_and_failed_pages",
+    "tests/test_ocr_pipeline.py::test_o09_o10_low_confidence_evidence_warns_and_failed_page_is_insufficient"
+  ],
+  "table_structure_accuracy": [
+    "tests/test_layout_blocks.py::test_table_and_cells_are_distinct_blocks_and_generate_chunks",
+    "tests/test_layout_blocks.py::test_o08_merged_table_degrades_without_inventing_cells"
+  ],
+  "hybrid_recall_at_k": [
+    "tests/test_rag_v3.py::test_semantic_query_uses_embedding_when_fts_has_no_phrase",
+    "tests/test_rag_v3.py::test_r201_exact_identifier_and_scores_are_preserved",
+    "tests/test_rag_v3.py::test_r203_year_student_and_document_metadata_are_hard_filters"
+  ],
+  "rerank_top_k_hit_rate": [
+    "tests/test_rag_v3.py::test_r204_retrieves_top_n_then_reranks_to_top_k",
+    "tests/test_rag_v3.py::test_rerank_failure_falls_back_to_hybrid_order"
+  ],
+  "evidence_localization_accuracy": [
+    "tests/test_evidence_location_v3.py::test_r206_pdf_location_returns_correct_page_bbox_and_confidence",
+    "tests/test_evidence_location_v3.py::test_r207_excel_location_opens_exact_sheet_row_and_field",
+    "tests/test_evidence_location_v3.py::test_r208_word_location_opens_indexed_paragraph",
+    "tests/test_evidence_location_v3.py::test_r209_location_failure_keeps_safe_message_and_records_trace",
+    "tests/test_evidence_location_v3.py::test_unused_retrieval_source_is_not_exposed_after_evaluation"
+  ],
+  "workflow_success_rate": [
+    "tests/test_workflow_runtime_v3.py::test_wf01_sequential_dependency_gating",
+    "tests/test_workflow_runtime_v3.py::test_wf02_parallel_nodes_overlap_and_aggregate_waits",
+    "tests/test_workflow_runtime_v3.py::test_wf03_wf04_safe_conditional_branches",
+    "tests/test_workflow_runtime_v3.py::test_wf05_approval_blocks_write_and_cancel_preserves_it",
+    "tests/test_workflow_runtime_v3.py::test_wf06_retry_is_bounded_and_persisted_failed",
+    "tests/test_workflow_runtime_v3.py::test_wf07_resume_skips_successful_nodes_and_never_replays_write"
+  ],
+  "resume_success_rate": [
+    "tests/test_workflow_runtime_v3.py::test_wf07_resume_skips_successful_nodes_and_never_replays_write",
+    "tests/test_workflow_runtime_v3.py::test_wf07_changed_file_version_invalidates_related_read_nodes",
+    "tests/test_async_task_runtime_v3.py::test_resume_keeps_checkpoint_and_retry_is_bounded"
+  ],
+  "async_retry_resume_success_rate": [
+    "tests/test_async_task_runtime_v3.py::test_wf10_partial_success_retry_only_failed_pages",
+    "tests/test_async_task_runtime_v3.py::test_resume_keeps_checkpoint_and_retry_is_bounded"
+  ],
+  "prompt_injection_defense_rate": [
+    "tests/test_agent_safety_v3.py::test_s02_ignore_rules_in_rag_chunk_cannot_gain_authority",
+    "tests/test_agent_safety_v3.py::test_s03_delete_instruction_in_document_cannot_call_delete",
+    "tests/test_agent_safety_v3.py::test_s04_json_tool_payload_in_document_remains_data",
+    "tests/test_agent_safety_v3.py::test_s05_ocr_write_instruction_cannot_execute_write"
+  ],
+  "high_risk_approval_trigger_rate": [
+    "tests/test_agent_safety_v3.py::test_s08_high_risk_approval_trigger_rate_is_100_percent"
+  ]
+}

@@ -2,6 +2,7 @@
 
 import math
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from typing import Any, Protocol
 
@@ -57,6 +58,7 @@ def hybrid_retrieve(
     rerank_timeout_seconds: float = RERANK_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """Hard-filter, recall Top-N, rerank Top-N, and return only authoritative Top-K."""
+    retrieval_started = time.perf_counter()
     candidate_limit = max(20, min(100, limit * 4))
     filters = dict(metadata_filters or {})
     keyword_rows = database.search_document_chunks_filtered(
@@ -78,6 +80,7 @@ def hybrid_retrieve(
         )
     except Exception as exc:
         rows = _keyword_fallback(keyword_rows, limit)
+        retrieval_duration_ms = _elapsed_ms(retrieval_started)
         return {
             "rows": rows,
             "retrieval_mode": "keyword_fallback",
@@ -89,11 +92,15 @@ def hybrid_retrieve(
             "keyword_candidate_count": len(keyword_rows),
             "vector_candidate_count": 0,
             "top_n_count": len(keyword_rows),
+            "top_k_count": len(rows),
+            "hybrid_retrieval_duration_ms": retrieval_duration_ms,
+            "rerank_duration_ms": None,
         }
 
     hybrid_candidates = _hybrid_order(_fuse(keyword_rows, vector_rows))[:candidate_limit]
     rerank_fallback = False
     rerank_reason = None
+    rerank_started = time.perf_counter()
     try:
         rows = _run_reranker(
             reranker or LocalReranker(), query, hybrid_candidates,
@@ -105,6 +112,7 @@ def hybrid_retrieve(
         rows = [dict(row) for row in hybrid_candidates[:limit]]
         for row in rows:
             row["retrieval_score"] = row["combined_score"]
+    rerank_duration_ms = _elapsed_ms(rerank_started)
     return {
         "rows": rows,
         "retrieval_mode": "hybrid",
@@ -116,6 +124,9 @@ def hybrid_retrieve(
         "keyword_candidate_count": len(keyword_rows),
         "vector_candidate_count": len(vector_rows),
         "top_n_count": len(hybrid_candidates),
+        "top_k_count": len(rows),
+        "hybrid_retrieval_duration_ms": _elapsed_ms(retrieval_started),
+        "rerank_duration_ms": rerank_duration_ms,
     }
 
 
@@ -279,3 +290,8 @@ def _cosine(left: list[float], right: list[float]) -> float:
 def _terms(text: str) -> set[str]:
     normalized = str(text).casefold()
     return set(re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]", normalized))
+
+
+def _elapsed_ms(started: float) -> int:
+    """Return an observed non-negative duration without inventing precision."""
+    return max(0, int((time.perf_counter() - started) * 1000))

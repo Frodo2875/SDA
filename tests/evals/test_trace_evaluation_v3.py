@@ -77,6 +77,10 @@ def test_tool_duration_and_retrieval_metrics_are_persisted() -> None:
         "keyword_candidate_count": 0,
         "vector_candidate_count": 0,
         "top_n_count": 0,
+        "top_k_count": 1,
+        "hybrid_retrieval_duration_ms": None,
+        "rerank_duration_ms": None,
+        "evidence_ids": ["ev-1"],
         "top_score": 0.82,
     }
     assert summary["tool"]["average_duration_ms"] == 37
@@ -143,13 +147,18 @@ def test_workflow_status_is_summarized_from_task_steps() -> None:
     result = evaluate_task(task["task_id"])
 
     assert result["ok"] is True
-    assert result["data"]["workflow"] == {
+    workflow = dict(result["data"]["workflow"])
+    timing = workflow.pop("timing")
+    assert workflow == {
         "task_id": task["task_id"],
         "task_status": "success",
         "total_steps": 1,
         "status_counts": {"success": 1},
         "completion_rate": 1.0,
+        "retry_count": 0,
     }
+    assert set(timing) == {"queue_time_ms", "execution_time_ms", "total_duration_ms"}
+    assert all(value is None or value >= 0 for value in timing.values())
     assert result["data"]["tool"]["total_duration_ms"] == 25
 
 
@@ -173,11 +182,13 @@ async def test_llm_usage_and_configured_cost_are_recorded(
         "input_tokens": 100,
         "output_tokens": 20,
         "total_tokens": 120,
+        "availability": "available",
     }
     assert summary["cost"] == {
         "currency": "USD",
         "total_cost": 0.00028,
         "pricing_configured": True,
+        "availability": "available",
     }
 
 
@@ -192,6 +203,36 @@ def test_missing_pricing_does_not_invent_cost(
     assert usage["total_tokens"] == 15
     assert usage["cost_usd"] == 0.0
     assert usage["pricing_configured"] is False
+    assert usage["usage_available"] is True
+
+
+def test_unavailable_token_and_cost_are_explicit_and_latency_has_p95() -> None:
+    record_trace(
+        session_id="trace-eval-unavailable",
+        event_type="document_stage",
+        tool_name="ocr_document",
+        arguments={"file_id": "file-1"},
+        result={"status": "partial_success"},
+        duration_ms=41,
+        result_status="partial_success",
+        metrics={
+            "stage": "ocr",
+            "total_pages": 2,
+            "successful_pages": 1,
+            "failed_pages": 1,
+        },
+    )
+    summary = evaluate_session("trace-eval-unavailable")["data"]
+
+    assert summary["tokens"]["availability"] == "unavailable"
+    assert summary["cost"]["availability"] == "unavailable"
+    assert summary["latency"] == {
+        "sample_count": 1,
+        "average_duration_ms": 41.0,
+        "p95_duration_ms": 41,
+        "max_duration_ms": 41,
+    }
+    assert summary["stages"]["ocr"]["latest_metrics"]["failed_pages"] == 1
 
 
 def test_eval_cases_publish_success_and_error_rates() -> None:

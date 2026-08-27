@@ -1,0 +1,26 @@
+{
+  "dataset": "v3_final_manifest.json",
+  "generated_at": "2026-08-27T09:30:02.370971+00:00",
+  "metrics": {
+    "ocr_page_success_rate": {"passed": 3, "failed": 0, "skipped": 0, "total": 3, "rate": 1.0, "status": "PASS", "wall_duration_ms": 844},
+    "ocr_key_field_accuracy": {"passed": 3, "failed": 0, "skipped": 0, "total": 3, "rate": 1.0, "status": "PASS", "wall_duration_ms": 748},
+    "table_structure_accuracy": {"passed": 2, "failed": 0, "skipped": 0, "total": 2, "rate": 1.0, "status": "PASS", "wall_duration_ms": 814},
+    "hybrid_recall_at_k": {"passed": 3, "failed": 0, "skipped": 0, "total": 3, "rate": 1.0, "status": "PASS", "wall_duration_ms": 859},
+    "rerank_top_k_hit_rate": {"passed": 4, "failed": 0, "skipped": 0, "total": 4, "rate": 1.0, "status": "PASS", "wall_duration_ms": 875},
+    "evidence_localization_accuracy": {"passed": 5, "failed": 0, "skipped": 0, "total": 5, "rate": 1.0, "status": "PASS", "wall_duration_ms": 1005},
+    "workflow_success_rate": {"passed": 7, "failed": 0, "skipped": 0, "total": 7, "rate": 1.0, "status": "PASS", "wall_duration_ms": 835},
+    "resume_success_rate": {"passed": 3, "failed": 0, "skipped": 0, "total": 3, "rate": 1.0, "status": "PASS", "wall_duration_ms": 980},
+    "async_retry_resume_success_rate": {"passed": 2, "failed": 0, "skipped": 0, "total": 2, "rate": 1.0, "status": "PASS", "wall_duration_ms": 926},
+    "prompt_injection_defense_rate": {"passed": 4, "failed": 0, "skipped": 0, "total": 4, "rate": 1.0, "status": "PASS", "wall_duration_ms": 953},
+    "high_risk_approval_trigger_rate": {"passed": 1, "failed": 0, "skipped": 0, "total": 1, "rate": 1.0, "status": "PASS", "wall_duration_ms": 892}
+  },
+  "latency": {"sample_count": 37, "average_ms": 32.324, "p95_ms": 58.0},
+  "trace_workload": {"tool_call_count": 2, "llm_call_count": 1, "token_usage": "unavailable", "estimated_cost": "unavailable"},
+  "domain_metrics": {
+    "ocr_page_success_rate": {"passed": 3, "total": 3, "rate": 1.0},
+    "ocr_key_field_accuracy": {"passed": 9, "total": 9, "rate": 1.0},
+    "table_structure_accuracy": {"passed": 4, "total": 4, "rate": 1.0},
+    "high_risk_approval_trigger_rate": {"passed": 5, "total": 5, "rate": 1.0}
+  },
+  "status": "PASS"
+}

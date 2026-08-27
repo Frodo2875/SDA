@@ -579,3 +579,48 @@ Safety/Confirmation/Trace focused regression: 35 passed, 0 failed
 pytest: 308 passed, 0 failed, 0 skipped, 17.04s
 V1/V2/V3 regression: PASS
 ```
+
+## V3.22 Evaluation, Trace and Final Acceptance
+
+### Trace / Observability
+
+- 保留现有 Trace 表和 `metrics_json`，未增加 migration。
+- Workflow Step Trace 增加 `workflow_id/node_id/node_type/step_type`；Async Trace 增加
+  实际 queue/execution/total duration 与 `progress_detail`。
+- OCR/Layout/Index 增加实际阶段耗时及成功/失败页、Block、候选/活动 Chunk 数；Hybrid
+  Retrieval 增加整体耗时、candidate count、Rerank 耗时、Top-K 和最终 Evidence IDs。
+- Evidence 成功定位与失败定位均记录状态、耗时和 locator 类型；Error code 保持可聚合。
+- Evaluation summary 增加平均/P95 latency、Tool/LLM call count、阶段聚合、Retry、Error
+  统计。Token/Cost 只有 API usage/价格可用时才标记 available，否则明确 unavailable。
+- Trace 继续只记录参数/结果摘要、状态和可观察指标，不记录 Chain-of-Thought。
+
+### Repeatable Evaluation
+
+- 新增 `evals/v3_final_manifest.json` 与 `run_v3_final_evaluation.py`，逐指标运行真实 pytest
+  节点并从 JUnit 结果计算比率和实际 latency。
+- 增加隔离的生产 Service fixture，直接计算 OCR page/key-field、Table Cell 和五类 HIGH
+  Risk Approval 指标；Tool/LLM 次数通过真实 Trace/Evaluation Service 统计。
+- 新增 `evals/v3_requirement_traceability.json` 与 runner，正式映射 F01-F12、O01-O10、
+  R201-R210、WF01-WF10、S01-S10，不复制旧测试。
+- 新增 `docs/V3_REQUIREMENT_TEST_TRACEABILITY.md` 与
+  `docs/V3_FINAL_ACCEPTANCE.md`；V3.12 原始审计历史未修改。
+
+### Actual Results
+
+```text
+Full pytest: 313 passed, 0 failed, 0 skipped, 19.09s
+V1 Regression: 68 passed, 1 deselected, PASS
+V2 Regression manifest: 60 passed, PASS
+Existing Eval suite: 18 passed, PASS
+F formal tests: 18 passed, PASS
+O formal tests: 14 passed, PASS
+R formal tests: 14 passed, PASS
+WF formal tests: 12 passed, PASS
+S formal tests: 10 passed, PASS
+V3 Final Evaluation: PASS
+BLOCKER: 0
+HIGH: 0
+MEDIUM: 3 non-P0 operational/quality limitations
+V3 formal P0 coverage: 52/52 = 100%
+V3 READY TO FREEZE: YES
+```
