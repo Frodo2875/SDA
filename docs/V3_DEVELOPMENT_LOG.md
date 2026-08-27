@@ -333,3 +333,80 @@ pytest: 269 passed, 0 failed, 0 skipped, 15.68s
 Layout Block tests: 6 passed, PASS
 V1/V2/V3 regression: included in full pytest, PASS
 ```
+
+## V3.18 RAG 2.0 Retrieval Reliability
+
+### Retrieval Pipeline
+
+```text
+Query
+  → validated hard Metadata Filter
+  → FTS5/BM25 Keyword + Vector recall
+  → RRF Hybrid Fusion
+  → bounded Top-N candidates
+  → timeout-bounded Rerank
+  → Top-K
+  → Evidence from final authoritative candidates only
+```
+
+- 保留 SQLite FTS5/BM25 和现有向量接口，没有大规模修改文档解析。
+- 默认 `LocalHashEmbeddingProvider` 继续真实计算 query/document vectors；可替换 Provider
+  仍可注入真实语义 backend。
+- Vector backend 失败时明确返回 `retrieval_mode=keyword_fallback`、
+  `VECTOR_RETRIEVAL_FAILED` 和实际原因，不伪装为 Hybrid。
+
+### Hard Metadata Filter
+
+- `RetrievalScope` 新增并校验：`slide`、`year`、`student_id`、
+  `document_metadata`；原 `file_id`、`file_ids`、`file_type`、`page` 保持兼容。
+- file/file set/file type 在候选文件阶段硬过滤；page/slide 在 Keyword SQL 和 Vector
+  候选阶段同时硬过滤。
+- year、student_id 和 document metadata 使用受参数约束的 SQLite JSON 条件过滤 Keyword，
+  并在 Vector 候选进入 embedding 前执行相同精确过滤。
+- Query 仅包含一个明确四位年份时，Python 将其转换为 year constraint；显式 scope year
+  优先。2026 查询不会召回或引用 metadata year=2025 的规则。
+- metadata 字段名必须满足后端白名单格式，值只能是标量，不接受 SQL 或表达式。
+
+### Hybrid Scores
+
+- Keyword 和 Vector 各自真实参与召回，并保留 `retrieval_sources`。
+- 最终候选保存 `keyword_score`、`vector_score`、`combined_score`、
+  `rerank_score` 和 `final_score`。
+- Retrieval 响应记录 keyword/vector candidate count 与 `top_n_count`，便于确认双路召回
+  和 Top-N 边界。
+
+### Rerank Reliability
+
+- Reranker 只接收 Hybrid Top-N，完成后再截断为 Top-K。
+- Rerank 设置严格 timeout；timeout、exception、非 list、候选数变化、未知/重复
+  chunk_id 或非法 score 均触发安全 fallback。
+- fallback 使用 Hybrid 原始排序并保持查询结果，返回
+  `rerank_fallback=true`、`RERANK_FALLBACK` 和 `fallback_reason`。
+- Rerank 输出只作为排序 ID/score 使用；文本、file/page 和 metadata 始终从原始候选重建，
+  因此不能追加或篡改 Evidence 来源。
+
+### Trace and Evidence
+
+- Retrieval Tool Trace 新增：`fallback_reason`、`rerank_fallback`、
+  `keyword_candidate_count`、`vector_candidate_count` 和 `top_n_count`。
+- Evidence 仅从 rerank 后实际 Top-K rows 创建；未进入最终候选的数据源不会自动追加。
+- 无真实候选时继续返回 `not_found`、空 Evidence 和固定“不足依据”说明。
+
+### 新增测试
+
+- R201：精确标识召回及完整 score contract。
+- R202：语义规则通过真实 Vector Provider 召回（既有测试继续通过）。
+- R203：2025/2026 年规则、student_id 和 document metadata 强过滤。
+- R204：先召回 Top-N，再 rerank 到 Top-K。
+- R205：多 Evidence 只对应最终候选。
+- R210：无结果时 Evidence 为空且不编造。
+- Rerank exception、invalid result、timeout 均回退 Hybrid 原始排序。
+- Trace 持久化 rerank fallback 和 fallback reason。
+
+### 测试结果
+
+```text
+Retrieval Eval and focused regression: 41 passed, 0 failed, 2.99s
+pytest: 278 passed, 0 failed, 0 skipped, 14.07s
+V1/V2/V3 regression: PASS
+```

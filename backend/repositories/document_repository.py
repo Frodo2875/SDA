@@ -152,14 +152,18 @@ class DocumentRepository:
         query: str,
         limit: int,
         page_no: int | None = None,
+        metadata_filters: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Run the existing FTS5 retrieval with an optional page predicate."""
-        if page_no is None:
+        if page_no is None and not metadata_filters:
             return self.search(file_ids=file_ids, query=query, limit=limit)
         if not file_ids:
             return []
         placeholders = ",".join("?" for _ in file_ids)
         quoted_query = f'"{query.replace(chr(34), chr(34) * 2)}"'
+        metadata_clause, metadata_parameters = self._metadata_clause(
+            metadata_filters or {}, alias="c"
+        )
         sql = f"""
             SELECT c.*, bm25(document_chunks_fts) AS rank
             FROM document_chunks_fts
@@ -168,20 +172,25 @@ class DocumentRepository:
             WHERE document_chunks_fts MATCH ?
               AND c.file_id IN ({placeholders})
               AND c.page_no = ?
+              {metadata_clause}
             ORDER BY rank, c.chunk_index
             LIMIT ?
         """
         try:
             with self._connection_factory() as connection:
-                rows = connection.execute(
-                    sql, (quoted_query, *file_ids, page_no, limit)
-                ).fetchall()
+                parameters: tuple[Any, ...] = (quoted_query, *file_ids)
+                if page_no is not None:
+                    parameters = (*parameters, page_no)
+                parameters = (*parameters, *metadata_parameters, limit)
+                query_sql = sql if page_no is not None else sql.replace("AND c.page_no = ?", "")
+                rows = connection.execute(query_sql, parameters).fetchall()
         except sqlite3.OperationalError:
             return self._search_like(
                 file_ids=file_ids,
                 query=query,
                 limit=limit,
                 page_no=page_no,
+                metadata_filters=metadata_filters,
             )
         results = []
         for row in rows:
@@ -197,20 +206,26 @@ class DocumentRepository:
         query: str,
         limit: int,
         page_no: int | None = None,
+        metadata_filters: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         placeholders = ",".join("?" for _ in file_ids)
         escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         page_clause = " AND page_no = ?" if page_no is not None else ""
+        metadata_clause, metadata_parameters = self._metadata_clause(
+            metadata_filters or {}, alias=None
+        )
         sql = f"""
             SELECT *, 0.0 AS rank FROM document_chunks
             WHERE file_id IN ({placeholders})
               AND chunk_text LIKE ? ESCAPE '\\'
               {page_clause}
+              {metadata_clause}
             ORDER BY chunk_index LIMIT ?
         """
         parameters: tuple[Any, ...] = (*file_ids, f"%{escaped}%")
         if page_no is not None:
             parameters = (*parameters, page_no)
+        parameters = (*parameters, *metadata_parameters)
         parameters = (*parameters, limit)
         with self._connection_factory() as connection:
             rows = connection.execute(sql, parameters).fetchall()
@@ -220,6 +235,21 @@ class DocumentRepository:
             item["rank"] = float(row["rank"])
             results.append(item)
         return results
+
+    @staticmethod
+    def _metadata_clause(
+        filters: dict[str, Any], *, alias: str | None
+    ) -> tuple[str, tuple[Any, ...]]:
+        prefix = f"{alias}." if alias else ""
+        clauses = []
+        parameters: list[Any] = []
+        for key, value in filters.items():
+            clauses.append(
+                f"AND COALESCE(json_extract({prefix}metadata_json, ?), "
+                f"json_extract({prefix}metadata_json, ?)) = ?"
+            )
+            parameters.extend((f"$.{key}", f"$.document_metadata.{key}", value))
+        return "\n".join(clauses), tuple(parameters)
 
     @staticmethod
     def _delete(connection: sqlite3.Connection, file_id: str) -> None:

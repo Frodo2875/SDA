@@ -106,8 +106,13 @@ def _runtime_metrics(tool_name: str | None, result: Any) -> dict[str, Any]:
     return {
         "retrieval_mode": data.get("retrieval_mode"),
         "fallback_used": bool(data.get("fallback_used")),
+        "fallback_reason": data.get("fallback_reason"),
+        "rerank_fallback": bool(data.get("rerank_fallback")),
         "retrieval_status": data.get("status"),
         "result_count": len(evidence),
+        "keyword_candidate_count": int(data.get("keyword_candidate_count") or 0),
+        "vector_candidate_count": int(data.get("vector_candidate_count") or 0),
+        "top_n_count": int(data.get("top_n_count") or 0),
         "top_score": max(scores) if scores else None,
     }
 

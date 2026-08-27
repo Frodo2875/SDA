@@ -218,11 +218,12 @@ def retrieve_document(
             and bool(record["queryable"])
         ):
             eligible[record["file_id"]] = record
-    if arguments.scope.page is not None:
+    requested_page = arguments.scope.page or arguments.scope.slide
+    if requested_page is not None:
         failed_page_files = [
             file_id for file_id in eligible
             if (
-                (database.get_document_ocr_page(file_id, arguments.scope.page) or {}).get("status")
+                (database.get_document_ocr_page(file_id, requested_page) or {}).get("status")
                 == "failed"
             )
         ]
@@ -233,7 +234,7 @@ def retrieve_document(
                     "status": "insufficient_evidence",
                     "query": arguments.query,
                     "evidence": [],
-                    "failed_page": arguments.scope.page,
+                    "failed_page": requested_page,
                     "failed_page_files": failed_page_files,
                     "result_summary": message,
                 },
@@ -241,11 +242,18 @@ def retrieve_document(
             )
             result.update({"evidence": [], "warnings": ["OCR_FAILED_PAGE"], "result_summary": message})
             return result
+    metadata_filters = dict(arguments.scope.document_metadata or {})
+    requested_year = arguments.scope.year or _explicit_year_constraint(arguments.query)
+    if requested_year is not None:
+        metadata_filters["year"] = requested_year
+    if arguments.scope.student_id is not None:
+        metadata_filters["student_id"] = arguments.scope.student_id
     retrieval = hybrid_retrieve(
         file_ids=list(eligible),
         query=arguments.query,
         limit=arguments.top_k,
-        page_no=arguments.scope.page,
+        page_no=arguments.scope.page or arguments.scope.slide,
+        metadata_filters=metadata_filters,
     )
     rows = retrieval["rows"]
     evidence = []
@@ -307,6 +315,13 @@ def retrieve_document(
                 "evidence": [],
                 "retrieval_mode": retrieval["retrieval_mode"],
                 "fallback_used": retrieval["fallback_used"],
+                "rerank_fallback": retrieval["rerank_fallback"],
+                "fallback_reason": retrieval["fallback_reason"],
+                "metadata_filters": metadata_filters,
+                "keyword_candidate_count": retrieval["keyword_candidate_count"],
+                "vector_candidate_count": retrieval["vector_candidate_count"],
+                "top_n_count": retrieval["top_n_count"],
+                "score_details": [],
                 "result_summary": NO_EVIDENCE_MESSAGE,
             },
             NO_EVIDENCE_MESSAGE,
@@ -326,6 +341,23 @@ def retrieve_document(
             "evidence": evidence,
             "retrieval_mode": retrieval["retrieval_mode"],
             "fallback_used": retrieval["fallback_used"],
+            "rerank_fallback": retrieval["rerank_fallback"],
+            "fallback_reason": retrieval["fallback_reason"],
+            "metadata_filters": metadata_filters,
+            "keyword_candidate_count": retrieval["keyword_candidate_count"],
+            "vector_candidate_count": retrieval["vector_candidate_count"],
+            "top_n_count": retrieval["top_n_count"],
+            "score_details": [
+                {
+                    "chunk_id": row["chunk_id"],
+                    "keyword_score": row.get("keyword_score", 0.0),
+                    "vector_score": row.get("vector_score", 0.0),
+                    "combined_score": row.get("combined_score", 0.0),
+                    "rerank_score": row.get("rerank_score"),
+                    "final_score": row.get("retrieval_score"),
+                }
+                for row in rows
+            ],
             "result_summary": f"找到 {len(evidence)} 条材料依据",
         },
         "文档检索完成",
@@ -342,6 +374,14 @@ def retrieve_document(
         }
     )
     return result
+
+
+def _explicit_year_constraint(query: str) -> int | None:
+    years = {
+        int(value) for value in re.findall(r"(?<!\d)(?:19|20)\d{2}(?!\d)", query)
+        if 1900 <= int(value) <= 2100
+    }
+    return next(iter(years)) if len(years) == 1 else None
 
 
 def _load_pdf_pages(path: Path) -> list[tuple[int, str]]:

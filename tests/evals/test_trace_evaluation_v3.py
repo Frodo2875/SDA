@@ -70,14 +70,54 @@ def test_tool_duration_and_retrieval_metrics_are_persisted() -> None:
     assert metrics == {
         "retrieval_mode": "hybrid",
         "fallback_used": False,
+        "fallback_reason": None,
+        "rerank_fallback": False,
         "retrieval_status": "found",
         "result_count": 1,
+        "keyword_candidate_count": 0,
+        "vector_candidate_count": 0,
+        "top_n_count": 0,
         "top_score": 0.82,
     }
     assert summary["tool"]["average_duration_ms"] == 37
     assert summary["tool"]["success_rate"] == 1.0
     assert summary["tool"]["error_rate"] == 0.0
     assert summary["retrieval"]["average_top_score"] == 0.82
+
+
+def test_rerank_fallback_reason_is_persisted_in_trace_metrics() -> None:
+    record_trace(
+        session_id="trace-eval-rerank-fallback",
+        event_type="tool_execution",
+        tool_name="retrieve_document",
+        arguments={"query": "2026年奖学金办法"},
+        result={
+            "ok": True,
+            "data": {
+                "status": "found",
+                "retrieval_mode": "hybrid",
+                "fallback_used": True,
+                "rerank_fallback": True,
+                "fallback_reason": "RERANK_TIMEOUT",
+                "keyword_candidate_count": 8,
+                "vector_candidate_count": 7,
+                "top_n_count": 10,
+                "evidence": [{"evidence_id": "ev-rerank", "score": 0.7}],
+            },
+            "error_code": None,
+            "message": "使用 Hybrid 原始排序完成检索",
+        },
+        duration_ms=25,
+        result_status="success",
+    )
+    metrics = json.loads(
+        database.get_session_trace_records("trace-eval-rerank-fallback")[0]["metrics_json"]
+    )
+    assert metrics["rerank_fallback"] is True
+    assert metrics["fallback_reason"] == "RERANK_TIMEOUT"
+    assert metrics["keyword_candidate_count"] == 8
+    assert metrics["vector_candidate_count"] == 7
+    assert metrics["top_n_count"] == 10
 
 
 def test_workflow_status_is_summarized_from_task_steps() -> None:

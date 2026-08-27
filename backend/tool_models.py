@@ -61,6 +61,10 @@ class RetrievalScope(ToolArguments):
     file_ids: list[str] | None = None
     file_type: Literal["excel", "word", "pdf"] | None = None
     page: int | None = Field(default=None, ge=1)
+    slide: int | None = Field(default=None, ge=1)
+    year: int | None = Field(default=None, ge=1900, le=2100)
+    student_id: str | None = Field(default=None, min_length=1, max_length=64)
+    document_metadata: dict[str, str | int | float | bool] | None = None
 
     @field_validator("file_ids")
     @classmethod
@@ -79,6 +83,16 @@ class RetrievalScope(ToolArguments):
     def validate_scope(self) -> "RetrievalScope":
         if self.file_id is not None and self.file_ids is not None:
             raise ValueError("file_id 与 file_ids 只能使用一个")
+        if self.page is not None and self.slide is not None and self.page != self.slide:
+            raise ValueError("page 与 slide 不能指定不同位置")
+        if self.document_metadata is not None:
+            if not self.document_metadata or len(self.document_metadata) > 20:
+                raise ValueError("document_metadata 必须包含 1 到 20 个字段")
+            if any(
+                not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", key)
+                for key in self.document_metadata
+            ):
+                raise ValueError("document_metadata 包含非法字段名")
         return self
 
 
