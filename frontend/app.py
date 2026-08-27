@@ -28,6 +28,8 @@ def initialize_state() -> None:
         "workspace_selected_file_id": None,
         "known_tasks": {},
         "latest_evidence": [],
+        "show_document_workspace": True,
+        "show_insight_panel": True,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -178,21 +180,37 @@ st.markdown('<p class="app-kicker">学生材料智能文档助手 · V3 Workspac
 st.title("学生材料智能文档助手")
 st.caption("Document Workspace · Agent Chat · Evidence Preview · Task Center")
 
-workspace_column, chat_column, insight_column = st.columns(
-    [1.15, 2.0, 1.15], gap="large"
-)
+visibility_controls = st.columns([1, 1, 4], gap="small")
+visibility_controls[0].toggle("显示左栏", key="show_document_workspace")
+visibility_controls[1].toggle("显示右栏", key="show_insight_panel")
 
-with workspace_column:
-    render_file_panel(
-        files=st.session_state.files,
-        session_id=st.session_state.session_id,
-        uploader_version=st.session_state.uploader_version,
-        upload_notice=st.session_state.upload_notice,
-        files_error=st.session_state.files_error,
-        on_upload=upload_files,
-        on_refresh=lambda: (refresh_files(), st.rerun()),
-        on_version_action=add_version_action,
+show_workspace = st.session_state.show_document_workspace
+show_insight = st.session_state.show_insight_panel
+workspace_column = None
+insight_column = None
+if show_workspace and show_insight:
+    workspace_column, chat_column, insight_column = st.columns(
+        [1.15, 2.0, 1.15], gap="large"
     )
+elif show_workspace:
+    workspace_column, chat_column = st.columns([1.15, 3.15], gap="large")
+elif show_insight:
+    chat_column, insight_column = st.columns([3.15, 1.15], gap="large")
+else:
+    chat_column = st.container()
+
+if workspace_column is not None:
+    with workspace_column:
+        render_file_panel(
+            files=st.session_state.files,
+            session_id=st.session_state.session_id,
+            uploader_version=st.session_state.uploader_version,
+            upload_notice=st.session_state.upload_notice,
+            files_error=st.session_state.files_error,
+            on_upload=upload_files,
+            on_refresh=lambda: (refresh_files(), st.rerun()),
+            on_version_action=add_version_action,
+        )
 
 with chat_column:
     st.subheader("Agent Chat")
@@ -205,10 +223,11 @@ with chat_column:
         submit_message(prompt.strip())
         st.rerun()
 
-with insight_column:
-    render_evidence_preview(st.session_state.latest_evidence)
-    st.divider()
-    render_task_center(
-        list(st.session_state.known_tasks.values()),
-        on_refresh=lambda: (refresh_tasks(), st.rerun()),
-    )
+if insight_column is not None:
+    with insight_column:
+        render_evidence_preview(st.session_state.latest_evidence)
+        st.divider()
+        render_task_center(
+            list(st.session_state.known_tasks.values()),
+            on_refresh=lambda: (refresh_tasks(), st.rerun()),
+        )

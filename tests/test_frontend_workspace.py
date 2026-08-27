@@ -186,8 +186,23 @@ def test_streamlit_page_renders_three_workspace_areas(monkeypatch) -> None:
     assert not app.exception
     subheaders = {item.value for item in app.subheader}
     assert {"Document Workspace", "Agent Chat", "Evidence Preview", "Task Center"} <= subheaders
+    assert [toggle.label for toggle in app.toggle] == ["显示左栏", "显示右栏"]
     assert any(button.label == "上传所选文件" for button in app.button)
     assert any(button.label == "应用搜索 / 筛选 / 排序" for button in app.button)
     assert any(expander.label.startswith("OCR任务") for expander in app.expander)
     assert any(expander.label.startswith("索引任务") for expander in app.expander)
     assert any(expander.label.startswith("Workflow任务") for expander in app.expander)
+
+
+def test_streamlit_side_panels_can_be_hidden_independently(monkeypatch) -> None:
+    monkeypatch.setattr(api_client, "list_files", lambda **kwargs: [_file()])
+    app = AppTest.from_file(PROJECT_ROOT / "frontend" / "app.py").run(timeout=10)
+
+    app.toggle[0].set_value(False).run(timeout=10)
+    subheaders = {item.value for item in app.subheader}
+    assert "Document Workspace" not in subheaders
+    assert {"Agent Chat", "Evidence Preview", "Task Center"} <= subheaders
+
+    app.toggle[1].set_value(False).run(timeout=10)
+    subheaders = {item.value for item in app.subheader}
+    assert subheaders == {"Agent Chat"}
