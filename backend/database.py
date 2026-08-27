@@ -330,6 +330,12 @@ def get_task_record(task_id: str) -> dict[str, Any] | None:
     return TASK_REPOSITORY.get(task_id)
 
 
+def list_task_records_for_session(
+    session_id: str, limit: int = 100
+) -> list[dict[str, Any]]:
+    return TASK_REPOSITORY.list_for_session(session_id, limit)
+
+
 def get_task_step_records(task_id: str) -> list[dict[str, Any]]:
     return TASK_REPOSITORY.steps(task_id)
 
@@ -389,6 +395,10 @@ def update_batch_record(batch_id: str, **values: Any) -> bool:
 
 def get_batch_record(batch_id: str) -> dict[str, Any] | None:
     return BATCH_REPOSITORY.get(batch_id)
+
+
+def get_batch_record_for_task(task_id: str) -> dict[str, Any] | None:
+    return BATCH_REPOSITORY.get_for_task(task_id)
 
 
 def link_batch_action(batch_id: str, action_id: str) -> None:

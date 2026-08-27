@@ -30,6 +30,7 @@ from backend.services.document_index import reindex_document, reprocess_document
 from backend.services.batch_service import BatchArguments, get_batch, run_batch
 from backend.services.file_view import get_file_preview, get_file_view, list_file_views
 from backend.services.evidence_locator import locate_evidence
+from backend.services.task_view import get_task_view, list_task_views
 from backend.runtime.context_manager import get_context
 from backend.schemas import (
     ActionResponse,
@@ -493,8 +494,8 @@ async def api_get_batch(batch_id: str) -> dict[str, Any] | JSONResponse:
 @app.get("/api/tasks/{task_id}", response_model=ToolResponse, tags=["tasks"])
 async def api_get_task(task_id: str) -> dict[str, Any] | JSONResponse:
     """Return observable Task/Step state without model reasoning content."""
-    task = database.get_task_record(task_id)
-    if task is None:
+    view = get_task_view(task_id)
+    if view is None:
         return JSONResponse(
             status_code=404,
             content={
@@ -506,12 +507,22 @@ async def api_get_task(task_id: str) -> dict[str, Any] | JSONResponse:
         )
     return {
         "ok": True,
-        "data": {
-            "task": task,
-            "steps": database.get_task_step_records(task_id),
-        },
+        "data": view,
         "error_code": None,
         "message": "任务状态读取成功",
+    }
+
+
+@app.get("/api/sessions/{session_id}/tasks", response_model=ToolResponse, tags=["tasks"])
+async def api_list_session_tasks(
+    session_id: str, limit: int = Query(default=100, ge=1, le=500)
+) -> dict[str, Any]:
+    """List persisted async and Workflow tasks for the current Task Center."""
+    return {
+        "ok": True,
+        "data": list_task_views(session_id, limit),
+        "error_code": None,
+        "message": "Task Center 列表读取成功",
     }
 
 

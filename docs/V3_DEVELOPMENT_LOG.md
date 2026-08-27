@@ -461,3 +461,77 @@ Migration/API regression: 28 passed, 0 failed, 1.29s
 pytest: 285 passed, 0 failed, 0 skipped, 17.20s
 V1/V2/V3 regression: PASS
 ```
+
+## V3.20 Async Task Runtime and Task Center
+
+### Lightweight Background Runtime
+
+- 继续使用 SQLite Task/Step、FastAPI BackgroundTasks 和项目内受控 worker，未引入
+  Celery、RQ 或外部消息队列。
+- 异步任务入口支持 `ocr`、`layout`、`index`、`reindex`、`batch` 和
+  `workflow`；创建请求先持久化并快速返回 `task_id`，实际工作由后台 worker 执行。
+- 保留旧 `created/progress/message` 字段和 API，并新增展示状态映射：
+  `queued/running/paused/waiting_confirmation/success/partial_success/failed/cancelled`。
+- `layout` 复用现有安全 reprocess，`reindex` 复用 V3.13 原子重索引；未复制文档处理逻辑。
+
+### Real Progress
+
+- 新增结构化 `progress_detail`，只允许三种可核验计数：
+  `processed_pages/total_pages`、`processed_items/total_items`、
+  `completed_nodes/total_nodes`。
+- 百分比只由上述真实计数计算；无法计算时使用 `unit=stage` 展示当前阶段，取消了默认
+  worker 中人为设置的 `10%/90%`。
+- OCR 使用真实页面结果同步成功/失败页；Batch 在每个 item 完成后持久化成功、失败、跳过
+  数量；Workflow 从真实 Step/Node 状态计算完成数。
+
+### Safe Cancel, Retry and Resume
+
+- queued/paused 任务可直接取消；running 任务只登记 `cancellation_requested`，worker 在下一个
+  Python 安全点停止。
+- OCR、Layout、Index、Reindex 的候选构建/原子激活阶段不会被强行中断；取消请求等待原子区
+  结束，再以完整 checkpoint 进入 `cancelled`。
+- Batch 在 item 边界检查取消，并先结束内层 Batch/Task 账本，避免遗留永久 running 状态。
+- `partial_success` 保留成功结果和失败明细；OCR retry 只提交 failed pages，Batch retry 只提交
+  failed items。
+- Resume 保留 checkpoint 和已处理 unit；已有 Workflow resume 继续复用成功 Node，写入 Node
+  不会重复执行。
+- Retry 继续使用既有 `MAX_RETRIES` 上限。
+
+### Task Center Contract
+
+- 新增 session Task 列表 API 和统一 Task View，覆盖 async 与 Workflow Task。
+- 展示：task_id、任务摘要、状态、当前 Step/Node、真实 progress、开始时间、耗时、
+  成功/失败/跳过数量和 error_summary。
+- 提供：取消、重试、恢复、查看详情；按钮由后端 `can_cancel/can_retry/can_resume`
+  契约控制。
+- Task Center 从 SQLite 重新加载当前 session 的任务，不再只依赖浏览器内存。
+
+### 新增测试
+
+- WF08：OCR 异步入队、默认 OCR page pipeline、真实页面进度。
+- WF09：运行中取消等待原子索引阶段安全结束，checkpoint 保持完整。
+- WF10：OCR `partial_success`、失败页明细和仅失败页 retry。
+- waiting_confirmation 映射及当前 Node。
+- Workflow 后台请求入队与确认等待状态。
+- Resume checkpoint、Task View 字段、session Task API、前端 action routes 和进度格式。
+
+### 测试结果
+
+```text
+Async/Task Center focused regression: 48 passed, 0 failed, 5.26s
+V3.20 Async tests: 7 passed, 0 failed, 0.80s
+pytest: 294 passed, 0 failed, 0 skipped, 19.84s
+V1/V2/V3 regression: PASS
+```
+
+### V3.20 HITL State Convergence Fix
+
+- 修复外层异步 Workflow/Batch 在内部 Action 确认或取消后仍停留于
+  `waiting_confirmation` 的问题；等待时持久化 `action_id`，Action 进入
+  `executed/failed/cancelled` 后同步外层 Task、Step、进度、错误和 Trace。
+- 确认成功收敛为 `success`，确认执行失败收敛为 `failed`，用户取消收敛为
+  `cancelled`，取消路径不执行真实副作用。
+- 内部 Batch/Workflow Task 通过 `parent_async_task_id` 关联外层 Task，并从
+  Task Center session 列表隐藏，避免同一个逻辑长任务重复展示；内部账本仍保留。
+- 新增确认成功、确认失败、取消无副作用和 Task Center 子任务去重测试。
+- 修复后全量回归：`298 passed, 0 failed`。

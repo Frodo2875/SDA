@@ -73,6 +73,8 @@ class BatchChatClient(Protocol):
 
 
 EvaluationGenerator = Callable[[dict[str, Any]], str | Awaitable[str]]
+BatchProgressCallback = Callable[[dict[str, Any]], None]
+CancelCheck = Callable[[], None]
 
 
 async def run_batch(
@@ -80,6 +82,10 @@ async def run_batch(
     *,
     client: BatchChatClient | None = None,
     evaluation_generator: EvaluationGenerator | None = None,
+    progress_callback: BatchProgressCallback | None = None,
+    cancel_check: CancelCheck | None = None,
+    skip_target_ids: set[str] | None = None,
+    parent_async_task_id: str | None = None,
 ) -> dict[str, Any]:
     """Run one bounded Batch while persisting progress after every Python item."""
     try:
@@ -92,6 +98,14 @@ async def run_batch(
         return failure("INVALID_BATCH_ARGUMENTS", f"Batch 参数无效：{exc}")
 
     task = _start_batch_task(args)
+    if parent_async_task_id is not None:
+        checkpoint_data = dict(task.get("checkpoint_data") or {})
+        checkpoint_data["parent_async_task_id"] = parent_async_task_id
+        database.update_task_record(
+            task["task_id"],
+            checkpoint_data=checkpoint_data,
+            updated_at=database.utc_now(),
+        )
     batch_id = uuid4().hex
     database.create_batch_record(
         {
@@ -111,16 +125,27 @@ async def run_batch(
     database.update_batch_record(batch_id, status="running")
 
     if args.action_type == "college_count":
-        return _run_college_count(batch_id, task["task_id"], args)
+        return _run_college_count(
+            batch_id, task["task_id"], args,
+            progress_callback=progress_callback, cancel_check=cancel_check,
+        )
 
     targets_result = _student_targets(args.student_ids)
     if not targets_result["ok"]:
         return _fail_batch_start(batch_id, task["task_id"], targets_result)
-    targets = targets_result["data"]
+    skipped_ids = set(skip_target_ids or set())
+    targets = [
+        target for target in targets_result["data"]
+        if target["student_id"] not in skipped_ids
+    ]
     database.update_batch_record(batch_id, total=len(targets))
 
     generated: list[dict[str, str]] = []
+    processed_ids: list[str] = []
+    failed_ids: list[str] = []
     for target in targets:
+        if cancel_check is not None:
+            _cooperative_call(cancel_check, batch_id, task["task_id"])
         if args.action_type == "score_below_threshold":
             outcome = _score_outcome(target, args.threshold, require_no_research=False)
         elif args.action_type == "score_below_threshold_no_research":
@@ -138,6 +163,22 @@ async def run_batch(
                     {"student_id": target["student_id"], "content": outcome["content"]}
                 )
         _persist_item(batch_id, target["student_id"], outcome)
+        processed_ids.append(target["student_id"])
+        if outcome["status"] == "failed":
+            failed_ids.append(target["student_id"])
+        if progress_callback is not None:
+            current = database.get_batch_record(batch_id)
+            _cooperative_call(lambda: progress_callback(
+                {
+                    "processed_items": len(processed_ids),
+                    "total_items": len(targets),
+                    "processed_ids": list(processed_ids),
+                    "failed_ids": list(failed_ids),
+                    "success_count": current["success_count"],
+                    "failed_count": current["failed_count"],
+                    "skipped_count": current["skipped_count"],
+                }
+            ), batch_id, task["task_id"])
 
     if args.action_type == "generate_evaluations":
         return _prepare_batch_write(
@@ -276,7 +317,14 @@ async def _llm_evaluation(context: dict[str, Any], client: BatchChatClient) -> s
     return str(response.get("content") or "").strip()
 
 
-def _run_college_count(batch_id: str, task_id: str, args: BatchArguments) -> dict[str, Any]:
+def _run_college_count(
+    batch_id: str,
+    task_id: str,
+    args: BatchArguments,
+    *,
+    progress_callback: BatchProgressCallback | None = None,
+    cancel_check: CancelCheck | None = None,
+) -> dict[str, Any]:
     result = aggregate_table(
         args.file_id,
         args.sheet,
@@ -287,9 +335,25 @@ def _run_college_count(batch_id: str, task_id: str, args: BatchArguments) -> dic
         return _fail_batch_start(batch_id, task_id, result)
     groups = result["data"].get("results") or []
     database.update_batch_record(batch_id, total=len(groups))
-    for group in groups:
+    for index, group in enumerate(groups, start=1):
+        if cancel_check is not None:
+            _cooperative_call(cancel_check, batch_id, task_id)
         target = str(group.get(args.college_field))
         _persist_item(batch_id, target, _succeeded(f"人数：{group.get('value')}"))
+        if progress_callback is not None:
+            _cooperative_call(lambda: progress_callback(
+                {
+                    "processed_items": index,
+                    "total_items": len(groups),
+                    "processed_ids": [
+                        str(item.get(args.college_field)) for item in groups[:index]
+                    ],
+                    "failed_ids": [],
+                    "success_count": index,
+                    "failed_count": 0,
+                    "skipped_count": 0,
+                }
+            ), batch_id, task_id)
     return _finish_read_batch(batch_id, task_id)
 
 
@@ -404,6 +468,28 @@ def _persist_item(batch_id: str, target_id: str, outcome: dict[str, Any]) -> Non
     )
     batch = database.get_batch_record(batch_id)
     database.update_batch_record(batch_id, **_counts(batch["items"]))
+
+
+def _cooperative_call(
+    callback: Callable[[], None], batch_id: str, task_id: str
+) -> None:
+    """Finalize the inner Batch ledger before propagating a safe-point cancel."""
+    try:
+        callback()
+    except Exception:
+        now = database.utc_now()
+        database.update_batch_record(batch_id, status="skipped", completed_at=now)
+        for step in database.get_task_step_records(task_id):
+            if step["status"] not in {"success", "cancelled"}:
+                database.update_task_step_record(
+                    step["step_id"], status="cancelled", completed_at=now,
+                    result_summary="批量任务在安全点取消",
+                )
+        database.update_task_record(
+            task_id, status="cancelled", current_step=None, next_action=None,
+            updated_at=now, completed_at=now, error_code=None,
+        )
+        raise
 
 
 def _counts(items: list[dict[str, Any]]) -> dict[str, int]:

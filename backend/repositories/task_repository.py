@@ -60,6 +60,18 @@ class TaskRepository:
             ).fetchone()
         return self._task(row) if row is not None else None
 
+    def list_for_session(self, session_id: str, limit: int = 100) -> list[dict[str, Any]]:
+        bounded = max(1, min(int(limit), 500))
+        with self._connection_factory() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM tasks WHERE session_id = ?
+                ORDER BY created_at DESC LIMIT ?
+                """,
+                (session_id, bounded),
+            ).fetchall()
+        return [self._task(row) for row in rows]
+
     def steps(self, task_id: str) -> list[dict[str, Any]]:
         with self._connection_factory() as connection:
             rows = connection.execute(

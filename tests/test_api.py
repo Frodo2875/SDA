@@ -84,6 +84,34 @@ async def test_evidence_location_failure_endpoint_records_trace(
     assert traces.json()["data"][0]["tool_name"] == "locate_evidence"
 
 
+async def test_session_task_center_endpoint_returns_unified_contract(
+    client: httpx.AsyncClient,
+) -> None:
+    record = database.get_file_record("综合评价.docx")
+    from backend.runtime.async_task_runtime import enqueue_async_task
+
+    queued = enqueue_async_task(
+        {
+            "session_id": "api-task-center",
+            "task_type": "index",
+            "payload": {"file_id": record["file_id"]},
+        }
+    )
+    task_id = queued["data"]["task"]["task_id"]
+
+    response = await client.get("/api/sessions/api-task-center/tasks")
+
+    assert response.status_code == 200
+    item = response.json()["data"][0]
+    assert item["task"]["task_id"] == task_id
+    assert item["task"]["display_status"] == "queued"
+    assert {
+        "task_summary", "current_node", "progress_detail", "started_at",
+        "duration_ms", "success_count", "failed_count", "skipped_count",
+        "error_summary", "can_cancel", "can_retry", "can_resume",
+    } <= set(item["task"])
+
+
 async def test_search_student(client: httpx.AsyncClient) -> None:
     response = await client.get("/api/students/search", params={"q": "张三"})
 

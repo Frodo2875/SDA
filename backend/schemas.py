@@ -58,7 +58,7 @@ class AsyncTaskCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     session_id: str = Field(min_length=1, max_length=128)
-    task_type: Literal["ocr", "index", "batch"]
+    task_type: Literal["ocr", "layout", "index", "reindex", "batch", "workflow"]
     payload: dict[str, Any] = Field(default_factory=dict)
 
 

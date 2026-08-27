@@ -15,6 +15,8 @@ from frontend.components.file_panel import (
     filter_files_by_lifecycle,
 )
 from frontend.components.task_center import (
+    format_duration,
+    format_progress,
     task_category,
     task_center_groups,
     task_status,
@@ -225,6 +227,32 @@ def test_task_center_statuses_and_evidence_source_location() -> None:
         "Cell：B4",
         "BBox：[1, 2, 3, 4]",
     ]
+    assert format_progress(
+        {"unit": "pages", "processed_pages": 3, "total_pages": 10}
+    ) == "3 / 10 页"
+    assert format_progress({"unit": "stage", "stage": "正在原子切换"}) == "正在原子切换"
+    assert format_duration(1250) == "1.2s"
+
+
+def test_task_center_api_contract_routes(monkeypatch) -> None:
+    observed: list[tuple[str, str, dict[str, Any]]] = []
+
+    def fake_request(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        observed.append((method, path, kwargs))
+        return {"ok": True, "data": [] if method == "GET" else {"task": {}}}
+
+    monkeypatch.setattr(api_client, "request", fake_request)
+    assert api_client.list_tasks("session-v320") == []
+    api_client.cancel_task("task-1")
+    api_client.retry_task("task-1")
+    api_client.resume_task("task-1")
+
+    assert observed == [
+        ("GET", "/api/sessions/session-v320/tasks", {"params": {"limit": 100}}),
+        ("POST", "/api/tasks/task-1/cancel", {}),
+        ("POST", "/api/tasks/task-1/retry", {}),
+        ("POST", "/api/tasks/task-1/resume", {}),
+    ]
 
 
 def test_streamlit_page_renders_three_workspace_areas(monkeypatch) -> None:
@@ -286,6 +314,7 @@ def test_f11_workspace_delete_shows_target_and_can_be_cancelled(monkeypatch) -> 
         "status": "pending",
     }
     monkeypatch.setattr(api_client, "list_files", lambda **kwargs: [item])
+    monkeypatch.setattr(api_client, "list_tasks", lambda session_id: [])
     monkeypatch.setattr(
         api_client,
         "prepare_delete",

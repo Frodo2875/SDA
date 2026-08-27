@@ -131,6 +131,24 @@ def get_task(task_id: str) -> dict[str, Any]:
     return request("GET", f"/api/tasks/{task_id}").get("data") or {}
 
 
+def list_tasks(session_id: str) -> list[dict[str, Any]]:
+    return request(
+        "GET", f"/api/sessions/{session_id}/tasks", params={"limit": 100}
+    ).get("data") or []
+
+
+def cancel_task(task_id: str) -> dict[str, Any]:
+    return request("POST", f"/api/tasks/{task_id}/cancel")
+
+
+def retry_task(task_id: str) -> dict[str, Any]:
+    return request("POST", f"/api/tasks/{task_id}/retry")
+
+
+def resume_task(task_id: str) -> dict[str, Any]:
+    return request("POST", f"/api/tasks/{task_id}/resume")
+
+
 def get_traces(*, task_id: str | None = None, session_id: str | None = None) -> list[dict[str, Any]]:
     path = f"/api/tasks/{task_id}/traces" if task_id else f"/api/sessions/{session_id}/traces"
     return request("GET", path).get("data") or []

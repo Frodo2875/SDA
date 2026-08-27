@@ -75,11 +75,38 @@ def upload_files(uploaded_files: list[Any]) -> None:
 
 
 def refresh_tasks() -> None:
+    try:
+        persisted = api_client.list_tasks(st.session_state.session_id)
+        for item in persisted:
+            task = item.get("task") or item
+            if task.get("task_id"):
+                st.session_state.known_tasks[task["task_id"]] = item
+    except RuntimeError:
+        pass
     for task_id, previous in list(st.session_state.known_tasks.items()):
         try:
             st.session_state.known_tasks[task_id] = api_client.get_task(task_id)
         except RuntimeError:
             st.session_state.known_tasks[task_id] = previous
+
+
+def handle_task_operation(task_id: str, operation: str) -> None:
+    actions = {
+        "cancel": api_client.cancel_task,
+        "retry": api_client.retry_task,
+        "resume": api_client.resume_task,
+    }
+    try:
+        result = actions[operation](task_id)
+        data = result.get("data") or {}
+        if data:
+            st.session_state.known_tasks[task_id] = data
+        refresh_tasks()
+    except RuntimeError as exc:
+        st.session_state.messages.append(
+            {"role": "assistant", "content": f"任务操作失败：{exc}", "error": True}
+        )
+    st.rerun()
 
 
 def submit_message(message: str) -> None:
@@ -255,4 +282,7 @@ if insight_column is not None:
         render_task_center(
             list(st.session_state.known_tasks.values()),
             on_refresh=lambda: (refresh_tasks(), st.rerun()),
+            on_cancel=lambda task_id: handle_task_operation(task_id, "cancel"),
+            on_retry=lambda task_id: handle_task_operation(task_id, "retry"),
+            on_resume=lambda task_id: handle_task_operation(task_id, "resume"),
         )

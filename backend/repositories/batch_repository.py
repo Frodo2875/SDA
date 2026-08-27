@@ -179,6 +179,14 @@ class BatchRepository:
         result["items"] = [dict(item) for item in items]
         return result
 
+    def get_for_task(self, task_id: str) -> dict[str, Any] | None:
+        with self._connection_factory() as connection:
+            row = connection.execute(
+                "SELECT batch_id FROM batches WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+                (task_id,),
+            ).fetchone()
+        return self.get(row["batch_id"]) if row is not None else None
+
     @staticmethod
     def _validate_status(status: str) -> None:
         if status not in STATUSES:

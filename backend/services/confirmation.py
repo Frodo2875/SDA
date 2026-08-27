@@ -330,6 +330,7 @@ def cancel_action(action_id: str) -> dict[str, Any]:
     )
     _resume_runtime_action(action_id, "cancelled", success=False)
     _finish_batch_action(action_id, "skipped")
+    _synchronize_async_action(action, "cancelled", success=False)
     _clear_context_action(action["session_id"], action_id)
     return _success(_deserialize_action(action), "操作已取消，文件未修改")
 
@@ -372,6 +373,12 @@ def confirm_action(action_id: str) -> dict[str, Any]:
     )
     _finish_batch_action(
         action_id, "success" if action_result["ok"] else "failed"
+    )
+    _synchronize_async_action(
+        action,
+        terminal_status,
+        success=bool(action_result["ok"]),
+        result_message=action_result.get("message"),
     )
     _clear_context_action(action["session_id"], action_id)
     if action_result["ok"]:
@@ -489,6 +496,28 @@ def _finish_batch_action(action_id: str, outcome: str) -> None:
     """Synchronize an optional whole-Batch action without weakening HITL."""
     try:
         database.finish_batch_action(action_id, outcome=outcome)
+    except Exception:
+        return
+
+
+def _synchronize_async_action(
+    action: dict[str, Any],
+    status: str,
+    *,
+    success: bool,
+    result_message: str | None = None,
+) -> None:
+    """Update an optional outer queue task without making HITL depend on it."""
+    try:
+        from backend.runtime.async_task_runtime import synchronize_async_action
+
+        synchronize_async_action(
+            action_id=action["action_id"],
+            session_id=action["session_id"],
+            action_status=status,
+            success_result=success,
+            result_message=result_message,
+        )
     except Exception:
         return
 
