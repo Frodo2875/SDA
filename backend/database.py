@@ -255,6 +255,15 @@ def replace_document_chunks(file_id: str, chunks: list[dict[str, Any]]) -> None:
     DOCUMENT_REPOSITORY.replace_for_file(file_id, chunks)
 
 
+def activate_document_index(file_id: str, chunks: list[dict[str, Any]]) -> str:
+    """Atomically activate validated chunks and the matching QUERYABLE state."""
+    return DOCUMENT_REPOSITORY.activate_for_file(
+        file_id=file_id,
+        chunks=chunks,
+        updated_at=utc_now(),
+    )
+
+
 def get_document_chunks(file_id: str) -> list[dict[str, Any]]:
     return DOCUMENT_REPOSITORY.get_for_file(file_id)
 

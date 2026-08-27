@@ -114,3 +114,19 @@ def test_v3_failure_persists_error_and_resumes_from_checkpoint() -> None:
         "queryable": True,
     }
 
+
+def test_f10_reindexing_state_rejects_illegal_reverse_transition() -> None:
+    record = _uploaded_file("重新索引非法转换.pdf")
+    for state in (
+        FileLifecycleStatus.DETECTING,
+        FileLifecycleStatus.PARSING,
+        FileLifecycleStatus.QUERYABLE,
+        FileLifecycleStatus.REINDEXING,
+    ):
+        assert transition_file_lifecycle(record["file_id"], state)["ok"] is True
+
+    rejected = transition_file_lifecycle(record["file_id"], "UPLOADED")
+
+    assert rejected["ok"] is False
+    assert rejected["error_code"] == "INVALID_FILE_STATE"
+    assert get_file_lifecycle(record["file_id"])["data"]["status"] == "REINDEXING"

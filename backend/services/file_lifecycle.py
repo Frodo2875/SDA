@@ -26,6 +26,7 @@ def transition_file_lifecycle(
     *,
     error_code: str | None = None,
     error_message: str | None = None,
+    failure_stage: str | None = None,
     resume_status: FileLifecycleStatus | None = None,
 ) -> dict[str, Any]:
     """Apply and trace one validated V3.3 lifecycle transition."""
@@ -61,6 +62,7 @@ def transition_file_lifecycle(
             to_status=transition["to_status"],
             error_code=error_code,
             error_message=error_message,
+            failure_stage=failure_stage,
         )
     current = database.get_file_record_by_id(record["file_id"])
     return success(
@@ -83,7 +85,7 @@ def get_file_lifecycle(file_id: str) -> dict[str, Any]:
     if record is None:
         return failure("FILE_NOT_FOUND", "未找到指定文件")
     status = canonical_lifecycle_status(record)
-    last_failure = _latest_failure(record["file_id"]) if status == FileLifecycleStatus.FAILED else None
+    last_failure = _latest_failure(record["file_id"])
     return success(
         {
             "file_id": record["file_id"],
@@ -183,7 +185,9 @@ def _trace_transition(
     to_status: str,
     error_code: str | None,
     error_message: str | None,
+    failure_stage: str | None = None,
 ) -> None:
+    failed_operation = error_code is not None
     record_trace(
         session_id=f"{TRACE_SESSION_PREFIX}{file_id}",
         event_type="file_lifecycle_transition",
@@ -193,26 +197,53 @@ def _trace_transition(
             "from_status": from_status,
             "to_status": to_status,
             "resume_status": from_status if to_status == FileLifecycleStatus.FAILED.value else None,
+            "failure_stage": failure_stage,
         },
         result={
-            "ok": to_status != FileLifecycleStatus.FAILED.value,
+            "ok": not failed_operation,
             "status": to_status,
             "message": error_message or "文件生命周期状态已更新",
             "error_code": error_code,
         },
-        result_status="failed" if to_status == FileLifecycleStatus.FAILED.value else "success",
+        result_status="failed" if failed_operation else "success",
         error_code=error_code,
+    )
+
+
+def record_file_lifecycle_transition(
+    *,
+    file_id: str,
+    from_status: FileLifecycleStatus | str,
+    to_status: FileLifecycleStatus | str,
+) -> None:
+    """Trace a lifecycle switch already committed with another atomic write."""
+    source = (
+        from_status.value
+        if isinstance(from_status, FileLifecycleStatus)
+        else str(from_status).strip().upper()
+    )
+    target = (
+        to_status.value
+        if isinstance(to_status, FileLifecycleStatus)
+        else str(to_status).strip().upper()
+    )
+    _trace_transition(
+        file_id=file_id,
+        from_status=source,
+        to_status=target,
+        error_code=None,
+        error_message=None,
     )
 
 
 def _latest_failure(file_id: str) -> dict[str, Any] | None:
     traces = database.get_session_trace_records(f"{TRACE_SESSION_PREFIX}{file_id}", 100)
     for trace in reversed(traces):
-        if (
-            trace.get("event_type") != "file_lifecycle_transition"
-            or trace.get("result_status") != "failed"
-        ):
+        if trace.get("event_type") != "file_lifecycle_transition":
             continue
+        # A later successful lifecycle transition clears the previous error.
+        if trace.get("result_status") != "failed":
+            return None
         try:
             arguments = json.loads(trace.get("arguments_summary") or "{}")
             result = json.loads(trace.get("result_summary") or "{}")
@@ -222,6 +253,7 @@ def _latest_failure(file_id: str) -> dict[str, Any] | None:
             "error_code": trace.get("error_code"),
             "message": result.get("message"),
             "resume_status": arguments.get("resume_status"),
+            "failure_stage": arguments.get("failure_stage"),
             "created_at": trace.get("created_at"),
         }
     return None

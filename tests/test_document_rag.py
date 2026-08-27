@@ -1,5 +1,6 @@
 """V2.6 R01/R02/R04/R05 PDF, Word chunks, retrieval, and cleanup tests."""
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -10,9 +11,11 @@ from backend.services import document_index
 from backend.services.document_index import (
     index_document,
     parse_pdf,
+    reindex_document,
+    reprocess_document,
     retrieve_document,
 )
-from backend.services.file_lifecycle import delete_uploaded_file
+from backend.services.file_lifecycle import delete_uploaded_file, get_file_lifecycle
 from backend.services.file_upload import save_uploaded_file
 from backend.tools import excel_utils
 from backend.tools.file_tools import list_files
@@ -253,3 +256,159 @@ def test_deleted_word_cleans_chunks_and_failed_delete_restores_them(
     # cleanup_failed files intentionally remain non-queryable until lifecycle repair,
     # while their derived chunks stay synchronized for a later safe resume.
     assert restored_evidence["data"]["status"] == "not_found"
+
+
+def test_f09_reindex_activation_failure_keeps_old_chunks_and_queryability(
+    document_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    file_id, path = _register(document_data_dir, "原子重索引失败.docx", "word", b"")
+    document = Document()
+    document.add_paragraph("旧索引中必须持续可查询的奖学金规则。")
+    document.save(path)
+    assert index_document(file_id)["ok"] is True
+    old_chunks = database.get_document_chunks(file_id)
+
+    replacement = Document()
+    replacement.add_paragraph("候选索引的新规则不应在失败后生效。")
+    replacement.add_paragraph("候选索引第二段用于触发部分写入。")
+    replacement.save(path)
+
+    original_insert = database.DOCUMENT_REPOSITORY._insert
+
+    def fail_after_one_candidate(connection, candidate_file_id, chunks):
+        original_insert(connection, candidate_file_id, chunks[:1])
+        raise sqlite3.OperationalError("simulated activation failure")
+
+    monkeypatch.setattr(database.DOCUMENT_REPOSITORY, "_insert", fail_after_one_candidate)
+    result = reindex_document(file_id)
+
+    assert result["ok"] is False
+    assert result["error_code"] == "INDEX_WRITE_ERROR"
+    assert result["data"]["active_index_preserved"] is True
+    assert database.get_document_chunks(file_id) == old_chunks
+    old_result = retrieve_document(
+        {"file_id": file_id}, "旧索引中必须持续可查询的奖学金规则"
+    )
+    assert old_result["data"]["status"] == "found"
+    assert database.search_document_chunks(
+        file_ids=[file_id], query="候选索引的新规则不应在失败后生效", limit=5
+    ) == []
+    lifecycle = get_file_lifecycle(file_id)["data"]
+    assert lifecycle["status"] == "QUERYABLE"
+    assert lifecycle["queryable"] is True
+    assert lifecycle["index_status"] == "indexed"
+    assert lifecycle["error"]["error_code"] == "INDEX_WRITE_ERROR"
+    assert lifecycle["error"]["failure_stage"] == "index"
+
+
+def test_f09_successful_reindex_atomically_switches_without_mixing_or_duplicates(
+    document_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    file_id, path = _register(document_data_dir, "原子重索引成功.docx", "word", b"")
+    document = Document()
+    document.add_paragraph("只属于旧版本的材料内容。")
+    document.save(path)
+    assert index_document(file_id)["ok"] is True
+    old_chunk_ids = {row["chunk_id"] for row in database.get_document_chunks(file_id)}
+
+    replacement = Document()
+    replacement.add_paragraph("只属于新版本的材料内容。")
+    replacement.add_paragraph("新版本的第二条有效材料。")
+    replacement.save(path)
+
+    original_builder = document_index._word_chunks
+    observed_during_build: dict[str, object] = {}
+
+    def inspect_active_generation(candidate_file_id: str, candidate_path: Path):
+        current = database.get_file_record_by_id(candidate_file_id)
+        observed_during_build["status"] = current["status"]
+        observed_during_build["old_retrieval"] = retrieve_document(
+            {"file_id": candidate_file_id}, "只属于旧版本的材料内容"
+        )["data"]["status"]
+        return original_builder(candidate_file_id, candidate_path)
+
+    monkeypatch.setattr(document_index, "_word_chunks", inspect_active_generation)
+    switched = reindex_document(file_id)
+    new_chunks = database.get_document_chunks(file_id)
+
+    assert switched["ok"] is True
+    assert observed_during_build == {
+        "status": "REINDEXING",
+        "old_retrieval": "found",
+    }
+    assert old_chunk_ids.isdisjoint({row["chunk_id"] for row in new_chunks})
+    assert all("旧版本" not in row["chunk_text"] for row in new_chunks)
+    assert any("新版本" in row["chunk_text"] for row in new_chunks)
+    assert database.search_document_chunks(
+        file_ids=[file_id], query="只属于旧版本的材料内容", limit=5
+    ) == []
+    assert database.search_document_chunks(
+        file_ids=[file_id], query="只属于新版本的材料内容", limit=5
+    )
+
+    repeated = reindex_document(file_id)
+    repeated_chunks = database.get_document_chunks(file_id)
+    assert repeated["ok"] is True
+    assert repeated_chunks == new_chunks
+    assert len({row["chunk_id"] for row in repeated_chunks}) == len(repeated_chunks)
+
+
+def test_f10_reprocess_parse_failure_preserves_one_complete_active_generation(
+    document_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    file_id, path = _register(document_data_dir, "安全重新解析.docx", "word", b"")
+    document = Document()
+    document.add_paragraph("重新解析失败后仍需保留的原始结果。")
+    document.save(path)
+    assert index_document(file_id)["ok"] is True
+    old_chunks = database.get_document_chunks(file_id)
+
+    def fail_parse(file_id: str, path: Path):
+        current = database.get_file_record_by_id(file_id)
+        assert current["status"] == "REPROCESSING"
+        assert retrieve_document(
+            {"file_id": file_id}, "重新解析失败后仍需保留的原始结果"
+        )["data"]["status"] == "found"
+        raise ValueError("simulated parse failure")
+
+    monkeypatch.setattr(document_index, "_word_chunks", fail_parse)
+    result = reprocess_document(file_id)
+
+    assert result["ok"] is False
+    assert result["error_code"] == "WORD_PARSE_ERROR"
+    assert result["data"]["active_index_preserved"] is True
+    assert database.get_document_chunks(file_id) == old_chunks
+    lifecycle = get_file_lifecycle(file_id)["data"]
+    assert lifecycle["status"] == "QUERYABLE"
+    assert lifecycle["error"]["failure_stage"] == "parse"
+    assert retrieve_document(
+        {"file_id": file_id}, "重新解析失败后仍需保留的原始结果"
+    )["data"]["status"] == "found"
+
+
+def test_f10_successful_reprocess_activates_only_the_new_parsed_generation(
+    document_data_dir: Path
+) -> None:
+    file_id, path = _register(document_data_dir, "安全重新解析成功.docx", "word", b"")
+    document = Document()
+    document.add_paragraph("重新解析前的旧解析结果。")
+    document.save(path)
+    assert index_document(file_id)["ok"] is True
+
+    replacement = Document()
+    replacement.add_paragraph("重新解析后的新解析结果。")
+    replacement.save(path)
+    result = reprocess_document(file_id)
+    chunks = database.get_document_chunks(file_id)
+
+    assert result["ok"] is True
+    assert [row["chunk_text"] for row in chunks] == ["重新解析后的新解析结果。"]
+    assert database.search_document_chunks(
+        file_ids=[file_id], query="重新解析前的旧解析结果", limit=5
+    ) == []
+    assert database.search_document_chunks(
+        file_ids=[file_id], query="重新解析后的新解析结果", limit=5
+    )
+    lifecycle = get_file_lifecycle(file_id)["data"]
+    assert lifecycle["status"] == "QUERYABLE"
+    assert lifecycle["error"] is None

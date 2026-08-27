@@ -20,6 +20,7 @@ from backend.repositories.file_repository import FileLifecycleStatus
 from backend.services import ocr_service
 from backend.services.file_lifecycle import (
     get_file_lifecycle,
+    record_file_lifecycle_transition,
     resume_file_lifecycle,
     start_ocr_processing,
     transition_file_lifecycle,
@@ -37,7 +38,7 @@ NO_EVIDENCE_MESSAGE = "当前材料中未找到足够依据。"
 OCR_NOT_SUPPORTED_MESSAGE = "当前版本不支持扫描 PDF / OCR。"
 
 
-def parse_pdf(file_id: str) -> dict[str, Any]:
+def parse_pdf(file_id: str, *, _reprocess: bool = False) -> dict[str, Any]:
     """Index embedded PDF text or route an image-only PDF through local OCR."""
     clean_file_id, record, error = _validated_document(file_id, expected_type="pdf")
     if error is not None:
@@ -45,17 +46,30 @@ def parse_pdf(file_id: str) -> dict[str, Any]:
     resume_error = _resume_failed_index(record)
     if resume_error is not None:
         return resume_error
+    operation_error = _begin_candidate_build(record, reprocess=_reprocess)
+    if operation_error is not None:
+        return operation_error
     try:
         path = resolve_by_file_id(clean_file_id)
         pages = _load_pdf_pages(path)
     except PdfDependencyError:
         return _index_failure(
-            record, "PDF_DEPENDENCY_MISSING", "缺少 pypdf，无法解析普通文本 PDF"
+            record,
+            "PDF_DEPENDENCY_MISSING",
+            "缺少 pypdf，无法解析普通文本 PDF",
+            failure_stage="parse",
         )
     except FileLocatorError as exc:
-        return _index_failure(record, "FILE_NOT_FOUND", str(exc))
+        return _index_failure(
+            record, "FILE_NOT_FOUND", str(exc), failure_stage="parse"
+        )
     except Exception:
-        return _index_failure(record, "PDF_PARSE_ERROR", "PDF 文件无法正常解析")
+        return _index_failure(
+            record,
+            "PDF_PARSE_ERROR",
+            "PDF 文件无法正常解析",
+            failure_stage="parse",
+        )
 
     normalized_pages = [(page_no, text.strip()) for page_no, text in pages]
     if not any(text for _, text in normalized_pages):
@@ -88,26 +102,55 @@ def parse_pdf(file_id: str) -> dict[str, Any]:
 
 def index_document(file_id: str) -> dict[str, Any]:
     """Build or replace the local index for one registered PDF or Word."""
+    return _index_document(file_id, reprocess=False)
+
+
+def reindex_document(file_id: str) -> dict[str, Any]:
+    """Rebuild a document candidate and atomically replace the active index."""
+    return _index_document(file_id, reprocess=False)
+
+
+def reprocess_document(file_id: str) -> dict[str, Any]:
+    """Reparse source content without disturbing the active parsed/indexed view."""
+    return _index_document(file_id, reprocess=True)
+
+
+def _index_document(file_id: str, *, reprocess: bool) -> dict[str, Any]:
     clean_file_id, record, error = _validated_document(file_id)
     if error is not None:
         return error
     if record["file_type"] == "pdf":
-        return parse_pdf(clean_file_id)
+        return parse_pdf(clean_file_id, _reprocess=reprocess)
     resume_error = _resume_failed_index(record)
     if resume_error is not None:
         return resume_error
-    pending_error = _mark_index_pending(record)
-    if pending_error is not None:
-        return pending_error
+    operation_error = _begin_candidate_build(record, reprocess=reprocess)
+    if operation_error is not None:
+        return operation_error
     try:
         path = resolve_by_file_id(clean_file_id)
         chunks = _word_chunks(clean_file_id, path)
     except FileLocatorError as exc:
-        return _index_failure(record, "FILE_NOT_FOUND", str(exc))
+        return _index_failure(
+            record, "FILE_NOT_FOUND", str(exc), failure_stage="parse"
+        )
     except Exception:
-        return _index_failure(record, "WORD_PARSE_ERROR", "Word 文件无法正常解析")
+        return _index_failure(
+            record,
+            "WORD_PARSE_ERROR",
+            "Word 文件无法正常解析",
+            failure_stage="parse",
+        )
     if not chunks:
-        return _index_failure(record, "NO_TEXT_CONTENT", "Word 文档中没有可索引文本")
+        return _index_failure(
+            record,
+            "NO_TEXT_CONTENT",
+            "Word 文档中没有可索引文本",
+            failure_stage="parse",
+        )
+    pending_error = _mark_index_pending(record)
+    if pending_error is not None:
+        return pending_error
     blocks = blocks_from_chunks(chunks)
     return _persist_index(
         record,
@@ -280,12 +323,11 @@ def _parse_scanned_pdf(
             record,
             recognized.get("error_code") or "OCR_PROCESSING_ERROR",
             recognized.get("message") or "OCR 识别失败",
+            failure_stage="ocr",
         )
-    indexing = transition_file_lifecycle(
-        record["file_id"], FileLifecycleStatus.INDEXING
-    )
-    if not indexing["ok"]:
-        return _index_failure(record, "INDEX_STATE_ERROR", indexing["message"])
+    pending_error = _mark_index_pending(record)
+    if pending_error is not None:
+        return pending_error
     ocr_results = recognized["data"]["blocks"]
     blocks = [
         make_document_block(
@@ -418,15 +460,30 @@ def _persist_index(
     page_count: int | None = None,
     extra_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    try:
-        database.replace_document_chunks(record["file_id"], chunks)
-        transitioned = transition_file_lifecycle(
-            record["file_id"], FileLifecycleStatus.QUERYABLE
+    validation_error = _validate_candidate_chunks(record["file_id"], chunks)
+    if validation_error is not None:
+        return _index_failure(
+            record,
+            "INDEX_VALIDATION_ERROR",
+            validation_error,
+            failure_stage="index",
         )
-        if not transitioned["ok"]:
-            raise RuntimeError(transitioned["message"])
+    try:
+        from_status = database.activate_document_index(
+            record["file_id"], chunks
+        )
+        record_file_lifecycle_transition(
+            file_id=record["file_id"],
+            from_status=from_status,
+            to_status=FileLifecycleStatus.QUERYABLE,
+        )
     except Exception:
-        return _index_failure(record, "INDEX_WRITE_ERROR", "文档索引保存失败")
+        return _index_failure(
+            record,
+            "INDEX_WRITE_ERROR",
+            "文档索引保存失败",
+            failure_stage="index",
+        )
     data = {
             "status": "indexed",
             "file_id": record["file_id"],
@@ -439,9 +496,14 @@ def _persist_index(
 
 
 def _mark_index_pending(record: dict[str, Any]) -> dict[str, Any] | None:
+    target = (
+        FileLifecycleStatus.REINDEXING
+        if _has_active_index(record["file_id"])
+        else FileLifecycleStatus.INDEXING
+    )
     try:
         transition = transition_file_lifecycle(
-            record["file_id"], FileLifecycleStatus.INDEXING
+            record["file_id"], target
         )
         updated = transition["ok"]
     except Exception:
@@ -456,19 +518,99 @@ def _mark_index_pending(record: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _index_failure(
-    record: dict[str, Any], error_code: str, message: str
+    record: dict[str, Any],
+    error_code: str,
+    message: str,
+    *,
+    failure_stage: str,
 ) -> dict[str, Any]:
+    preserved_active_index = _has_active_index(record["file_id"])
     try:
-        database.delete_document_chunks(record["file_id"])
+        target = (
+            FileLifecycleStatus.QUERYABLE
+            if preserved_active_index
+            else FileLifecycleStatus.FAILED
+        )
         transition_file_lifecycle(
             record["file_id"],
-            FileLifecycleStatus.FAILED,
+            target,
             error_code=error_code,
             error_message=message,
+            failure_stage=failure_stage,
         )
     except Exception:
         pass
-    return failure(error_code, message, {"file_id": record["file_id"]})
+    return failure(
+        error_code,
+        message,
+        {
+            "file_id": record["file_id"],
+            "failure_stage": failure_stage,
+            "active_index_preserved": preserved_active_index,
+        },
+    )
+
+
+def _begin_candidate_build(
+    record: dict[str, Any], *, reprocess: bool
+) -> dict[str, Any] | None:
+    """Expose a rebuild state while leaving the current active rows queryable."""
+    if not _has_active_index(record["file_id"]):
+        return None
+    target = (
+        FileLifecycleStatus.REPROCESSING
+        if reprocess
+        else FileLifecycleStatus.REINDEXING
+    )
+    started = transition_file_lifecycle(record["file_id"], target)
+    if started["ok"]:
+        return None
+    return failure(
+        "INDEX_STATE_ERROR",
+        "无法开始文档重处理" if reprocess else "无法开始文档重新索引",
+        {"file_id": record["file_id"]},
+    )
+
+
+def _has_active_index(file_id: str) -> bool:
+    current = database.get_file_record_by_id(file_id)
+    if current is None:
+        return False
+    return (
+        bool(current.get("queryable"))
+        and current.get("lifecycle_status") == "ready"
+        and current.get("index_status") == "indexed"
+        and bool(database.get_document_chunks(file_id))
+    )
+
+
+def _validate_candidate_chunks(file_id: str, chunks: list[dict[str, Any]]) -> str | None:
+    """Validate a complete in-memory candidate before mutating active rows."""
+    if not chunks:
+        return "候选索引没有可激活的 chunk"
+    chunk_ids: set[str] = set()
+    chunk_indexes: list[int] = []
+    for chunk in chunks:
+        if chunk.get("file_id") != file_id:
+            return "候选索引包含其他文件的 chunk"
+        chunk_id = str(chunk.get("chunk_id") or "")
+        if not chunk_id or chunk_id in chunk_ids:
+            return "候选索引的 chunk_id 缺失或重复"
+        chunk_ids.add(chunk_id)
+        try:
+            chunk_index = int(chunk["chunk_index"])
+        except (KeyError, TypeError, ValueError):
+            return "候选索引的 chunk_index 无效"
+        chunk_indexes.append(chunk_index)
+        text = chunk.get("chunk_text")
+        if not isinstance(text, str):
+            return "候选索引的 chunk_text 无效"
+        expected_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        if chunk.get("text_hash") != expected_hash:
+            return "候选索引的 text_hash 校验失败"
+    if sorted(chunk_indexes) != list(range(len(chunks))):
+        return "候选索引的 chunk_index 必须连续且唯一"
+    return None
 
 
 def _validated_document(

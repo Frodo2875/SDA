@@ -18,31 +18,48 @@ class DocumentRepository:
     def replace_for_file(self, file_id: str, chunks: list[dict[str, Any]]) -> None:
         with self._connection_factory() as connection:
             self._delete(connection, file_id)
-            for chunk in chunks:
-                metadata_json = json.dumps(
-                    chunk.get("metadata") or {}, ensure_ascii=False, sort_keys=True
+            self._insert(connection, file_id, chunks)
+
+    def activate_for_file(
+        self,
+        *,
+        file_id: str,
+        chunks: list[dict[str, Any]],
+        updated_at: str,
+    ) -> str:
+        """Atomically replace active chunks/FTS and mark the file queryable.
+
+        Candidate chunks are built and validated by the service before this
+        transaction starts. Any insert or state conflict rolls the transaction
+        back, so the previous active rows remain intact.
+        """
+        with self._connection_factory() as connection:
+            row = connection.execute(
+                "SELECT status FROM files WHERE file_id = ?", (file_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError("待激活索引的文件不存在")
+            current_status = str(row["status"]).upper()
+            if current_status not in {"INDEXING", "REINDEXING"}:
+                raise RuntimeError(
+                    f"文件不处于可激活索引状态：{current_status}"
                 )
-                connection.execute(
-                    """
-                    INSERT INTO document_chunks (
-                        chunk_id, file_id, page_no, chunk_index, chunk_text,
-                        text_hash, metadata_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        chunk["chunk_id"],
-                        file_id,
-                        chunk.get("page_no"),
-                        chunk["chunk_index"],
-                        chunk["chunk_text"],
-                        chunk["text_hash"],
-                        metadata_json,
-                    ),
-                )
-                connection.execute(
-                    "INSERT INTO document_chunks_fts (chunk_id, chunk_text) VALUES (?, ?)",
-                    (chunk["chunk_id"], chunk["chunk_text"]),
-                )
+
+            self._delete(connection, file_id)
+            self._insert(connection, file_id, chunks)
+            updated = connection.execute(
+                """
+                UPDATE files
+                SET status = 'QUERYABLE', lifecycle_status = 'ready',
+                    parse_status = 'parsed', queryable = 1,
+                    index_status = 'indexed', updated_at = ?
+                WHERE file_id = ? AND status = ?
+                """,
+                (updated_at, file_id, current_status),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("索引激活时文件状态发生冲突")
+        return current_status
 
     def get_for_file(self, file_id: str) -> list[dict[str, Any]]:
         with self._connection_factory() as connection:
@@ -55,6 +72,38 @@ class DocumentRepository:
     def delete_for_file(self, file_id: str) -> None:
         with self._connection_factory() as connection:
             self._delete(connection, file_id)
+
+    @staticmethod
+    def _insert(
+        connection: sqlite3.Connection,
+        file_id: str,
+        chunks: list[dict[str, Any]],
+    ) -> None:
+        for chunk in chunks:
+            metadata_json = json.dumps(
+                chunk.get("metadata") or {}, ensure_ascii=False, sort_keys=True
+            )
+            connection.execute(
+                """
+                INSERT INTO document_chunks (
+                    chunk_id, file_id, page_no, chunk_index, chunk_text,
+                    text_hash, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    chunk["chunk_id"],
+                    file_id,
+                    chunk.get("page_no"),
+                    chunk["chunk_index"],
+                    chunk["chunk_text"],
+                    chunk["text_hash"],
+                    metadata_json,
+                ),
+            )
+            connection.execute(
+                "INSERT INTO document_chunks_fts (chunk_id, chunk_text) VALUES (?, ?)",
+                (chunk["chunk_id"], chunk["chunk_text"]),
+            )
 
     def search(
         self,
