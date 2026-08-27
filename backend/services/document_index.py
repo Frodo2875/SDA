@@ -36,9 +36,15 @@ WORD_CHUNK_OVERLAP = 100
 SUPPORTED_DOCUMENT_TYPES = {"pdf", "word"}
 NO_EVIDENCE_MESSAGE = "当前材料中未找到足够依据。"
 OCR_NOT_SUPPORTED_MESSAGE = "当前版本不支持扫描 PDF / OCR。"
+LOW_OCR_CONFIDENCE = 0.8
 
 
-def parse_pdf(file_id: str, *, _reprocess: bool = False) -> dict[str, Any]:
+def parse_pdf(
+    file_id: str,
+    *,
+    _reprocess: bool = False,
+    _ocr_pages: list[int] | None = None,
+) -> dict[str, Any]:
     """Index embedded PDF text or route an image-only PDF through local OCR."""
     clean_file_id, record, error = _validated_document(file_id, expected_type="pdf")
     if error is not None:
@@ -72,8 +78,16 @@ def parse_pdf(file_id: str, *, _reprocess: bool = False) -> dict[str, Any]:
         )
 
     normalized_pages = [(page_no, text.strip()) for page_no, text in pages]
-    if not any(text for _, text in normalized_pages):
-        return _parse_scanned_pdf(record, path, page_count=len(pages))
+    text_page_count = sum(bool(text) for _, text in normalized_pages)
+    if text_page_count != len(normalized_pages):
+        pdf_type = "scanned" if text_page_count == 0 else "mixed"
+        return _parse_ocr_pdf(
+            record,
+            path,
+            pages=normalized_pages,
+            pdf_type=pdf_type,
+            requested_pages=_ocr_pages,
+        )
     pending_error = _mark_index_pending(record)
     if pending_error is not None:
         return pending_error
@@ -94,10 +108,18 @@ def parse_pdf(file_id: str, *, _reprocess: bool = False) -> dict[str, Any]:
         page_count=len(pages),
         extra_data={
             "ocr_used": False,
+            "ocr_status": "not_required",
+            "pdf_type": "text",
+            "failed_pages": [],
             "block_count": len(blocks),
             "blocks": [block.model_dump() for block in blocks],
         },
     )
+
+
+def ocr_document(file_id: str, pages: list[int] | None = None) -> dict[str, Any]:
+    """Process all OCR-needed pages or retry only an explicit 1-based page set."""
+    return parse_pdf(file_id, _ocr_pages=pages)
 
 
 def index_document(file_id: str) -> dict[str, Any]:
@@ -194,6 +216,29 @@ def retrieve_document(
             and bool(record["queryable"])
         ):
             eligible[record["file_id"]] = record
+    if arguments.scope.page is not None:
+        failed_page_files = [
+            file_id for file_id in eligible
+            if (
+                (database.get_document_ocr_page(file_id, arguments.scope.page) or {}).get("status")
+                == "failed"
+            )
+        ]
+        if failed_page_files:
+            message = "请求页 OCR 失败，当前证据不足，请重试该页 OCR 后再查询。"
+            result = success(
+                {
+                    "status": "insufficient_evidence",
+                    "query": arguments.query,
+                    "evidence": [],
+                    "failed_page": arguments.scope.page,
+                    "failed_page_files": failed_page_files,
+                    "result_summary": message,
+                },
+                message,
+            )
+            result.update({"evidence": [], "warnings": ["OCR_FAILED_PAGE"], "result_summary": message})
+            return result
     retrieval = hybrid_retrieve(
         file_ids=list(eligible),
         query=arguments.query,
@@ -246,6 +291,13 @@ def retrieve_document(
             6,
         )
         evidence[-1]["text_excerpt"] = evidence[-1]["value_summary"]
+    low_confidence_pages = sorted({
+        evidence_item["page_no"]
+        for evidence_item in evidence
+        if evidence_item.get("confidence") is not None
+        and float(evidence_item["confidence"]) < LOW_OCR_CONFIDENCE
+        and evidence_item.get("page_no") is not None
+    })
     if not evidence:
         result = success(
             {
@@ -277,10 +329,14 @@ def retrieve_document(
         },
         "文档检索完成",
     )
+    warnings = [retrieval["warning"]] if retrieval["warning"] else []
+    if low_confidence_pages:
+        warnings.append("LOW_OCR_CONFIDENCE_REVIEW_REQUIRED")
     result.update(
         {
             "evidence": evidence,
-            "warnings": [retrieval["warning"]] if retrieval["warning"] else [],
+            "warnings": warnings,
+            "low_confidence_pages": low_confidence_pages,
             "result_summary": f"找到 {len(evidence)} 条材料依据",
         }
     )
@@ -314,45 +370,207 @@ def validate_pdf_file(path: Path) -> dict[str, Any] | None:
 def _parse_scanned_pdf(
     record: dict[str, Any], path: Path, *, page_count: int
 ) -> dict[str, Any]:
+    return _parse_ocr_pdf(
+        record,
+        path,
+        pages=[(page_no, "") for page_no in range(1, page_count + 1)],
+        pdf_type="scanned",
+        requested_pages=None,
+    )
+
+
+def _parse_ocr_pdf(
+    record: dict[str, Any],
+    path: Path,
+    *,
+    pages: list[tuple[int, str]],
+    pdf_type: str,
+    requested_pages: list[int] | None,
+) -> dict[str, Any]:
+    page_numbers = {page_no for page_no, _ in pages}
+    if requested_pages is not None:
+        if (
+            not requested_pages
+            or len(set(requested_pages)) != len(requested_pages)
+            or any(not isinstance(page_no, int) or page_no not in page_numbers for page_no in requested_pages)
+        ):
+            return failure("OCR_PAGE_INVALID", "OCR 页码必须唯一且位于 PDF 范围内")
+    needs_ocr = [page_no for page_no, text in pages if not text]
+    selected = needs_ocr if requested_pages is None else [
+        page_no for page_no in requested_pages if page_no in needs_ocr
+    ]
+    existing = {
+        page["page_no"]: page for page in database.get_document_ocr_pages(record["file_id"])
+    }
+    candidate_pages: dict[int, dict[str, Any]] = {
+        page_no: _text_page_result(page_no, text)
+        for page_no, text in pages
+        if text
+    }
+    for page_no in needs_ocr:
+        if page_no not in selected and page_no in existing:
+            candidate_pages[page_no] = existing[page_no]
+        elif page_no not in selected:
+            candidate_pages[page_no] = _failed_page_result(page_no, "OCR_PAGE_NOT_PROCESSED")
+
     started = start_ocr_processing(record["file_id"])
     if not started["ok"]:
         return failure("OCR_STATE_ERROR", started["message"], {"file_id": record["file_id"]})
-    recognized = ocr_service.ocr_pdf(path)
-    if not recognized["ok"]:
+    recognized: dict[str, Any] | None = None
+    if selected:
+        recognized = (
+            ocr_service.ocr_pdf(path)
+            if pdf_type == "scanned" and requested_pages is None
+            else ocr_service.ocr_document(path, pages=selected)
+        )
+        recognized_pages = _recognized_page_results(
+            recognized, selected, existing=existing
+        )
+        candidate_pages.update({page["page_no"]: page for page in recognized_pages})
+
+    ordered_pages = [candidate_pages[page_no] for page_no in sorted(candidate_pages)]
+    failed_pages = [page["page_no"] for page in ordered_pages if page["status"] == "failed"]
+    successful_pages = [page for page in ordered_pages if page["status"] == "success" and page["text"].strip()]
+    if not successful_pages:
+        database.replace_document_ocr_pages(record["file_id"], ordered_pages)
         return _index_failure(
             record,
-            recognized.get("error_code") or "OCR_PROCESSING_ERROR",
-            recognized.get("message") or "OCR 识别失败",
+            (recognized or {}).get("error_code") or "OCR_PROCESSING_ERROR",
+            (recognized or {}).get("message") or "OCR 所有可处理页面均识别失败",
             failure_stage="ocr",
         )
     pending_error = _mark_index_pending(record)
     if pending_error is not None:
         return pending_error
-    ocr_results = recognized["data"]["blocks"]
-    blocks = [
-        make_document_block(
-            file_id=record["file_id"],
-            sequence=index,
-            block_type="paragraph",
-            content=block["text"],
-            page_no=block["page"],
-            confidence=block["confidence"],
-            bbox=block["bbox"],
-        )
-        for index, block in enumerate(ocr_results)
+    blocks: list[DocumentBlock] = []
+    chunks: list[dict[str, Any]] = []
+    for page in ordered_pages:
+        if page["status"] == "failed":
+            chunks.append(
+                _chunk(
+                    file_id=record["file_id"], chunk_index=len(chunks), text="",
+                    page_no=page["page_no"],
+                    metadata={
+                        "source_type": "ocr_failed",
+                        "page_no": page["page_no"],
+                        "ocr_status": "failed",
+                        "error": page.get("error"),
+                    },
+                )
+            )
+            continue
+        raw_blocks = page.get("blocks") or [{
+            "page": page["page_no"], "text": page["text"],
+            "confidence": page.get("confidence"), "bbox": page.get("bbox"),
+        }]
+        for raw in raw_blocks:
+            block = make_document_block(
+                file_id=record["file_id"], sequence=len(blocks), block_type="paragraph",
+                content=str(raw.get("text") or ""), page_no=page["page_no"],
+                confidence=(
+                    raw.get("confidence")
+                    if page["source_type"] == "ocr" and page["status"] == "success"
+                    else None
+                ),
+                bbox=(
+                    raw.get("bbox")
+                    if page["source_type"] == "ocr" and page["status"] == "success"
+                    else None
+                ),
+            )
+            blocks.append(block)
+            block_chunks = blocks_to_chunks(
+                [block],
+                source_type="ocr" if page["source_type"] == "ocr" else "pdf",
+            )
+            for chunk in block_chunks:
+                chunk["chunk_index"] = len(chunks)
+                chunks.append(chunk)
+    ocr_results = [block for page in ordered_pages for block in page.get("blocks") or []]
+    low_confidence_pages = [
+        page["page_no"] for page in successful_pages
+        if page.get("confidence") is not None and page["confidence"] < LOW_OCR_CONFIDENCE
     ]
-    chunks = blocks_to_chunks(blocks, source_type="ocr")
-    return _persist_index(
+    result = _persist_index(
         record,
         chunks,
-        page_count=page_count,
+        page_count=len(pages),
+        ocr_pages=ordered_pages,
         extra_data={
             "ocr_used": True,
+            "ocr_status": "partial_success" if failed_pages else "success",
+            "status": "partial_success" if failed_pages else "indexed",
+            "pdf_type": pdf_type,
+            "failed_pages": failed_pages,
+            "low_confidence_pages": low_confidence_pages,
+            "verification_required": bool(low_confidence_pages),
+            "page_results": ordered_pages,
             "ocr_results": ocr_results,
             "block_count": len(blocks),
             "blocks": [block.model_dump() for block in blocks],
         },
     )
+    if result["ok"] and failed_pages:
+        result["message"] = f"OCR 部分成功，失败页：{failed_pages}；成功页面已可查询"
+    return result
+
+
+def _text_page_result(page_no: int, text: str) -> dict[str, Any]:
+    return {
+        "page_no": page_no, "text": text, "bbox": None, "confidence": 1.0,
+        "status": "success", "error": None, "source_type": "text", "blocks": [],
+        "updated_at": database.utc_now(),
+    }
+
+
+def _failed_page_result(page_no: int, error: str) -> dict[str, Any]:
+    return {
+        "page_no": page_no, "text": "", "bbox": None, "confidence": None,
+        "status": "failed", "error": error, "source_type": "ocr", "blocks": [],
+        "updated_at": database.utc_now(),
+    }
+
+
+def _recognized_page_results(
+    result: dict[str, Any],
+    selected: list[int],
+    *,
+    existing: dict[int, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    supplied = data.get("pages") or []
+    by_page = {int(page["page_no"]): dict(page) for page in supplied if page.get("page_no")}
+    if not supplied:
+        grouped: dict[int, list[dict[str, Any]]] = {}
+        for block in data.get("blocks") or []:
+            grouped.setdefault(int(block["page"]), []).append(block)
+        for page_no, page_blocks in grouped.items():
+            by_page[page_no] = {
+                "page_no": page_no,
+                "text": "\n".join(str(block["text"]) for block in page_blocks),
+                "bbox": _union_bbox(page_blocks),
+                "confidence": min(float(block["confidence"]) for block in page_blocks),
+                "status": "success", "error": None, "source_type": "ocr",
+                "blocks": page_blocks,
+            }
+    normalized = []
+    for page_no in selected:
+        page = by_page.get(page_no) or _failed_page_result(
+            page_no, result.get("message") or "OCR_PROCESSING_ERROR"
+        )
+        if page.get("status") == "failed" and existing.get(page_no, {}).get("status") == "success":
+            page = existing[page_no]
+        page = {**page, "page_no": page_no, "source_type": "ocr", "updated_at": database.utc_now()}
+        normalized.append(page)
+    return normalized
+
+
+def _union_bbox(blocks: list[dict[str, Any]]) -> list[float] | None:
+    boxes = [block.get("bbox") for block in blocks if block.get("bbox")]
+    if not boxes:
+        return None
+    return [min(box[0] for box in boxes), min(box[1] for box in boxes),
+            max(box[2] for box in boxes), max(box[3] for box in boxes)]
 
 
 def _resume_failed_index(record: dict[str, Any]) -> dict[str, Any] | None:
@@ -459,6 +677,7 @@ def _persist_index(
     chunks: list[dict[str, Any]],
     page_count: int | None = None,
     extra_data: dict[str, Any] | None = None,
+    ocr_pages: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     validation_error = _validate_candidate_chunks(record["file_id"], chunks)
     if validation_error is not None:
@@ -470,7 +689,7 @@ def _persist_index(
         )
     try:
         from_status = database.activate_document_index(
-            record["file_id"], chunks
+            record["file_id"], chunks, ocr_pages=ocr_pages
         )
         record_file_lifecycle_transition(
             file_id=record["file_id"],

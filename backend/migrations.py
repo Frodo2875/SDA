@@ -466,6 +466,34 @@ def _add_trace_evaluation_metrics(connection: sqlite3.Connection) -> None:
             )
 
 
+def _create_document_ocr_pages(connection: sqlite3.Connection) -> None:
+    """Persist page-level OCR checkpoints without changing legacy chunks."""
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS document_ocr_pages (
+            file_id TEXT NOT NULL,
+            page_no INTEGER NOT NULL CHECK (page_no >= 1),
+            text TEXT NOT NULL DEFAULT '',
+            bbox_json TEXT,
+            confidence REAL CHECK (
+                confidence IS NULL OR (confidence >= 0 AND confidence <= 1)
+            ),
+            status TEXT NOT NULL CHECK (status IN ('success', 'failed')),
+            error TEXT,
+            source_type TEXT NOT NULL CHECK (source_type IN ('text', 'ocr')),
+            blocks_json TEXT NOT NULL DEFAULT '[]',
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (file_id, page_no),
+            FOREIGN KEY (file_id) REFERENCES files(file_id) ON DELETE CASCADE
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS ix_document_ocr_pages_status "
+        "ON document_ocr_pages(file_id, status, page_no)"
+    )
+
+
 MIGRATIONS = (
     Migration(1, "add_files_v2_foundation", _add_files_v2_foundation),
     Migration(2, "normalize_file_lifecycle", _normalize_file_lifecycle),
@@ -478,6 +506,7 @@ MIGRATIONS = (
     Migration(9, "create_traces_and_context", _create_traces_and_context),
     Migration(10, "add_async_task_runtime", _add_async_task_runtime),
     Migration(11, "add_trace_evaluation_metrics", _add_trace_evaluation_metrics),
+    Migration(12, "create_document_ocr_pages", _create_document_ocr_pages),
 )
 
 

@@ -44,6 +44,10 @@ EXPECTED_COLUMNS = {
         "chunk_id", "file_id", "page_no", "chunk_index", "chunk_text",
         "text_hash", "metadata_json",
     ],
+    "document_ocr_pages": [
+        "file_id", "page_no", "text", "bbox_json", "confidence", "status",
+        "error", "source_type", "blocks_json", "updated_at",
+    ],
     "tasks": [
         "task_id", "session_id", "user_message", "task_type", "status",
         "current_step", "next_action", "checkpoint_data", "created_at",
@@ -124,9 +128,10 @@ def test_first_run_creates_database_tables_and_file_records(
             (9, "create_traces_and_context"),
             (10, "add_async_task_runtime"),
             (11, "add_trace_evaluation_metrics"),
+            (12, "create_document_ocr_pages"),
         ]
         assert all(row[2] for row in migrations)
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 11
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 12
 
     file_rows = database.fetch_all("files")
     assert {

@@ -223,3 +223,62 @@ V1 Regression: 66 passed, 1 deselected, PASS
 V2 Regression: included in full pytest, PASS
 WF01-WF07: 8 passed, PASS
 ```
+
+## V3.16 Mixed PDF and Page-level OCR Recovery
+
+### PDF 分类与逐页路由
+
+- `detect_pdf_type()` 基于每页真实文本层，将 PDF 明确分类为 `text`、`scanned`
+  或 `mixed`，同时输出 `text_pages` 与 `needs_ocr_pages`。
+- 纯文本 PDF 继续走原解析与索引流程，不初始化或调用 OCR 引擎。
+- Mixed PDF 只渲染并 OCR 无可用文本层的页面；文本页内容与成功 OCR 页在候选索引中
+  按原始页序合并。
+- 继续复用 PyMuPDF、numpy 和 RapidOCR，没有更换 OCR 技术栈。
+
+### Page Result Ledger
+
+- 新增 migration 12：`document_ocr_pages`，以 `(file_id, page_no)` 为主键保存：
+  `text`、`bbox`、`confidence`、`status`、`error`、`source_type`、原始 OCR Blocks
+  和更新时间。
+- 新增 `OCRPageResult` Schema，对页码、bbox、confidence、status 和来源执行后端校验。
+- 页结果与 chunks/FTS/QUERYABLE 状态在同一 SQLite 事务中激活，避免页状态与当前索引
+  generation 不一致。
+
+### Partial Success 与失败页恢复
+
+- OCR backend 按页隔离异常；例如 20 页中 19 页成功、1 页失败时返回
+  `partial_success` 和准确的 `failed_pages`，不会把整份文档标成全部失败。
+- 成功文本页和 OCR 页正常生成 Block、Chunk 并进入 Layout/Retrieval；失败页不生成
+  虚假 Block 或 Evidence，仅保留不可检索的空页占位 chunk 以兼容 V2 页序契约。
+- `ocr_document(file_id, pages=[...])` 只重新渲染和 OCR 指定的缺失页，复用其他页的持久化
+  成功结果；成功恢复后重新原子激活完整候选索引。
+- 全部指定页失败且没有任何可用页时仍进入现有 OCR failure 生命周期，并原样保存错误。
+
+### Evidence 与置信度
+
+- OCR Block 的原始 `bbox` 与 `confidence` 继续传递至 Chunk 和 Evidence。
+- Evidence confidence 低于 `0.8` 时返回
+  `LOW_OCR_CONFIDENCE_REVIEW_REQUIRED`，供上层提示人工核对关键字段。
+- 查询明确限定到 OCR 失败页时返回 `insufficient_evidence` 与
+  `OCR_FAILED_PAGE`，不允许 LLM 补写缺失内容。
+
+### 新增测试
+
+- O01：text/scanned/mixed 三种 PDF 分类。
+- O02：文本 PDF 不重复 OCR（既有回归继续通过）。
+- O03：扫描 PDF 自动 OCR，并增加本机可用时的真实 RapidOCR/PyMuPDF smoke test。
+- O04：Mixed PDF 只 OCR 缺少文本层的页面。
+- O05：页级 text/bbox/confidence/status/error 持久化契约。
+- O07：19/20 页成功时返回 partial_success 和 failed_pages。
+- O08：只重试失败页，并保留其他成功页。
+- O09：低 confidence Evidence 保留数值并返回核对提示。
+- O10：失败页返回证据不足且不生成伪造内容。
+
+### 测试结果
+
+```text
+pytest: 267 passed, 0 failed, 0 skipped, 15.47s
+OCR Pipeline: 12 passed, PASS
+Real OCR smoke: PASS（当前 tuli_env 的 optional dependencies 可用）
+V1/V2/V3 regression: included in full pytest, PASS
+```

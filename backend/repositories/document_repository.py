@@ -5,6 +5,8 @@ import sqlite3
 from collections.abc import Callable
 from typing import Any
 
+from backend.repositories.ocr_repository import OCRRepository
+
 
 ConnectionFactory = Callable[[], sqlite3.Connection]
 
@@ -26,6 +28,7 @@ class DocumentRepository:
         file_id: str,
         chunks: list[dict[str, Any]],
         updated_at: str,
+        ocr_pages: list[dict[str, Any]] | None = None,
     ) -> str:
         """Atomically replace active chunks/FTS and mark the file queryable.
 
@@ -47,6 +50,8 @@ class DocumentRepository:
 
             self._delete(connection, file_id)
             self._insert(connection, file_id, chunks)
+            if ocr_pages is not None:
+                OCRRepository.replace_in_transaction(connection, file_id, ocr_pages)
             updated = connection.execute(
                 """
                 UPDATE files
