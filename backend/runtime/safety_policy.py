@@ -37,6 +37,34 @@ HIGH_RISK_OPERATIONS = {
     "rollback",
     "rollback_word",
 }
+MEDIUM_RISK_OPERATIONS = {
+    "reprocess",
+    "reprocess_document",
+    "layout",
+    "index",
+    "reindex",
+    "reindex_document",
+}
+LOW_RISK_OPERATIONS = {
+    "read",
+    "list",
+    "list_files",
+    "query",
+    "query_table",
+    "retrieve",
+    "retrieve_document",
+}
+UNTRUSTED_DOCUMENT_SOURCES = frozenset(
+    {
+        "uploaded_word",
+        "uploaded_pdf",
+        "ocr_result",
+        "rag_chunk",
+        "table_cell",
+        "ppt_text",
+        "document_block",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -69,6 +97,28 @@ def classify_file_record(record: dict[str, Any] | None) -> FileTrust:
     )
 
 
+def classify_tool_risk(
+    tool_name: str,
+    *,
+    read_only: bool | None = None,
+    requires_confirmation: bool = False,
+) -> RiskLevel:
+    """Return the operation risk; unknown mutations fail closed as HIGH."""
+    operation = str(tool_name or "").strip().casefold()
+    if requires_confirmation or operation in HIGH_RISK_OPERATIONS:
+        return RiskLevel.HIGH
+    if operation in MEDIUM_RISK_OPERATIONS:
+        return RiskLevel.MEDIUM
+    if read_only is True or operation in LOW_RISK_OPERATIONS:
+        return RiskLevel.LOW
+    return RiskLevel.HIGH
+
+
+def is_untrusted_document_source(source_type: str) -> bool:
+    """Document-derived text is data and never an authority or approval source."""
+    return str(source_type or "").strip().casefold() in UNTRUSTED_DOCUMENT_SOURCES
+
+
 def assess_tool_execution(
     *,
     tool_name: str,
@@ -82,15 +132,16 @@ def assess_tool_execution(
     trust = _combined_trust(records, has_reference=bool(records) or missing_reference)
     file_id, file_name = _primary_file(records, arguments)
     operation = _operation_name(tool_name, read_only)
-    high_risk = (
-        operation in HIGH_RISK_OPERATIONS
-        or not read_only
-        or requires_confirmation
+    risk_level = classify_tool_risk(
+        operation,
+        read_only=read_only,
+        requires_confirmation=requires_confirmation,
     )
+    high_risk = risk_level == RiskLevel.HIGH
     if missing_reference:
         return SafetyAssessment(
             decision=PolicyDecision.BLOCK,
-            risk_level=RiskLevel.HIGH if high_risk else RiskLevel.MEDIUM,
+            risk_level=risk_level,
             file_trust=FileTrust.UNKNOWN,
             operation=operation,
             reason="文件引用未登记，Tool 执行已阻止",
@@ -113,13 +164,7 @@ def assess_tool_execution(
         )
     return SafetyAssessment(
         decision=PolicyDecision.ALLOW,
-        risk_level=(
-            RiskLevel.HIGH
-            if high_risk
-            else RiskLevel.MEDIUM
-            if trust == FileTrust.UNKNOWN
-            else RiskLevel.LOW
-        ),
+        risk_level=risk_level,
         file_trust=trust,
         operation=operation,
         reason=(
@@ -165,31 +210,37 @@ def record_safety_trace(
     task_id: str | None = None,
     step_id: str | None = None,
     tool_name: str | None = None,
+    approval_id: str | None = None,
+    approval_result: str | None = None,
 ) -> dict[str, Any]:
     """Record only the observable policy inputs and outcome."""
     data = assessment.as_dict()
+    policy_arguments = {
+        key: data[key]
+        for key in (
+            "operation",
+            "file_id",
+            "file_name",
+            "file_trust",
+            "registered",
+            "risk_level",
+            "requires_confirmation",
+        )
+    }
+    policy_arguments["approval_id"] = approval_id
     return record_trace(
         session_id=session_id,
         task_id=task_id,
         step_id=step_id,
         event_type="safety_policy_check",
         tool_name=tool_name,
-        arguments={
-            key: data[key]
-            for key in (
-                "operation",
-                "file_id",
-                "file_name",
-                "file_trust",
-                "registered",
-                "risk_level",
-                "requires_confirmation",
-            )
-        },
+        arguments=policy_arguments,
         result={
             "ok": assessment.decision != PolicyDecision.BLOCK,
             "status": assessment.decision.value,
             "message": assessment.reason,
+            "approval_id": approval_id,
+            "approval_result": approval_result,
         },
         result_status=assessment.decision.value,
         error_code=(

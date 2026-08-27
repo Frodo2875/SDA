@@ -83,6 +83,7 @@ class PendingAction(BaseModel):
     """Frozen write proposal awaiting an explicit user decision."""
 
     action_id: str
+    approval_id: str
     session_id: str
     action_type: Literal["write_word", "delete_file", "undo_word", "rollback_word"]
     target_file: str

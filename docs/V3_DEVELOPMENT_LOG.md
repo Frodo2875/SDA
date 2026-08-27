@@ -535,3 +535,47 @@ V1/V2/V3 regression: PASS
   Task Center session 列表隐藏，避免同一个逻辑长任务重复展示；内部账本仍保留。
 - 新增确认成功、确认失败、取消无副作用和 Task Center 子任务去重测试。
 - 修复后全量回归：`298 passed, 0 failed`。
+
+## V3.21 Agent Safety and Tool Risk Policy
+
+### Untrusted Document Boundary
+
+- 用户上传 Word/PDF、OCR Result、RAG Chunk、Table Cell、PPT Text 和
+  Document Block 统一标记为 `untrusted_data`，不具有 instruction、permission
+  或 approval 权限。
+- Agent 的 Tool 回传消息携带固定安全上下文；即使文档包含“忽略规则”、伪造 Tool JSON、
+  `delete_file` 或 `write_word` 指令，后端仍只允许 Schema 校验后的注册 Tool。
+- `write_word/delete_file/rollback_word` 不向 LLM Tool 列表开放，文档内容不能创建真实确认。
+
+### Tool Risk and Approval Binding
+
+- LOW：read/list/query/retrieve；MEDIUM：reprocess/reindex/layout/index；
+  HIGH：write/delete/overwrite/undo/rollback。未知 mutation 默认按 HIGH 处理。
+- HIGH 操作继续执行 Schema Validation → Policy Check → Preview/Diff →
+  SQLite Action Approval → Execute；确认触发率为 100%。
+- 每个 Approval 统一返回 `approval_id`（兼容原 `action_id`），并绑定
+  `task_id + operation + file_id/file_name + frozen_operation`。
+- 确认时重新校验绑定；操作或目标变化返回 `APPROVAL_BINDING_MISMATCH`，旧 Approval
+  不可复用。模型参数中的 `confirmed=true` 不具备任何确认权限。
+- standalone write/delete/undo/rollback 也创建最小 Task/Step，确保 Approval 始终有
+  Task 归属；Diff、Version、Undo、Rollback 能力保持不变。
+
+### Workflow and Trace
+
+- Workflow 在执行器之前检查 ready Node；任何伪装为 QUERY/ANALYSIS 的 HIGH Tool
+  在没有真实 Approval 时直接以 `CONFIRMATION_REQUIRED` 拒绝，真实 Tool 不会执行。
+- Safety Trace 记录 policy decision、risk level、approval_id、approval result 和
+  policy rejection；仅保存参数/结果摘要，不记录 Chain-of-Thought 或文档注入正文。
+
+### S01-S10 and Regression
+
+- S01-S05：全部文档来源不可信，以及 RAG/OCR/文本/JSON Prompt Injection 自动化测试。
+- S06-S08：风险矩阵、Schema 先于 Handler、HIGH Approval Trigger Rate = 100%。
+- S09-S10：Approval 绑定失效、LLM 假确认拒绝、Workflow 绕过拒绝和安全 Trace。
+
+```text
+V3.21 S01-S10: 10 passed, 0 failed
+Safety/Confirmation/Trace focused regression: 35 passed, 0 failed
+pytest: 308 passed, 0 failed, 0 skipped, 17.04s
+V1/V2/V3 regression: PASS
+```

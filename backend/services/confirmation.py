@@ -15,7 +15,9 @@ from backend.runtime.task_runner import (
 )
 from backend.runtime.context_manager import clear_pending_action, set_pending_action
 from backend.runtime.safety_policy import (
+    FileTrust,
     PolicyDecision,
+    RiskLevel,
     SafetyAssessment,
     assess_high_risk_action,
     record_safety_trace,
@@ -146,6 +148,27 @@ def _create_pending_word_action(
     finalize_standalone: bool,
 ) -> dict[str, Any]:
     preview_data = preview["data"]
+    action_id = uuid4().hex
+    if task_id is None:
+        task_type = {
+            ACTION_TYPE_WRITE_WORD: "word_write",
+            ACTION_TYPE_UNDO_WORD: "word_undo",
+            ACTION_TYPE_ROLLBACK_WORD: "word_rollback",
+        }[action_type]
+        task = start_task(
+            session_id=session_id,
+            user_message=content,
+            plan=TaskPlan(
+                task_type=task_type,
+                steps=(
+                    PlannedStep(1, "生成 Word Diff 预览", "tool", "preview_word_diff"),
+                    PlannedStep(2, "等待用户确认", "confirmation", "confirm_action"),
+                    PlannedStep(3, "执行确认操作", "side_effect", action_type),
+                ),
+            ),
+        )
+        task_id = task["task_id"]
+        finalize_standalone = True
     assessment = assess_high_risk_action(
         action_type=action_type,
         file_id=preview_data["file_id"],
@@ -156,28 +179,13 @@ def _create_pending_word_action(
         session_id=session_id,
         task_id=task_id,
         action_type=action_type,
+        approval_id=action_id,
+        approval_result="pending",
     )
     if assessment.decision != PolicyDecision.CONFIRMATION_REQUIRED:
         return _failure("SAFETY_POLICY_BLOCKED", assessment.reason)
     if task_id is not None and database.get_task_record(task_id) is None:
         return _failure("TASK_NOT_FOUND", "关联 Task 不存在")
-    if finalize_standalone:
-        plan = TaskPlan(
-            task_type=(
-                "word_undo" if action_type == ACTION_TYPE_UNDO_WORD else "word_rollback"
-            ),
-            steps=(
-                PlannedStep(1, "生成 Word Diff 预览", "tool", "preview_word_diff"),
-                PlannedStep(2, "等待用户确认", "confirmation"),
-                PlannedStep(3, "执行版本恢复", "side_effect", action_type),
-            ),
-        )
-        task = start_task(
-            session_id=session_id,
-            user_message=content,
-            plan=plan,
-        )
-        task_id = task["task_id"]
     if task_id is not None:
         record_tool_execution(
             task_id=task_id,
@@ -198,7 +206,7 @@ def _create_pending_word_action(
         )
     }
     action = {
-        "action_id": uuid4().hex,
+        "action_id": action_id,
         "session_id": session_id,
         "action_type": action_type,
         "target_file": preview_data["target_file"],
@@ -248,6 +256,31 @@ def create_pending_delete_action(*, session_id: str, file_id: str) -> dict[str, 
         return _failure("FILE_DELETE_FORBIDDEN", "系统固定文件禁止删除")
     if record["lifecycle_status"] == "deleted":
         return _failure("FILE_ALREADY_DELETED", "文件已经删除")
+    action_id = uuid4().hex
+    task = start_task(
+        session_id=session_id,
+        user_message=f"删除文件：{record['file_name']}",
+        plan=TaskPlan(
+            task_type="file_delete",
+            steps=(
+                PlannedStep(1, "锁定删除目标", "tool", "preview_delete"),
+                PlannedStep(2, "等待用户确认", "confirmation", "confirm_action"),
+                PlannedStep(3, "执行确认删除", "side_effect", ACTION_TYPE_DELETE_FILE),
+            ),
+        ),
+    )
+    task_id = task["task_id"]
+    preview = _success(
+        {"file_id": record["file_id"], "file_name": record["file_name"]},
+        "删除目标已锁定，实际文件未修改",
+    )
+    record_tool_execution(
+        task_id=task_id,
+        tool_name="preview_delete",
+        arguments={"file_id": record["file_id"]},
+        result=preview,
+        retry_count=0,
+    )
     assessment = assess_high_risk_action(
         action_type=ACTION_TYPE_DELETE_FILE,
         file_id=record["file_id"],
@@ -256,14 +289,16 @@ def create_pending_delete_action(*, session_id: str, file_id: str) -> dict[str, 
     _record_action_safety(
         assessment,
         session_id=session_id,
-        task_id=None,
+        task_id=task_id,
         action_type=ACTION_TYPE_DELETE_FILE,
+        approval_id=action_id,
+        approval_result="pending",
     )
     if assessment.decision != PolicyDecision.CONFIRMATION_REQUIRED:
         return _failure("SAFETY_POLICY_BLOCKED", assessment.reason)
 
     action = {
-        "action_id": uuid4().hex,
+        "action_id": action_id,
         "session_id": session_id,
         "action_type": ACTION_TYPE_DELETE_FILE,
         "target_file": record["file_name"],
@@ -277,7 +312,7 @@ def create_pending_delete_action(*, session_id: str, file_id: str) -> dict[str, 
         "operation_json": None,
         "diff_json": None,
         "target_version_id": None,
-        "task_id": None,
+        "task_id": task_id,
     }
     database.insert_pending_action(action)
     _set_context_action(session_id, action["action_id"])
@@ -289,7 +324,12 @@ def create_pending_delete_action(*, session_id: str, file_id: str) -> dict[str, 
         confirmed=False,
         success=True,
     )
-    return _success(dict(action), "待确认删除操作已创建，文件尚未删除")
+    public_action = _deserialize_action(action)
+    finalize_task(
+        task_id,
+        {"status": "confirmation_required", "pending_action": public_action},
+    )
+    return _success(public_action, "待确认删除操作已创建，文件尚未删除")
 
 
 def get_pending_action(action_id: str) -> dict[str, Any]:
@@ -327,6 +367,20 @@ def cancel_action(action_id: str) -> dict[str, Any]:
         student_id=action["student_id"],
         confirmed=False,
         success=True,
+    )
+    cancelled_assessment = assess_high_risk_action(
+        action_type=str(action.get("action_type") or ""),
+        file_id=_action_file_id(action),
+        file_name=str(action.get("target_file") or "") or None,
+        confirmation_granted=False,
+    )
+    _record_action_safety(
+        cancelled_assessment,
+        session_id=action["session_id"],
+        task_id=action.get("task_id"),
+        action_type=action["action_type"],
+        approval_id=action_id,
+        approval_result="cancelled",
     )
     _resume_runtime_action(action_id, "cancelled", success=False)
     _finish_batch_action(action_id, "skipped")
@@ -396,15 +450,29 @@ def confirm_action(action_id: str) -> dict[str, Any]:
 
 
 def _execute_frozen_action(action: dict[str, Any]) -> dict[str, Any]:
-    file_id = str(
-        action.get("file_id")
-        or (
-            action.get("content")
-            if action.get("action_type") == ACTION_TYPE_DELETE_FILE
-            else ""
+    binding_error = _approval_binding_error(action)
+    if binding_error is not None:
+        rejected = SafetyAssessment(
+            decision=PolicyDecision.BLOCK,
+            risk_level=RiskLevel.HIGH,
+            file_trust=FileTrust.UNKNOWN,
+            operation=str(action.get("action_type") or "unknown"),
+            reason=binding_error,
+            file_id=_action_file_id(action),
+            file_name=str(action.get("target_file") or "") or None,
+            registered=None,
+            requires_confirmation=True,
         )
-        or ""
-    ).strip()
+        _record_action_safety(
+            rejected,
+            session_id=str(action.get("session_id") or "direct"),
+            task_id=action.get("task_id"),
+            action_type=str(action.get("action_type") or "file_action"),
+            approval_id=str(action.get("action_id") or "") or None,
+            approval_result="rejected",
+        )
+        return _failure("APPROVAL_BINDING_MISMATCH", binding_error)
+    file_id = _action_file_id(action) or ""
     assessment = assess_high_risk_action(
         action_type=str(action.get("action_type") or ""),
         file_id=file_id or None,
@@ -416,6 +484,8 @@ def _execute_frozen_action(action: dict[str, Any]) -> dict[str, Any]:
         session_id=str(action.get("session_id") or "direct"),
         task_id=action.get("task_id"),
         action_type=str(action.get("action_type") or "file_action"),
+        approval_id=str(action.get("action_id") or "") or None,
+        approval_result="confirmed",
     )
     if assessment.decision != PolicyDecision.ALLOW:
         return _failure("SAFETY_POLICY_BLOCKED", assessment.reason)
@@ -452,6 +522,8 @@ def _record_action_safety(
     session_id: str,
     task_id: str | None,
     action_type: str,
+    approval_id: str | None = None,
+    approval_result: str | None = None,
 ) -> None:
     try:
         step_id = None
@@ -469,6 +541,8 @@ def _record_action_safety(
             task_id=task_id,
             step_id=step_id,
             tool_name=action_type,
+            approval_id=approval_id,
+            approval_result=approval_result,
         )
     except Exception:
         # Trace is observable but never authoritative over a policy decision.
@@ -477,9 +551,65 @@ def _record_action_safety(
 
 def _deserialize_action(action: dict[str, Any]) -> dict[str, Any]:
     item = dict(action)
+    item["approval_id"] = item["action_id"]
     item["operation"] = json.loads(item["operation_json"]) if item.get("operation_json") else None
     item["diff_preview"] = json.loads(item["diff_json"]) if item.get("diff_json") else None
     return item
+
+
+def _action_file_id(action: dict[str, Any]) -> str | None:
+    value = action.get("file_id")
+    if not value and action.get("action_type") == ACTION_TYPE_DELETE_FILE:
+        value = action.get("content")
+    return str(value or "").strip() or None
+
+
+def _approval_binding_error(action: dict[str, Any]) -> str | None:
+    """Match a confirmed DB action to its frozen Task, operation and target."""
+    approval_id = str(action.get("action_id") or "").strip()
+    task_id = str(action.get("task_id") or "").strip()
+    if not approval_id or not task_id:
+        return "Approval 缺少 approval_id 或 task_id 绑定"
+    task = database.get_task_record(task_id)
+    if task is None:
+        return "Approval 关联 Task 不存在"
+    checkpoint = task.get("checkpoint_data") or {}
+    binding = checkpoint.get("approval_binding") or {}
+    file_id = _action_file_id(action)
+    target = {
+        "file_id": file_id,
+        "file_name": action.get("target_file"),
+    }
+    frozen_operation = (
+        json.loads(action["operation_json"])
+        if action.get("operation_json")
+        else None
+    )
+    if (
+        checkpoint.get("action_id") != approval_id
+        or binding.get("approval_id") != approval_id
+        or binding.get("operation") != action.get("action_type")
+        or binding.get("target") != target
+        or binding.get("frozen_operation") != frozen_operation
+    ):
+        return "Approval 的 Task、操作或目标绑定不一致"
+    record = database.get_file_record_by_id(file_id) if file_id else None
+    if record is None or record.get("file_name") != action.get("target_file"):
+        return "Approval 目标文件已经变化"
+    expected_operation = {
+        ACTION_TYPE_WRITE_WORD: "append",
+        ACTION_TYPE_UNDO_WORD: "undo",
+        ACTION_TYPE_ROLLBACK_WORD: "rollback",
+        ACTION_TYPE_DELETE_FILE: None,
+    }.get(action.get("action_type"), "unsupported")
+    actual_operation = (
+        frozen_operation.get("operation_type")
+        if isinstance(frozen_operation, dict)
+        else None
+    )
+    if expected_operation == "unsupported" or actual_operation != expected_operation:
+        return "Approval 冻结操作与 Action 类型不一致"
+    return None
 
 
 def _resume_runtime_action(action_id: str, status: str, *, success: bool) -> None:

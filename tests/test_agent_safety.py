@@ -88,7 +88,11 @@ def test_delete_requires_confirmation_and_keeps_unknown_upload(
     assert result["data"]["status"] == "pending"
     assert target.exists()
     assert database.get_file_record_by_id(record["file_id"])["status"] == "active"
-    safety = database.get_session_trace_records("safety-delete")[0]
+    safety = next(
+        trace
+        for trace in database.get_session_trace_records("safety-delete")
+        if trace["event_type"] == "safety_policy_check"
+    )
     assert safety["event_type"] == "safety_policy_check"
     assert safety["tool_name"] == "delete_file"
     assert safety["result_status"] == "confirmation_required"
@@ -118,7 +122,7 @@ def test_unknown_registered_file_is_distinguished_and_read_only_tool_is_allowed(
     safety = database.get_session_trace_records("safety-unknown")[0]
     assert safety["result_status"] == "allow"
     assert '"file_trust": "unknown"' in safety["arguments_summary"]
-    assert '"risk_level": "medium"' in safety["arguments_summary"]
+    assert '"risk_level": "low"' in safety["arguments_summary"]
 
 
 def test_unregistered_file_is_blocked_before_tool_handler(

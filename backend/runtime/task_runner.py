@@ -13,6 +13,12 @@ from backend.runtime.workflow_condition import (
     evaluate_condition,
     resolve_reference,
 )
+from backend.runtime.safety_policy import (
+    RiskLevel,
+    assess_tool_execution,
+    classify_tool_risk,
+    record_safety_trace,
+)
 from backend.services.trace_service import record_trace
 
 
@@ -296,6 +302,23 @@ def execute_workflow(
             if step["status"] in {StepStatus.CREATED.value, StepStatus.FAILED.value}
             and _step_is_ready(step, steps, task["checkpoint_data"])
         ]
+        unsafe = next(
+            (
+                step
+                for step in ready
+                if step.get("node_type") != NodeType.APPROVAL.value
+                and (
+                    step.get("step_type") == StepType.WRITE.value
+                    or classify_tool_risk(
+                        str(step.get("tool_name") or ""), read_only=True
+                    )
+                    == RiskLevel.HIGH
+                )
+            ),
+            None,
+        )
+        if unsafe is not None:
+            return _reject_unapproved_workflow_node(task, unsafe)
         conditions = [step for step in ready if step.get("node_type") == NodeType.CONDITION.value]
         for step in conditions:
             evaluate_condition_node(
@@ -362,6 +385,52 @@ def execute_workflow(
     return {"ok": True, "error_code": None, "data": database.get_task_record(task_id)}
 
 
+def _reject_unapproved_workflow_node(
+    task: dict[str, Any], step: dict[str, Any]
+) -> dict[str, Any]:
+    """Fail closed before a Workflow executor can see a HIGH-risk node."""
+    arguments = dict(step.get("arguments") or {})
+    assessment = assess_tool_execution(
+        tool_name=str(step.get("tool_name") or ""),
+        arguments=arguments,
+        read_only=False,
+        requires_confirmation=True,
+        confirmation_granted=False,
+    )
+    now = database.utc_now()
+    database.update_task_step_record(
+        step["step_id"],
+        status=StepStatus.FAILED.value,
+        failed_reason="高风险 Workflow Node 缺少有效 Approval",
+        completed_at=now,
+    )
+    database.update_task_record(
+        task["task_id"],
+        status="failed",
+        current_step=step["sequence"],
+        next_action="需要创建并完成真实 Approval",
+        updated_at=now,
+        completed_at=now,
+        error_code="CONFIRMATION_REQUIRED",
+    )
+    try:
+        record_safety_trace(
+            assessment,
+            session_id=task["session_id"],
+            task_id=task["task_id"],
+            step_id=step["step_id"],
+            tool_name=step.get("tool_name"),
+            approval_result="missing",
+        )
+    except Exception:
+        pass
+    return {
+        "ok": False,
+        "error_code": "CONFIRMATION_REQUIRED",
+        "data": database.get_task_record(task["task_id"]),
+    }
+
+
 def finalize_task(task_id: str, result: dict[str, Any]) -> dict[str, Any]:
     task = database.get_task_record(task_id)
     if task is None:
@@ -389,6 +458,16 @@ def finalize_task(task_id: str, result: dict[str, Any]) -> dict[str, Any]:
         checkpoint.update(
             {
                 "action_id": action.get("action_id"),
+                "approval_binding": {
+                    "approval_id": action.get("approval_id")
+                    or action.get("action_id"),
+                    "operation": action.get("action_type"),
+                    "target": {
+                        "file_id": action.get("file_id"),
+                        "file_name": action.get("target_file"),
+                    },
+                    "frozen_operation": action.get("operation"),
+                },
                 "completed_steps": _successful_sequences(task_id),
             }
         )

@@ -89,6 +89,9 @@ def _result_summary(result: Any) -> str:
             "message": result.get("result_summary") or result.get("message"),
             "error_code": result.get("error_code"),
         }
+        for key in ("approval_id", "approval_result"):
+            if result.get(key) is not None:
+                compact[key] = result[key]
         return redacted_json(compact, max_length=1000)
     return redacted_json(result, max_length=1000)
 
