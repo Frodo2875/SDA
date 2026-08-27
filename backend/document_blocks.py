@@ -7,7 +7,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-BlockType = Literal["title", "paragraph", "table", "cell"]
+BlockType = Literal[
+    "title", "paragraph", "table", "cell", "image", "header", "footer"
+]
 
 
 class DocumentBlock(BaseModel):
@@ -22,6 +24,19 @@ class DocumentBlock(BaseModel):
     content: str
     bbox: list[float] | None = Field(default=None, min_length=4, max_length=4)
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    parent_id: str | None = Field(default=None, min_length=1, max_length=128)
+    source_parser: str | None = Field(default=None, min_length=1, max_length=128)
+    status: Literal["normal", "degraded"] = "normal"
+    warnings: list[str] = Field(default_factory=list)
+
+    @property
+    def document_id(self) -> str:
+        """Compatibility alias for consumers that call the file a document."""
+        return self.file_id
+
+    @property
+    def text(self) -> str:
+        return self.content
 
 
 def make_document_block(
@@ -33,6 +48,11 @@ def make_document_block(
     page_no: int | None = None,
     bbox: list[float] | None = None,
     confidence: float | None = None,
+    parent_id: str | None = None,
+    source_parser: str | None = None,
+    status: Literal["normal", "degraded"] = "normal",
+    warnings: list[str] | None = None,
+    block_id: str | None = None,
 ) -> DocumentBlock:
     """Create a stable block ID from source identity and normalized block data."""
     payload = json.dumps(
@@ -43,19 +63,25 @@ def make_document_block(
             "block_type": block_type,
             "content": str(content),
             "bbox": bbox,
+            "parent_id": parent_id,
+            "source_parser": source_parser,
         },
         ensure_ascii=False,
         sort_keys=True,
     )
-    block_id = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+    stable_block_id = block_id or hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
     return DocumentBlock(
-        block_id=block_id,
+        block_id=stable_block_id,
         file_id=file_id,
         page_no=page_no,
         block_type=block_type,
         content=str(content),
         bbox=bbox,
         confidence=confidence,
+        parent_id=parent_id,
+        source_parser=source_parser,
+        status=status,
+        warnings=list(warnings or []),
     )
 
 
@@ -90,6 +116,14 @@ def block_to_chunks(
             "block_type": block.block_type,
             "block": block.model_dump(),
         }
+        if block.parent_id is not None:
+            block_metadata["parent_id"] = block.parent_id
+        if block.source_parser is not None:
+            block_metadata["source_parser"] = block.source_parser
+        if block.status != "normal":
+            block_metadata["layout_status"] = block.status
+        if block.warnings:
+            block_metadata["layout_warnings"] = list(block.warnings)
         if block.bbox is not None:
             block_metadata["bbox"] = block.bbox
         if block.confidence is not None:

@@ -139,9 +139,10 @@ def test_scanned_pdf_enters_ocr_and_preserves_real_block_metadata(
             "block_type": "paragraph",
             "block": document_block,
             "page_no": block["page"],
-            "confidence": block["confidence"],
-            "bbox": block["bbox"],
-        }
+                "confidence": block["confidence"],
+                "bbox": block["bbox"],
+                "source_parser": "rapidocr",
+            }
         for block, document_block in zip(blocks, document_blocks)
     ]
     traces = database.get_session_trace_records(

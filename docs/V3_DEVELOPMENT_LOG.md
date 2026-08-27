@@ -282,3 +282,54 @@ OCR Pipeline: 12 passed, PASS
 Real OCR smoke: PASS（当前 tuli_env 的 optional dependencies 可用）
 V1/V2/V3 regression: included in full pytest, PASS
 ```
+
+## V3.17 Layout and Basic Table/Cell Structure
+
+### Document Block
+
+- 在现有 `DocumentBlock` 上增量扩展，没有创建重复 Block Schema。
+- 保留 `title`、`paragraph`、`table`、`cell`，新增 `image`、`header`、
+  `footer`。
+- Block 现在可表达：`file_id`（并提供 `document_id` 兼容属性）、`page_no`、
+  `block_id`、`block_type`、`content`（并提供 `text` 属性）、`bbox`、
+  `confidence`、`parent_id`、`source_parser`、`status` 和 `warnings`。
+- Word 标题作为父 Block，所属正文、表格和图片通过 `parent_id` 指向当前标题；Table
+  Cell 通过 `parent_id` 指向 Table Block。
+- 新解析结果明确记录 `python-docx`、`pypdf` 或 `rapidocr` 来源；旧 Chunk 中缺少新字段
+  的 Block 仍可通过默认值读取。
+- Word header/footer 使用真实段落文本；图片只记录真实结构占位并标记
+  `degraded / IMAGE_TEXT_NOT_EXTRACTED`，不使用视觉模型猜测图片内容。
+
+### Basic Table Structure
+
+- 新增轻量 `TableStructure`、`TableRow`、`TableColumn`、`TableCell` Schema。
+- 规则二维表格保存真实 `row_count`、`column_count`、Row/Column 到 Cell 的关联。
+- Cell 保存稳定 `cell_id`、`table_id`、`file_id`、`page_no`、零基
+  `row_index/column_index`、`cell_text`、`bbox` 和 `confidence`。
+- Cell Block 继续保留，并复用稳定 `cell_id` 作为其 `block_id`；Chunk metadata 同时保留
+  新 `table_id/cell_id/row_index/column_index` 和旧
+  `table_no/row_no/column_no`，保证 Evidence 与旧格式兼容。
+
+### Complex Table Safe Degradation
+
+- Word 表格只有在行列规则且每个坐标对应独立 XML Cell 时才生成二维结构。
+- 检测到合并或不规则 Cell 时，不生成推测的 Row/Column/Cell。
+- 仅保留真实 Table Block、原始提取文本、`degraded` 状态和
+  `MERGED_OR_IRREGULAR_CELLS_UNSUPPORTED` warning。
+- 降级 Table 的原始文本仍生成兼容 Chunk，可继续被 Retrieval 引用。
+- 本阶段未增加视觉模型，也未开发前端 Evidence 高亮。
+
+### 新增测试
+
+- O06：标题、正文、header、footer、image Block；parent relationship、
+  `source_parser`、bbox/confidence 契约。
+- O07：真实 2×2 Table/Row/Column/Cell、稳定 Table/Cell locator 和 Evidence 兼容。
+- O08：合并单元格安全降级，不伪造 Cell，原始 Table 文本仍可检索。
+
+### 测试结果
+
+```text
+pytest: 269 passed, 0 failed, 0 skipped, 15.68s
+Layout Block tests: 6 passed, PASS
+V1/V2/V3 regression: included in full pytest, PASS
+```

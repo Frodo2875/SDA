@@ -17,6 +17,7 @@ from backend.document_blocks import (
 )
 from backend.evidence import build_evidence, make_evidence_id
 from backend.repositories.file_repository import FileLifecycleStatus
+from backend.table_structure import build_simple_table, degraded_table
 from backend.services import ocr_service
 from backend.services.file_lifecycle import (
     get_file_lifecycle,
@@ -98,6 +99,7 @@ def parse_pdf(
             block_type="paragraph",
             content=text,
             page_no=page_no,
+            source_parser="pypdf",
         )
         for index, (page_no, text) in enumerate(normalized_pages)
     ]
@@ -251,16 +253,15 @@ def retrieve_document(
         record = eligible[row["file_id"]]
         metadata = row.get("metadata") or {}
         block_id = metadata.get("block_id")
-        table = (
+        table = metadata.get("table_id") or (
             f"table:{metadata['table_no']}"
-            if metadata.get("table_no") is not None
-            else None
+            if metadata.get("table_no") is not None else None
         )
         cell = (
-            f"R{metadata['row_no']}C{metadata['column_no']}"
-            if metadata.get("row_no") is not None
-            and metadata.get("column_no") is not None
-            else None
+            metadata.get("cell_id") or
+            (f"R{metadata['row_no']}C{metadata['column_no']}"
+             if metadata.get("row_no") is not None
+             and metadata.get("column_no") is not None else None)
         )
         evidence.append(
             build_evidence(
@@ -472,6 +473,9 @@ def _parse_ocr_pdf(
                     if page["source_type"] == "ocr" and page["status"] == "success"
                     else None
                 ),
+                source_parser=(
+                    "rapidocr" if page["source_type"] == "ocr" else "pypdf"
+                ),
                 bbox=(
                     raw.get("bbox")
                     if page["source_type"] == "ocr" and page["status"] == "success"
@@ -588,6 +592,26 @@ def _word_chunks(file_id: str, path: Path) -> list[dict[str, Any]]:
     blocks: list[DocumentBlock] = []
     metadata_by_block: dict[str, dict[str, Any]] = {}
     current_section: str | None = None
+    current_section_id: str | None = None
+
+    seen_header_footer: set[tuple[str, str]] = set()
+    for section in document.sections:
+        for block_type, container in (("header", section.header), ("footer", section.footer)):
+            text = "\n".join(
+                paragraph.text.strip() for paragraph in container.paragraphs
+                if paragraph.text.strip()
+            )
+            key = (block_type, text)
+            if not text or key in seen_header_footer:
+                continue
+            seen_header_footer.add(key)
+            block = make_document_block(
+                file_id=file_id, sequence=len(blocks), block_type=block_type,
+                content=text, source_parser="python-docx",
+            )
+            blocks.append(block)
+            metadata_by_block[block.block_id] = {"word_region": block_type}
+
     for paragraph_no, paragraph in enumerate(document.paragraphs, start=1):
         text = paragraph.text.strip()
         if not text:
@@ -601,6 +625,8 @@ def _word_chunks(file_id: str, path: Path) -> list[dict[str, Any]]:
             sequence=len(blocks),
             block_type="title" if is_heading else "paragraph",
             content=text,
+            parent_id=None if is_heading else current_section_id,
+            source_parser="python-docx",
         )
         blocks.append(block)
         metadata_by_block[block.block_id] = {
@@ -610,6 +636,17 @@ def _word_chunks(file_id: str, path: Path) -> list[dict[str, Any]]:
                 "paragraph_start": paragraph_no,
                 "paragraph_end": paragraph_no,
         }
+        if is_heading:
+            current_section_id = block.block_id
+
+    for image_no, _shape in enumerate(document.inline_shapes, start=1):
+        image_block = make_document_block(
+            file_id=file_id, sequence=len(blocks), block_type="image", content="",
+            parent_id=current_section_id, source_parser="python-docx",
+            status="degraded", warnings=["IMAGE_TEXT_NOT_EXTRACTED"],
+        )
+        blocks.append(image_block)
+        metadata_by_block[image_block.block_id] = {"image_no": image_no}
 
     for table_no, table in enumerate(document.tables, start=1):
         rows = [
@@ -622,31 +659,72 @@ def _word_chunks(file_id: str, path: Path) -> list[dict[str, Any]]:
             sequence=len(blocks),
             block_type="table",
             content=table_content,
+            parent_id=current_section_id,
+            source_parser="python-docx",
         )
         blocks.append(table_block)
-        metadata_by_block[table_block.block_id] = {"table_no": table_no}
-        for row_no, row in enumerate(rows, start=1):
-            for column_no, content in enumerate(row, start=1):
-                if not content:
-                    continue
-                cell_block = make_document_block(
-                    file_id=file_id,
-                    sequence=len(blocks),
-                    block_type="cell",
-                    content=content,
-                )
-                blocks.append(cell_block)
-                metadata_by_block[cell_block.block_id] = {
-                    "table_no": table_no,
-                    "row_no": row_no,
-                    "column_no": column_no,
-                }
+        if not _is_simple_word_table(table, rows):
+            structure = degraded_table(
+                table_id=table_block.block_id, file_id=file_id,
+                raw_text=table_content, source_parser="python-docx",
+                warning="MERGED_OR_IRREGULAR_CELLS_UNSUPPORTED",
+            )
+            table_block.status = "degraded"
+            table_block.warnings = list(structure.warnings)
+            metadata_by_block[table_block.block_id] = {
+                "table_no": table_no,
+                "table_id": table_block.block_id,
+                "table_structure": structure.model_dump(),
+                "layout_status": "degraded",
+                "layout_warnings": list(structure.warnings),
+            }
+            continue
+
+        structure = build_simple_table(
+            table_id=table_block.block_id, file_id=file_id, rows=rows,
+            page_no=None, source_parser="python-docx",
+        )
+        metadata_by_block[table_block.block_id] = {
+            "table_no": table_no,
+            "table_id": table_block.block_id,
+            "table_structure": structure.model_dump(),
+        }
+        for cell in structure.cells:
+            cell_block = make_document_block(
+                file_id=file_id,
+                sequence=len(blocks),
+                block_type="cell",
+                content=cell.cell_text,
+                parent_id=table_block.block_id,
+                source_parser="python-docx",
+                block_id=cell.cell_id,
+            )
+            blocks.append(cell_block)
+            metadata_by_block[cell_block.block_id] = {
+                "table_no": table_no,
+                "table_id": table_block.block_id,
+                "cell_id": cell.cell_id,
+                "row_no": cell.row_index + 1,
+                "column_no": cell.column_index + 1,
+                "row_index": cell.row_index,
+                "column_index": cell.column_index,
+                "bbox": cell.bbox,
+                "confidence": cell.confidence,
+            }
 
     return blocks_to_chunks(
         blocks,
         source_type="word",
         metadata_by_block=metadata_by_block,
     )
+
+
+def _is_simple_word_table(table: Any, rows: list[list[str]]) -> bool:
+    """Accept only a rectangular grid with one distinct XML cell per coordinate."""
+    if not rows or not rows[0] or any(len(row) != len(rows[0]) for row in rows):
+        return False
+    xml_cells = [cell._tc for row in table.rows for cell in row.cells]
+    return len({id(cell) for cell in xml_cells}) == len(xml_cells)
 
 
 def _split_long_text(text: str) -> list[str]:
