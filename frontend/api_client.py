@@ -56,6 +56,27 @@ def get_file_detail(file_id: str) -> dict[str, Any]:
     return result.get("data") or {}
 
 
+def get_file_preview(file_id: str) -> dict[str, Any]:
+    result = request("GET", f"/api/files/{file_id}/preview")
+    return result.get("data") or {}
+
+
+def reprocess_file(file_id: str) -> dict[str, Any]:
+    return request("POST", f"/api/files/{file_id}/reprocess")
+
+
+def reindex_file(file_id: str) -> dict[str, Any]:
+    return request("POST", f"/api/files/{file_id}/reindex")
+
+
+def prepare_delete(file_id: str, session_id: str) -> dict[str, Any]:
+    return request(
+        "POST",
+        f"/api/files/{file_id}/delete",
+        json={"session_id": session_id},
+    )
+
+
 def upload_file(uploaded_file: Any) -> dict[str, Any]:
     return request(
         "POST", "/api/files/upload",

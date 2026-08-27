@@ -11,6 +11,7 @@ from frontend.components.evidence_panel import evidence_location
 from frontend.components.file_panel import (
     file_card_fields,
     file_detail_sections,
+    file_operation_capabilities,
     filter_files_by_lifecycle,
 )
 from frontend.components.task_center import (
@@ -34,6 +35,7 @@ def _file(**values: Any) -> dict[str, Any]:
         "index_status": "indexed",
         "queryable": True,
         "source_type": "upload",
+        "deletable": True,
         **values,
     }
 
@@ -148,6 +150,47 @@ def test_api_client_sends_workspace_filters_and_multi_upload_statuses(
     assert outcomes[1]["message"] == "格式错误"
 
 
+def test_workspace_file_operation_capabilities_and_api_routes(monkeypatch) -> None:
+    upload = _file()
+    system = _file(source_type="system", deletable=False)
+    excel = _file(file_type="excel")
+
+    assert file_operation_capabilities(upload) == {
+        "details": True,
+        "preview": True,
+        "reprocess": True,
+        "reindex": True,
+        "delete": True,
+    }
+    assert file_operation_capabilities(system)["delete"] is False
+    assert file_operation_capabilities(excel)["reprocess"] is False
+    assert file_operation_capabilities(excel)["reindex"] is False
+
+    observed: list[tuple[str, str, dict[str, Any]]] = []
+
+    def fake_request(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        observed.append((method, path, kwargs))
+        return {"ok": True, "data": {"action_id": "action-1"}, "message": "ok"}
+
+    monkeypatch.setattr(api_client, "request", fake_request)
+    file_id = upload["file_id"]
+    assert api_client.get_file_preview(file_id)["action_id"] == "action-1"
+    api_client.reprocess_file(file_id)
+    api_client.reindex_file(file_id)
+    api_client.prepare_delete(file_id, "session-1")
+
+    assert observed == [
+        ("GET", f"/api/files/{file_id}/preview", {}),
+        ("POST", f"/api/files/{file_id}/reprocess", {}),
+        ("POST", f"/api/files/{file_id}/reindex", {}),
+        (
+            "POST",
+            f"/api/files/{file_id}/delete",
+            {"json": {"session_id": "session-1"}},
+        ),
+    ]
+
+
 def test_task_center_statuses_and_evidence_source_location() -> None:
     tasks = [
         {"task": {"task_id": "1", "task_type": "async_ocr", "task_status": "created"}},
@@ -189,6 +232,11 @@ def test_streamlit_page_renders_three_workspace_areas(monkeypatch) -> None:
     assert [toggle.label for toggle in app.toggle] == ["显示左栏", "显示右栏"]
     assert any(button.label == "上传所选文件" for button in app.button)
     assert any(button.label == "应用搜索 / 筛选 / 排序" for button in app.button)
+    assert any(button.label == "查看详情" for button in app.button)
+    assert any(button.label == "快速预览" for button in app.button)
+    assert any(button.label == "重新解析" for button in app.button)
+    assert any(button.label == "重新索引" for button in app.button)
+    assert any(button.label == "删除文件" for button in app.button)
     assert any(expander.label.startswith("OCR任务") for expander in app.expander)
     assert any(expander.label.startswith("索引任务") for expander in app.expander)
     assert any(expander.label.startswith("Workflow任务") for expander in app.expander)
@@ -206,3 +254,58 @@ def test_streamlit_side_panels_can_be_hidden_independently(monkeypatch) -> None:
     app.toggle[1].set_value(False).run(timeout=10)
     subheaders = {item.value for item in app.subheader}
     assert subheaders == {"Agent Chat"}
+
+
+def test_f12_system_file_has_no_workspace_delete_entry(monkeypatch) -> None:
+    monkeypatch.setattr(
+        api_client,
+        "list_files",
+        lambda **kwargs: [_file(source_type="system", deletable=False)],
+    )
+
+    app = AppTest.from_file(PROJECT_ROOT / "frontend" / "app.py").run(timeout=10)
+
+    assert not app.exception
+    assert "删除文件" not in {button.label for button in app.button}
+    assert any("系统固定文件受保护" in caption.value for caption in app.caption)
+
+
+def test_f11_workspace_delete_shows_target_and_can_be_cancelled(monkeypatch) -> None:
+    item = _file(file_name="待确认删除.pdf")
+    action = {
+        "action_id": "delete-action",
+        "action_type": "delete_file",
+        "target_file": item["file_name"],
+        "content": item["file_id"],
+        "status": "pending",
+    }
+    monkeypatch.setattr(api_client, "list_files", lambda **kwargs: [item])
+    monkeypatch.setattr(
+        api_client,
+        "prepare_delete",
+        lambda file_id, session_id: {
+            "ok": True,
+            "data": action,
+            "message": "待确认删除操作已创建",
+        },
+    )
+    monkeypatch.setattr(
+        api_client,
+        "decide_action",
+        lambda action_id, decision: {
+            "ok": True,
+            "data": {**action, "status": "cancelled"},
+            "message": "操作已取消",
+        },
+    )
+
+    app = AppTest.from_file(PROJECT_ROOT / "frontend" / "app.py").run(timeout=10)
+    next(button for button in app.button if button.label == "删除文件").click().run(
+        timeout=10
+    )
+
+    assert not app.exception
+    assert any("待确认删除.pdf" in warning.value for warning in app.warning)
+    next(button for button in app.button if button.label == "取消").click().run(timeout=10)
+    assert not app.exception
+    assert any("已取消，目标文件没有变化" in item.value for item in app.markdown)

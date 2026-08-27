@@ -5,6 +5,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from docx import Document
 from openpyxl import Workbook
 
 from backend import database
@@ -45,6 +46,14 @@ def _xlsx_bytes() -> bytes:
     workbook.active.append(["值"])
     workbook.save(output)
     workbook.close()
+    return output.getvalue()
+
+
+def _docx_bytes(text: str) -> bytes:
+    output = BytesIO()
+    document = Document()
+    document.add_paragraph(text)
+    document.save(output)
     return output.getvalue()
 
 
@@ -187,6 +196,66 @@ async def test_upload_delete_requires_confirmation_and_cancel_keeps_file(
     assert database.get_file_record_by_id(upload["data"]["file_id"])[
         "lifecycle_status"
     ] == "ready"
+
+
+async def test_f11_cancel_delete_preserves_file_record_blocks_chunks_and_index(
+    client: httpx.AsyncClient,
+    lifecycle_data_dir: Path,
+) -> None:
+    upload = save_uploaded_file(
+        "取消删除完整索引.docx",
+        _docx_bytes("取消删除后必须保持可查询的 Block 和 Chunk。"),
+    )
+    file_id = upload["data"]["file_id"]
+    target = lifecycle_data_dir / "uploads" / "取消删除完整索引.docx"
+    before_bytes = target.read_bytes()
+    before_record = database.get_file_record_by_id(file_id)
+    before_chunks = database.get_document_chunks(file_id)
+
+    prepared = await client.post(
+        f"/api/files/{file_id}/delete",
+        json={"session_id": "f11-cancel-delete"},
+    )
+    cancelled = await client.post(
+        f"/api/actions/{prepared.json()['data']['action_id']}/cancel"
+    )
+
+    assert prepared.status_code == 200
+    assert cancelled.status_code == 200
+    assert cancelled.json()["data"]["status"] == "cancelled"
+    assert target.read_bytes() == before_bytes
+    assert database.get_file_record_by_id(file_id) == before_record
+    assert database.get_document_chunks(file_id) == before_chunks
+    assert before_chunks[0]["metadata"]["block"]["content"].startswith("取消删除后")
+
+
+async def test_f11_confirm_delete_removes_uploaded_file_and_active_chunks(
+    client: httpx.AsyncClient,
+    lifecycle_data_dir: Path,
+) -> None:
+    upload = save_uploaded_file(
+        "确认删除完整索引.docx",
+        _docx_bytes("确认删除后不应保留的 Block 和 Chunk。"),
+    )
+    file_id = upload["data"]["file_id"]
+    target = lifecycle_data_dir / "uploads" / "确认删除完整索引.docx"
+    assert database.get_document_chunks(file_id)
+
+    prepared = await client.post(
+        f"/api/files/{file_id}/delete",
+        json={"session_id": "f11-confirm-delete"},
+    )
+    confirmed = await client.post(
+        f"/api/actions/{prepared.json()['data']['action_id']}/confirm"
+    )
+
+    assert confirmed.status_code == 200
+    assert confirmed.json()["data"]["pending_action"]["status"] == "executed"
+    assert not target.exists()
+    assert database.get_document_chunks(file_id) == []
+    deleted = database.get_file_record_by_id(file_id)
+    assert deleted["lifecycle_status"] == "deleted"
+    assert deleted["queryable"] == 0
 
 
 async def test_confirmed_upload_delete_keeps_database_and_disk_in_sync(

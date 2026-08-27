@@ -26,6 +26,7 @@ def initialize_state() -> None:
         "workspace_lifecycle": "全部状态",
         "workspace_sort": "登记时间（新到旧）",
         "workspace_selected_file_id": None,
+        "workspace_preview_file_id": None,
         "known_tasks": {},
         "latest_evidence": [],
         "show_document_workspace": True,
@@ -125,9 +126,11 @@ def handle_action(message_index: int, decision: str) -> None:
             message["pending_action"] = {**action, **updated, "status": "executed"}
             write_result = data.get("write_result") or {}
             new_version = (write_result.get("data") or {}).get("new_version") or {}
+            is_delete = action.get("action_type") == "delete_file"
             st.session_state.messages.append(
                 {
-                    "role": "assistant", "content": "操作已确认并执行。",
+                    "role": "assistant",
+                    "content": "文件已确认删除。" if is_delete else "操作已确认并执行。",
                     "version_id": new_version.get("version_id"),
                 }
             )

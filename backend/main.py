@@ -26,8 +26,9 @@ from backend.services.confirmation import (
 )
 from backend.services.file_versioning import list_versions, preview_word_diff
 from backend.services.file_upload import save_uploaded_file
+from backend.services.document_index import reindex_document, reprocess_document
 from backend.services.batch_service import BatchArguments, get_batch, run_batch
-from backend.services.file_view import get_file_view, list_file_views
+from backend.services.file_view import get_file_preview, get_file_view, list_file_views
 from backend.runtime.context_manager import get_context
 from backend.schemas import (
     ActionResponse,
@@ -65,6 +66,7 @@ CLIENT_ERROR_CODES = {
     "INVALID_STUDENT_IDS",
     "INVALID_DIFF_OPERATION",
     "INVALID_TARGET_FILE",
+    "UNSUPPORTED_FILE_TYPE",
 }
 NOT_FOUND_ERROR_CODES = {
     "FILE_NOT_FOUND", "STUDENT_NOT_FOUND", "VERSION_NOT_FOUND",
@@ -159,6 +161,45 @@ async def api_file_workspace_details(
 async def api_file_details(file_id: str) -> dict[str, Any] | JSONResponse:
     """Read lifecycle, Schema summary and writable/version presentation metadata."""
     return _call_tool(get_file_view, file_id)
+
+
+@app.get(
+    "/api/files/{file_id}/preview", response_model=ToolResponse, tags=["files"]
+)
+async def api_file_preview(
+    file_id: Annotated[
+        str,
+        Path(min_length=32, max_length=32, pattern=r"^[0-9a-fA-F]{32}$"),
+    ],
+) -> dict[str, Any] | JSONResponse:
+    """Return a bounded read-only preview; never expose a client file path."""
+    return _call_tool(get_file_preview, file_id)
+
+
+@app.post(
+    "/api/files/{file_id}/reprocess", response_model=ToolResponse, tags=["files"]
+)
+async def api_reprocess_document(
+    file_id: Annotated[
+        str,
+        Path(min_length=32, max_length=32, pattern=r"^[0-9a-fA-F]{32}$"),
+    ],
+) -> dict[str, Any] | JSONResponse:
+    """Call the V3.13 candidate parse and atomic activation pipeline."""
+    return _call_tool(reprocess_document, file_id)
+
+
+@app.post(
+    "/api/files/{file_id}/reindex", response_model=ToolResponse, tags=["files"]
+)
+async def api_reindex_document(
+    file_id: Annotated[
+        str,
+        Path(min_length=32, max_length=32, pattern=r"^[0-9a-fA-F]{32}$"),
+    ],
+) -> dict[str, Any] | JSONResponse:
+    """Call the V3.13 candidate index and atomic active switch."""
+    return _call_tool(reindex_document, file_id)
 
 
 @app.post("/api/files/upload", response_model=ToolResponse, tags=["files"])

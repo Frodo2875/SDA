@@ -17,6 +17,8 @@ LIFECYCLE_LABELS = {
     "ocr_processing": "OCR处理中",
     "layout_processing": "Layout处理中",
     "indexing": "索引中",
+    "reprocessing": "重新解析中",
+    "reindexing": "重新索引中",
     "queryable": "可查询",
     "processing": "处理中",
     "ready": "可用",
@@ -48,7 +50,9 @@ def format_file_size(value: Any) -> str:
 
 
 def file_card_fields(item: dict[str, Any]) -> dict[str, str]:
-    lifecycle = str(item.get("lifecycle_status") or "—").casefold()
+    lifecycle = str(
+        item.get("canonical_status") or item.get("lifecycle_status") or "—"
+    ).casefold()
     return {
         "file_name": str(item.get("file_name") or "未命名文件"),
         "file_type": FILE_TYPES.get(item.get("file_type"), str(item.get("file_type") or "未知")),
@@ -57,6 +61,23 @@ def file_card_fields(item: dict[str, Any]) -> dict[str, str]:
         "lifecycle_status": LIFECYCLE_LABELS.get(lifecycle, lifecycle),
         "index_status": str(item.get("index_status") or "—"),
         "queryable": "是" if item.get("queryable") else "否",
+    }
+
+
+def file_operation_capabilities(item: dict[str, Any]) -> dict[str, bool]:
+    """Keep UI affordances aligned with server-side file operation rules."""
+    available = bool(item.get("file_id")) and str(
+        item.get("lifecycle_status") or ""
+    ).casefold() != "deleted"
+    document = item.get("file_type") in {"word", "pdf"}
+    return {
+        "details": available,
+        "preview": available,
+        "reprocess": available and document,
+        "reindex": available and document,
+        "delete": available
+        and item.get("source_type") == "upload"
+        and bool(item.get("deletable")),
     }
 
 
@@ -179,14 +200,18 @@ def render_file_panel(
             continue
         st.markdown(f"#### {title}")
         for item in group:
-            _render_file(item, session_id, on_version_action)
+            _render_file(item, session_id, on_refresh, on_version_action)
 
 
 def _render_file(
-    item: dict[str, Any], session_id: str, on_version_action: ActionHandler
+    item: dict[str, Any],
+    session_id: str,
+    on_refresh: Callable[[], None],
+    on_version_action: ActionHandler,
 ) -> None:
     with st.container(border=True):
         fields = file_card_fields(item)
+        capabilities = file_operation_capabilities(item)
         st.markdown(f"**{fields['file_name']}**")
         st.caption(f"{fields['file_type']} · {fields['size']}")
         st.markdown(f"`{fields['lifecycle_status']}` · `索引 {fields['index_status']}`")
@@ -203,15 +228,70 @@ def _render_file(
             )
         if item.get("file_type") in {"word", "pdf"}:
             st.caption(f"文档索引状态：{item.get('index_status', '—')}")
-        if item.get("file_id") and st.button(
-            "查看文件详情",
-            key=f"details-{item['file_id']}",
-            use_container_width=True,
+        error_summary = item.get("error_summary") or {}
+        if error_summary:
+            st.error(
+                f"最近操作失败（{error_summary.get('failure_stage') or 'unknown'}）："
+                f"{error_summary.get('message') or error_summary.get('error_code') or '未知错误'}"
+            )
+        notice = st.session_state.pop(
+            f"workspace-operation-notice-{item.get('file_id')}", None
+        )
+        if notice:
+            (st.success if notice.get("ok") else st.error)(notice.get("message", ""))
+
+        view_columns = st.columns(2)
+        if capabilities["details"] and view_columns[0].button(
+            "查看详情", key=f"details-{item['file_id']}", use_container_width=True
         ):
             st.session_state.workspace_selected_file_id = item["file_id"]
             st.rerun()
+        if capabilities["preview"] and view_columns[1].button(
+            "快速预览", key=f"preview-{item['file_id']}", use_container_width=True
+        ):
+            st.session_state.workspace_preview_file_id = item["file_id"]
+            st.rerun()
         if st.session_state.get("workspace_selected_file_id") == item.get("file_id"):
             _render_file_details(item["file_id"])
+        if st.session_state.get("workspace_preview_file_id") == item.get("file_id"):
+            _render_file_preview(item["file_id"])
+
+        if capabilities["reprocess"] or capabilities["reindex"]:
+            processing_columns = st.columns(2)
+            if processing_columns[0].button(
+                "重新解析", key=f"reprocess-{item['file_id']}", use_container_width=True
+            ):
+                _run_document_operation(
+                    item,
+                    label="重新解析",
+                    status="REPROCESSING",
+                    operation=api_client.reprocess_file,
+                    on_refresh=on_refresh,
+                )
+            if processing_columns[1].button(
+                "重新索引", key=f"reindex-{item['file_id']}", use_container_width=True
+            ):
+                _run_document_operation(
+                    item,
+                    label="重新索引",
+                    status="REINDEXING",
+                    operation=api_client.reindex_file,
+                    on_refresh=on_refresh,
+                )
+        elif item.get("file_type") == "excel":
+            st.caption("Excel 使用结构化 Schema，不提供文档 Block 重解析/重索引。")
+
+        if capabilities["delete"] and st.button(
+            "删除文件",
+            key=f"delete-{item['file_id']}",
+            use_container_width=True,
+        ):
+            try:
+                on_version_action(api_client.prepare_delete(item["file_id"], session_id))
+            except RuntimeError as exc:
+                st.error(str(exc))
+        elif item.get("source_type") == "system":
+            st.caption("系统固定文件受保护，不提供删除入口。")
         if item.get("file_type") == "word" and item.get("writable") and item.get("file_id"):
             _render_versions(item, session_id, on_version_action)
 
@@ -230,10 +310,16 @@ def _render_file_details(file_id: str) -> None:
             f"登记时间：{detail.get('created_time') or '—'}"
         )
         st.markdown(
-            f"**状态**：生命周期 `{detail.get('lifecycle_status', '—')}` · "
+            f"**状态**：生命周期 `{detail.get('canonical_status') or detail.get('lifecycle_status', '—')}` · "
             f"解析 `{detail.get('parse_status', '—')}` · "
             f"索引 `{detail.get('index_status', '—')}`"
         )
+        error_summary = detail.get("error_summary") or {}
+        if error_summary:
+            st.error(
+                f"错误阶段：{error_summary.get('failure_stage') or 'unknown'} · "
+                f"{error_summary.get('message') or error_summary.get('error_code') or '未知错误'}"
+            )
         versions = []
         if detail.get("file_type") == "word":
             try:
@@ -244,6 +330,54 @@ def _render_file_details(file_id: str) -> None:
             st.markdown(f"**{title} 详情**")
             for label, value in rows.items():
                 st.caption(f"{label}：{value}")
+
+
+def _render_file_preview(file_id: str) -> None:
+    with st.expander("快速预览", expanded=True):
+        try:
+            preview = api_client.get_file_preview(file_id)
+        except RuntimeError as exc:
+            st.warning(str(exc))
+            return
+        if preview.get("preview_type") == "table":
+            for sheet in preview.get("sheets") or []:
+                st.markdown(f"**Sheet：{sheet.get('sheet_name', '—')}**")
+                st.dataframe(sheet.get("rows") or [], use_container_width=True)
+        else:
+            for item in preview.get("items") or []:
+                st.caption(item.get("location") or "内容")
+                st.code(str(item.get("text") or "（空）"), language=None)
+        if preview.get("truncated"):
+            st.caption("预览已按安全上限截断。")
+
+
+def _run_document_operation(
+    item: dict[str, Any],
+    *,
+    label: str,
+    status: str,
+    operation: Callable[[str], dict[str, Any]],
+    on_refresh: Callable[[], None],
+) -> None:
+    file_id = item["file_id"]
+    status_box = st.status(
+        f"{label}中：{item.get('file_name', file_id)} · {status}", expanded=True
+    )
+    try:
+        result = operation(file_id)
+        message = result.get("message") or f"{label}完成"
+        st.session_state[f"workspace-operation-notice-{file_id}"] = {
+            "ok": True,
+            "message": message,
+        }
+        status_box.update(label=f"{label}完成 · QUERYABLE", state="complete")
+    except RuntimeError as exc:
+        st.session_state[f"workspace-operation-notice-{file_id}"] = {
+            "ok": False,
+            "message": str(exc),
+        }
+        status_box.update(label=f"{label}失败", state="error")
+    on_refresh()
 
 
 def _render_versions(

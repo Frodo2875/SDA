@@ -101,3 +101,56 @@ pytest: 243 passed, 0 failed, 0 skipped, 10.85s
 V1 Regression: 66 passed, 1 deselected, PASS
 V2 coverage manifest: 60 passed, PASS
 ```
+
+## V3.14 Document Workspace File Operations
+
+### Workspace 入口
+
+- 保留现有文件卡片、搜索、文件类型/生命周期筛选、时间/大小排序与多文件上传。
+- 文件卡片增加“查看详情”和受限“快速预览”。
+- Word/PDF 增加“重新解析”和“重新索引”，直接调用 V3.13
+  `reprocess_document()` / `reindex_document()`，不通过删除后重新上传模拟。
+- 操作请求期间显示 `REPROCESSING` / `REINDEXING` 状态；完成后自动刷新列表。
+- 失败后卡片和详情展示 lifecycle Trace 中持久化的 `error_summary`；成功恢复
+  `QUERYABLE`。
+- Excel 继续使用结构化 Schema 流程，不伪装成 Document Block 重处理。
+
+### 快速预览
+
+- 新增只读 `GET /api/files/{file_id}/preview`，只接受稳定 file_id，不接受客户端路径。
+- Excel 最多预览 3 个 Sheet、每 Sheet 6 行 × 12 列。
+- Word/PDF 优先预览现有 active chunks；无 chunk 时使用对应只读解析器。
+- 文本条目和字符长度均有上限，响应明确标记是否截断。
+
+### 文件操作 API
+
+- `POST /api/files/{file_id}/reprocess`
+- `POST /api/files/{file_id}/reindex`
+- 删除继续复用 `POST /api/files/{file_id}/delete` 与
+  `POST /api/actions/{action_id}/confirm|cancel`，没有增加直接删除接口。
+
+### 删除确认
+
+- 上传文件卡片展示“删除文件”，点击后只创建冻结的 pending action。
+- 确认卡明确显示目标文件；Confirm 后才执行真实删除，Cancel 不修改任何文件或索引。
+- 系统固定文件不展示删除按钮，后端 `create_pending_delete_action()` 仍再次检查
+  `source_type/deletable` 并返回 `FILE_DELETE_FORBIDDEN`。
+
+### 新增测试
+
+- F09/F10：Workspace API 调用真实安全 reprocess/reindex，并恢复 QUERYABLE。
+- F09/F10：操作失败保留旧 chunks，并在文件详情返回 parse/index error summary。
+- 快速预览：Word 真实文本、Excel 真实 Sheet/行及边界限制。
+- F11：Cancel 后物理文件、file record、Block/chunk/index 完全不变。
+- F11：Confirm 后物理上传文件与 active chunks 同步清理。
+- F12：系统固定文件前端无删除入口；既有后端 403 拒绝测试继续通过。
+- API Client：preview/reprocess/reindex/delete 请求路径和参数。
+- 批量上传逐文件成功/失败隔离测试继续通过。
+
+### 测试结果
+
+```text
+pytest: 251 passed, 0 failed, 0 skipped, 11.42s
+V1 Regression: 66 passed, 1 deselected, PASS
+V2 coverage manifest: 60 passed, PASS
+```

@@ -30,6 +30,8 @@ def render_confirmation(
         with after_column:
             st.markdown("**修改后**")
             st.code(str(diff.get("after") or "（空）"), language=None)
+    elif action.get("action_type") == "delete_file":
+        st.warning(f"确认删除文件：{action.get('target_file', '—')}。取消不会修改文件或索引。")
     elif action.get("content"):
         with st.container(border=True):
             st.markdown(action["content"])
@@ -42,4 +44,3 @@ def render_confirmation(
             on_decision("confirm")
         if cancel.button("取消", use_container_width=True, key=f"{key_prefix}-cancel"):
             on_decision("cancel")
-
