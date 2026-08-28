@@ -1,4 +1,4 @@
-"""Validation and safe persistence for user-uploaded Office documents."""
+"""Validation and safe persistence for supported document uploads."""
 
 import os
 import shutil
@@ -12,12 +12,20 @@ from openpyxl import load_workbook
 
 from backend import database
 from backend.services.file_lifecycle import process_uploaded_file
-from backend.services.document_index import index_document, validate_pdf_file
+from backend.services.document_index import index_document, route_pdf_file, validate_pdf_file
+from backend.services.input_router import route_document_input, validate_declared_mime
 from backend.tools import excel_utils
 from backend.tools.excel_utils import failure, success
 
 
-SUPPORTED_UPLOADS = {".xlsx": "excel", ".docx": "word", ".pdf": "pdf"}
+SUPPORTED_UPLOADS = {
+    ".xlsx": "excel",
+    ".docx": "word",
+    ".pdf": "pdf",
+    ".jpg": "image",
+    ".jpeg": "image",
+    ".png": "image",
+}
 
 
 def _safe_file_name(file_name: str) -> tuple[str | None, dict[str, Any] | None]:
@@ -35,7 +43,7 @@ def _safe_file_name(file_name: str) -> tuple[str | None, dict[str, Any] | None]:
     if Path(clean_name).suffix.lower() not in SUPPORTED_UPLOADS:
         return None, failure(
             "UNSUPPORTED_FILE_TYPE",
-            "仅支持 .xlsx、.docx 和普通文本 .pdf 文件",
+            "仅支持 .xlsx、.docx、.pdf、.jpg、.jpeg 和 .png 文件",
         )
     return clean_name, None
 
@@ -47,10 +55,20 @@ def _validate_document(path: Path, suffix: str) -> dict[str, Any] | None:
             workbook.close()
         elif suffix == ".docx":
             Document(path)
-        else:
+        elif suffix == ".pdf":
             return validate_pdf_file(path)
+        else:
+            routed = route_document_input(path)
+            return None if routed["ok"] else routed
     except Exception:
-        label = {".xlsx": "Excel", ".docx": "Word", ".pdf": "PDF"}[suffix]
+        label = {
+            ".xlsx": "Excel",
+            ".docx": "Word",
+            ".pdf": "PDF",
+            ".jpg": "JPEG",
+            ".jpeg": "JPEG",
+            ".png": "PNG",
+        }[suffix]
         return failure(
             "INVALID_FILE_CONTENT",
             f"文件不是可正常打开的 {label} 文档，请检查文件是否损坏或扩展名是否正确",
@@ -58,7 +76,11 @@ def _validate_document(path: Path, suffix: str) -> dict[str, Any] | None:
     return None
 
 
-def save_uploaded_file(file_name: str, content: bytes) -> dict[str, Any]:
+def save_uploaded_file(
+    file_name: str,
+    content: bytes,
+    declared_mime_type: str | None = None,
+) -> dict[str, Any]:
     """Validate and save one new upload without ever overwriting a file."""
     clean_name, name_error = _safe_file_name(file_name)
     if name_error is not None:
@@ -78,6 +100,7 @@ def save_uploaded_file(file_name: str, content: bytes) -> dict[str, Any]:
     suffix = destination.suffix.lower()
     temporary_path: Path | None = None
     destination_created = False
+    route_data: dict[str, Any] | None = None
     try:
         with tempfile.NamedTemporaryFile(
             mode="wb",
@@ -94,6 +117,21 @@ def save_uploaded_file(file_name: str, content: bytes) -> dict[str, Any]:
         validation_error = _validate_document(temporary_path, suffix)
         if validation_error is not None:
             return validation_error
+        routed = (
+            route_pdf_file(temporary_path)
+            if suffix == ".pdf"
+            else route_document_input(
+                temporary_path,
+                declared_mime_type=declared_mime_type,
+            )
+        )
+        if suffix == ".pdf" and routed["ok"]:
+            mime_error = validate_declared_mime(suffix, declared_mime_type)
+            if mime_error is not None:
+                routed = mime_error
+        if not routed["ok"]:
+            return routed
+        route_data = routed["data"]
 
         try:
             descriptor = os.open(
@@ -143,18 +181,23 @@ def save_uploaded_file(file_name: str, content: bytes) -> dict[str, Any]:
     if file_record is None:
         return failure("FILE_REGISTER_ERROR", "文件登记结果无法读取")
 
-    parse_result = process_uploaded_file(
-        file_record["file_id"],
-        destination,
-        _validate_document,
-    )
-    if not parse_result["ok"]:
-        return parse_result
-
-    if file_type in {"word", "pdf"}:
+    if file_type == "image":
         index_result = index_document(file_record["file_id"])
         if not index_result["ok"]:
             return index_result
+    else:
+        parse_result = process_uploaded_file(
+            file_record["file_id"],
+            destination,
+            _validate_document,
+        )
+        if not parse_result["ok"]:
+            return parse_result
+
+        if file_type in {"word", "pdf"}:
+            index_result = index_document(file_record["file_id"])
+            if not index_result["ok"]:
+                return index_result
 
     file_record = database.get_file_record_by_id(file_record["file_id"])
     return success(
@@ -172,6 +215,9 @@ def save_uploaded_file(file_name: str, content: bytes) -> dict[str, Any]:
             "parse_status": file_record["parse_status"],
             "queryable": bool(file_record["queryable"]),
             "index_status": file_record["index_status"],
+            "input_route": (route_data or {}).get("route"),
+            "mime_type": (route_data or {}).get("mime_type"),
+            "image_format": (route_data or {}).get("image_format"),
         },
         "文件上传并校验成功",
     )

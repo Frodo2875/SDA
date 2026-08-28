@@ -126,6 +126,7 @@ def _view(task: dict[str, Any]) -> dict[str, Any]:
             if current else None
         ),
         "progress_detail": progress_detail,
+        "document": dict(async_meta.get("document") or {}),
         "started_at": started_at,
         "duration_ms": duration_ms,
         "success_count": int(progress_detail.get("success_count") or 0),

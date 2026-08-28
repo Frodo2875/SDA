@@ -254,6 +254,15 @@ def enqueue_async_task(
         "retry_count": 0,
         "progress_detail": {"unit": "stage", "stage": "queued"},
     }
+    file_id = payload.get("file_id") if isinstance(payload, dict) else None
+    if file_id:
+        record = database.get_file_record_by_id(file_id)
+        if record is not None:
+            checkpoint_data["async_task"]["document"] = {
+                "file_id": record["file_id"],
+                "file_name": record["file_name"],
+                "file_type": record["file_type"],
+            }
     database.update_task_record(
         task["task_id"],
         status="pending",
@@ -464,8 +473,8 @@ def _validated_payload(arguments: AsyncTaskCreateRequest) -> dict[str, Any]:
             raise ValueError("未找到指定文件")
         if arguments.task_type == "ocr" and record["file_type"] != "pdf":
             raise ValueError("OCR 任务只支持 PDF")
-        if arguments.task_type in {"layout", "index", "reindex"} and record["file_type"] not in {"pdf", "word"}:
-            raise ValueError("索引任务只支持 PDF 或 Word")
+        if arguments.task_type in {"layout", "index", "reindex"} and record["file_type"] not in {"pdf", "word", "image"}:
+            raise ValueError("索引任务只支持 PDF、Word 或图片")
         if pages is not None:
             if (
                 not isinstance(pages, list)

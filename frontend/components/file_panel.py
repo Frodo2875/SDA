@@ -1,5 +1,6 @@
 """Knowledge-base files, lifecycle metadata, upload and version controls."""
 
+import base64
 from collections.abc import Callable
 from typing import Any
 
@@ -9,11 +10,12 @@ from frontend import api_client
 
 
 ActionHandler = Callable[[dict[str, Any]], None]
-FILE_TYPES = {"excel": "Excel", "word": "Word", "pdf": "PDF"}
+FILE_TYPES = {"excel": "Excel", "word": "Word", "pdf": "PDF", "image": "图片"}
 LIFECYCLE_LABELS = {
     "uploaded": "已上传",
     "detecting": "检测中",
     "parsing": "解析中",
+    "visual_processing": "视觉处理中",
     "ocr_processing": "OCR处理中",
     "layout_processing": "Layout处理中",
     "indexing": "索引中",
@@ -31,6 +33,7 @@ LIFECYCLE_FILTERS = {
     "UPLOADED": "uploaded",
     "DETECTING": "detecting",
     "PARSING": "parsing",
+    "VISUAL_PROCESSING": "visual_processing",
     "OCR_PROCESSING": "ocr_processing",
     "LAYOUT_PROCESSING": "layout_processing",
     "INDEXING": "indexing",
@@ -69,7 +72,7 @@ def file_operation_capabilities(item: dict[str, Any]) -> dict[str, bool]:
     available = bool(item.get("file_id")) and str(
         item.get("lifecycle_status") or ""
     ).casefold() != "deleted"
-    document = item.get("file_type") in {"word", "pdf"}
+    document = item.get("file_type") in {"word", "pdf", "image"}
     return {
         "details": available,
         "preview": available,
@@ -91,6 +94,7 @@ def filter_files_by_lifecycle(
         item
         for item in files
         if str(item.get("lifecycle_status") or "").casefold() == expected
+        or str(item.get("canonical_status") or "").casefold() == expected
     ]
 
 
@@ -125,6 +129,17 @@ def file_detail_sections(
             "Diff": detail.get("diff_status", "操作确认时展示"),
             "写入状态": detail.get("write_status", "无待执行写入"),
         }}
+    if file_type == "image":
+        return {"图片": {
+            "格式": detail.get("image_format", "暂无数据"),
+            "MIME": detail.get("mime_type", "暂无数据"),
+            "尺寸": (
+                f"{detail.get('width')} × {detail.get('height')}"
+                if detail.get("width") and detail.get("height") else "暂无数据"
+            ),
+            "输入路由": detail.get("input_route", "暂无数据"),
+            "视觉状态": detail.get("visual_status", "暂无数据"),
+        }}
     return {}
 
 
@@ -143,9 +158,9 @@ def render_file_panel(
     st.caption("文件、生命周期、解析与索引状态")
     uploaded = st.file_uploader(
         "拖拽或选择多个材料",
-        type=["xlsx", "docx", "pdf"],
+        type=["xlsx", "docx", "pdf", "jpg", "jpeg", "png"],
         accept_multiple_files=True,
-        help="支持 Excel、Word、文本 PDF 和扫描 PDF。文件将逐个上传并显示结果。",
+        help="支持 Excel、Word、PDF、JPG、JPEG 和 PNG。文件将逐个上传并显示结果。",
         key=f"material-uploader-{uploader_version}",
     )
     if st.button(
@@ -168,7 +183,7 @@ def render_file_panel(
     filter_columns = st.columns(2)
     filter_columns[0].selectbox(
         "文件类型",
-        ["全部类型", "Excel", "Word", "PDF"],
+        ["全部类型", "Excel", "Word", "PDF", "图片"],
         key="workspace_file_type",
     )
     filter_columns[1].selectbox(
@@ -226,7 +241,7 @@ def _render_file(
                 f"Sheet：{schema.get('sheet_count', '—')} · 字段：{schema.get('field_count', '—')} · "
                 f"数据行：{schema.get('row_count', '—')}"
             )
-        if item.get("file_type") in {"word", "pdf"}:
+        if item.get("file_type") in {"word", "pdf", "image"}:
             st.caption(f"文档索引状态：{item.get('index_status', '—')}")
         error_summary = item.get("error_summary") or {}
         if error_summary:
@@ -339,7 +354,21 @@ def _render_file_preview(file_id: str) -> None:
         except RuntimeError as exc:
             st.warning(str(exc))
             return
-        if preview.get("preview_type") == "table":
+        if preview.get("preview_type") == "image":
+            try:
+                content = base64.b64decode(preview.get("content_base64") or "", validate=True)
+            except (ValueError, TypeError):
+                st.warning("图片预览数据无效。")
+            else:
+                st.image(
+                    content,
+                    caption=(
+                        f"{preview.get('file_name', '图片')} · "
+                        f"{preview.get('width', '—')} × {preview.get('height', '—')}"
+                    ),
+                    use_container_width=True,
+                )
+        elif preview.get("preview_type") == "table":
             for sheet in preview.get("sheets") or []:
                 st.markdown(f"**Sheet：{sheet.get('sheet_name', '—')}**")
                 st.dataframe(sheet.get("rows") or [], use_container_width=True)

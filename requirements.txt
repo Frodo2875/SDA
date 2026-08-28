@@ -9,6 +9,7 @@ pytest
 python-dotenv
 httpx
 python-multipart
+Pillow
 pypdf
 PyMuPDF
 rapidocr-onnxruntime

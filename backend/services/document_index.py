@@ -25,8 +25,10 @@ from backend.services.file_lifecycle import (
     record_file_lifecycle_transition,
     resume_file_lifecycle,
     start_ocr_processing,
+    start_visual_processing,
     transition_file_lifecycle,
 )
+from backend.services.input_router import route_document_input, route_pdf_pages
 from backend.services.file_locator import FileLocatorError, resolve_by_file_id
 from backend.services.hybrid_retrieval import hybrid_retrieve
 from backend.services.trace_service import record_trace
@@ -36,7 +38,7 @@ from backend.tools.excel_utils import failure, success
 
 WORD_CHUNK_SIZE = 900
 WORD_CHUNK_OVERLAP = 100
-SUPPORTED_DOCUMENT_TYPES = {"pdf", "word"}
+SUPPORTED_DOCUMENT_TYPES = {"pdf", "word", "image"}
 NO_EVIDENCE_MESSAGE = "当前材料中未找到足够依据。"
 OCR_NOT_SUPPORTED_MESSAGE = "当前版本不支持扫描 PDF / OCR。"
 LOW_OCR_CONFIDENCE = 0.8
@@ -85,13 +87,13 @@ def parse_pdf(
         )
 
     normalized_pages = [(page_no, text.strip()) for page_no, text in pages]
+    routed = route_pdf_pages(normalized_pages)
     _record_document_stage(
         record, "parse", parse_started, "success",
         metrics={"page_count": len(normalized_pages)},
     )
-    text_page_count = sum(bool(text) for _, text in normalized_pages)
-    if text_page_count != len(normalized_pages):
-        pdf_type = "scanned" if text_page_count == 0 else "mixed"
+    pdf_type = routed["data"]["pdf_type"]
+    if routed["data"]["route"] == "VISUAL":
         return _parse_ocr_pdf(
             record,
             path,
@@ -160,6 +162,8 @@ def _index_document(file_id: str, *, reprocess: bool) -> dict[str, Any]:
         return error
     if record["file_type"] == "pdf":
         return parse_pdf(clean_file_id, _reprocess=reprocess)
+    if record["file_type"] == "image":
+        return _index_image(record, reprocess=reprocess)
     resume_error = _resume_failed_index(record)
     if resume_error is not None:
         return resume_error
@@ -205,6 +209,136 @@ def _index_document(file_id: str, *, reprocess: bool) -> dict[str, Any]:
         extra_data={
             "block_count": len(blocks),
             "blocks": [block.model_dump() for block in blocks],
+        },
+    )
+
+
+def _index_image(record: dict[str, Any], *, reprocess: bool) -> dict[str, Any]:
+    """Route one verified image through the existing atomic document pipeline."""
+    resume_error = _resume_failed_index(record)
+    if resume_error is not None:
+        return resume_error
+    operation_error = _begin_candidate_build(record, reprocess=reprocess)
+    if operation_error is not None:
+        return operation_error
+
+    lifecycle = get_file_lifecycle(record["file_id"])
+    if not lifecycle["ok"]:
+        return lifecycle
+    current = FileLifecycleStatus(lifecycle["data"]["status"])
+    if current == FileLifecycleStatus.UPLOADED:
+        detected = transition_file_lifecycle(
+            record["file_id"], FileLifecycleStatus.DETECTING
+        )
+        if not detected["ok"]:
+            return detected
+        current = FileLifecycleStatus.DETECTING
+    if current not in {
+        FileLifecycleStatus.DETECTING,
+        FileLifecycleStatus.REPROCESSING,
+        FileLifecycleStatus.REINDEXING,
+    }:
+        return failure(
+            "INVALID_FILE_STATE",
+            "图片不处于可检测或重新处理的状态",
+            {"file_id": record["file_id"], "status": current.value},
+        )
+
+    route_started = time.perf_counter()
+    try:
+        path = resolve_by_file_id(record["file_id"])
+        routed = route_document_input(path)
+    except FileLocatorError as exc:
+        routed = failure("FILE_NOT_FOUND", str(exc))
+    if not routed["ok"] or routed["data"].get("file_type") != "image":
+        error_code = routed.get("error_code") or "IMAGE_DETECTION_ERROR"
+        message = routed.get("message") or "图片类型检测失败"
+        _record_document_stage(
+            record, "detect", route_started, "failed", error_code=error_code
+        )
+        return _index_failure(
+            record, error_code, message, failure_stage="detect"
+        )
+    _record_document_stage(
+        record,
+        "detect",
+        route_started,
+        "success",
+        metrics={
+            "route": "VISUAL",
+            "width": routed["data"]["width"],
+            "height": routed["data"]["height"],
+        },
+    )
+
+    visual = start_visual_processing(record["file_id"])
+    if not visual["ok"]:
+        return failure(
+            "VISUAL_STATE_ERROR", visual["message"], {"file_id": record["file_id"]}
+        )
+    visual_started = time.perf_counter()
+    route_data = routed["data"]
+    block = make_document_block(
+        file_id=record["file_id"],
+        sequence=0,
+        block_type="image",
+        content="",
+        page_no=1,
+        bbox=[0.0, 0.0, float(route_data["width"]), float(route_data["height"])],
+        source_parser="visual-document-router",
+        status="degraded",
+        warnings=["VISUAL_TEXT_EXTRACTION_DEFERRED_TO_V4_2"],
+    )
+    _record_document_stage(
+        record,
+        "visual",
+        visual_started,
+        "success",
+        metrics={"image_count": 1, "text_extracted": False},
+    )
+
+    layout = transition_file_lifecycle(
+        record["file_id"], FileLifecycleStatus.LAYOUT_PROCESSING
+    )
+    if not layout["ok"]:
+        return failure(
+            "LAYOUT_STATE_ERROR", layout["message"], {"file_id": record["file_id"]}
+        )
+    layout_started = time.perf_counter()
+    chunks = blocks_to_chunks(
+        [block],
+        source_type="image",
+        metadata_by_block={
+            block.block_id: {
+                "input_route": "VISUAL",
+                "mime_type": route_data["mime_type"],
+                "image_format": route_data["image_format"],
+                "width": route_data["width"],
+                "height": route_data["height"],
+                "text_extracted": False,
+            }
+        },
+    )
+    _record_document_stage(
+        record, "layout", layout_started, "success", metrics={"block_count": 1}
+    )
+    pending_error = _mark_index_pending(record)
+    if pending_error is not None:
+        return pending_error
+    return _persist_index(
+        record,
+        chunks,
+        page_count=1,
+        extra_data={
+            "input_route": "VISUAL",
+            "mime_type": route_data["mime_type"],
+            "image_format": route_data["image_format"],
+            "width": route_data["width"],
+            "height": route_data["height"],
+            "visual_status": "routed",
+            "text_extracted": False,
+            "block_count": 1,
+            "blocks": [block.model_dump()],
         },
     )
 
@@ -432,13 +566,19 @@ def _load_pdf_pages(path: Path) -> list[tuple[int, str]]:
 
 def validate_pdf_file(path: Path) -> dict[str, Any] | None:
     """Validate PDF structure; image-only PDFs are accepted for the OCR branch."""
+    routed = route_pdf_file(path)
+    return None if routed["ok"] else routed
+
+
+def route_pdf_file(path: Path) -> dict[str, Any]:
+    """Run the existing replaceable PDF adapter and apply the shared input route."""
     try:
         pages = _load_pdf_pages(path)
     except PdfDependencyError:
         return failure("PDF_DEPENDENCY_MISSING", "缺少 pypdf，无法解析普通文本 PDF")
     except Exception:
         return failure("INVALID_FILE_CONTENT", "文件不是可正常打开的 PDF 文档")
-    return None
+    return route_pdf_pages(pages)
 
 
 def _parse_scanned_pdf(
@@ -1051,7 +1191,9 @@ def _validated_document(
     if expected_type is not None and record["file_type"] != expected_type:
         return arguments.file_id, record, failure("UNSUPPORTED_FILE_TYPE", f"该接口仅支持 {expected_type}")
     if record["file_type"] not in SUPPORTED_DOCUMENT_TYPES:
-        return arguments.file_id, record, failure("UNSUPPORTED_FILE_TYPE", "仅支持 PDF 和 Word 文档索引")
+        return arguments.file_id, record, failure(
+            "UNSUPPORTED_FILE_TYPE", "仅支持 PDF、Word 和图片文档索引"
+        )
     return arguments.file_id, record, None
 
 

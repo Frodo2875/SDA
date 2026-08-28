@@ -126,6 +126,11 @@ def start_ocr_processing(file_id: str) -> dict[str, Any]:
     return transition_file_lifecycle(file_id, FileLifecycleStatus.OCR_PROCESSING)
 
 
+def start_visual_processing(file_id: str) -> dict[str, Any]:
+    """Enter the shared visual phase for image and visual-PDF inputs."""
+    return transition_file_lifecycle(file_id, FileLifecycleStatus.VISUAL_PROCESSING)
+
+
 def process_uploaded_file(
     file_id: str,
     path: Path,

@@ -128,9 +128,11 @@ async def health() -> HealthResponse:
 @app.get("/api/files", response_model=ToolResponse, tags=["files"])
 async def api_list_files(
     search: str | None = Query(default=None, max_length=255),
-    file_type: Literal["excel", "word", "pdf"] | None = Query(default=None),
+    file_type: Literal["excel", "word", "pdf", "image"] | None = Query(default=None),
     lifecycle_status: Literal[
-        "uploaded", "processing", "ready", "failed", "deleted", "cleanup_failed"
+        "uploaded", "detecting", "parsing", "visual_processing", "ocr_processing",
+        "layout_processing", "indexing", "reprocessing", "reindexing", "queryable",
+        "processing", "ready", "failed", "deleted", "cleanup_failed"
     ] | None = Query(default=None),
     sort_by: Literal["created_time", "size"] | None = Query(default=None),
     sort_order: Literal["asc", "desc"] = Query(default="desc"),
@@ -225,10 +227,14 @@ async def api_reindex_document(
 
 @app.post("/api/files/upload", response_model=ToolResponse, tags=["files"])
 async def api_upload_file(file: UploadFile = File(...)) -> dict[str, Any] | JSONResponse:
-    """Validate and store one new Excel, Word, or text PDF without overwriting."""
+    """Validate and store one supported document without overwriting."""
     try:
         content = await file.read()
-        result = save_uploaded_file(file.filename or "", content)
+        result = save_uploaded_file(
+            file.filename or "",
+            content,
+            declared_mime_type=file.content_type,
+        )
     except Exception:
         return JSONResponse(
             status_code=500,
@@ -248,6 +254,9 @@ async def api_upload_file(file: UploadFile = File(...)) -> dict[str, Any] | JSON
         "INVALID_FILE_NAME": 400,
         "UNSUPPORTED_FILE_TYPE": 400,
         "INVALID_FILE_CONTENT": 400,
+        "UNSUPPORTED_MIME_TYPE": 400,
+        "UNSUPPORTED_IMAGE_FORMAT": 400,
+        "IMAGE_SIZE_INVALID": 400,
         "OCR_NOT_SUPPORTED": 400,
         "EMPTY_UPLOAD": 400,
         "FILE_ALREADY_EXISTS": 409,

@@ -41,7 +41,13 @@ def initialize_state() -> None:
 
 def refresh_files() -> None:
     try:
-        file_types = {"全部类型": None, "Excel": "excel", "Word": "word", "PDF": "pdf"}
+        file_types = {
+            "全部类型": None,
+            "Excel": "excel",
+            "Word": "word",
+            "PDF": "pdf",
+            "图片": "image",
+        }
         sorting = {
             "登记时间（新到旧）": ("created_time", "desc"),
             "登记时间（旧到新）": ("created_time", "asc"),

@@ -9,8 +9,15 @@ from backend.tools import excel_utils
 from backend.tools.excel_utils import failure, resolve_data_file, success
 
 
-SUPPORTED_SUFFIXES = {".xlsx", ".docx", ".pdf"}
-FILE_TYPES = {".xlsx": "excel", ".docx": "word", ".pdf": "pdf"}
+SUPPORTED_SUFFIXES = {".xlsx", ".docx", ".pdf", ".jpg", ".jpeg", ".png"}
+FILE_TYPES = {
+    ".xlsx": "excel",
+    ".docx": "word",
+    ".pdf": "pdf",
+    ".jpg": "image",
+    ".jpeg": "image",
+    ".png": "image",
+}
 
 
 def list_files() -> dict[str, Any]:

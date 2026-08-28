@@ -26,6 +26,7 @@ class FileLifecycleStatus(str, Enum):
     UPLOADED = "UPLOADED"
     DETECTING = "DETECTING"
     PARSING = "PARSING"
+    VISUAL_PROCESSING = "VISUAL_PROCESSING"
     OCR_PROCESSING = "OCR_PROCESSING"
     LAYOUT_PROCESSING = "LAYOUT_PROCESSING"
     INDEXING = "INDEXING"
@@ -44,6 +45,7 @@ ALLOWED_TRANSITIONS = {
     },
     FileLifecycleStatus.DETECTING: {
         FileLifecycleStatus.PARSING,
+        FileLifecycleStatus.VISUAL_PROCESSING,
         FileLifecycleStatus.OCR_PROCESSING,
         FileLifecycleStatus.FAILED,
     },
@@ -60,8 +62,16 @@ ALLOWED_TRANSITIONS = {
         FileLifecycleStatus.REINDEXING,
         FileLifecycleStatus.FAILED,
     },
+    FileLifecycleStatus.VISUAL_PROCESSING: {
+        FileLifecycleStatus.LAYOUT_PROCESSING,
+        FileLifecycleStatus.INDEXING,
+        FileLifecycleStatus.REINDEXING,
+        FileLifecycleStatus.QUERYABLE,
+        FileLifecycleStatus.FAILED,
+    },
     FileLifecycleStatus.LAYOUT_PROCESSING: {
         FileLifecycleStatus.INDEXING,
+        FileLifecycleStatus.REINDEXING,
         FileLifecycleStatus.QUERYABLE,
         FileLifecycleStatus.FAILED,
     },
@@ -77,12 +87,14 @@ ALLOWED_TRANSITIONS = {
         FileLifecycleStatus.FAILED,
     },
     FileLifecycleStatus.REPROCESSING: {
+        FileLifecycleStatus.VISUAL_PROCESSING,
         FileLifecycleStatus.OCR_PROCESSING,
         FileLifecycleStatus.LAYOUT_PROCESSING,
         FileLifecycleStatus.REINDEXING,
         FileLifecycleStatus.QUERYABLE,
     },
     FileLifecycleStatus.REINDEXING: {
+        FileLifecycleStatus.VISUAL_PROCESSING,
         FileLifecycleStatus.OCR_PROCESSING,
         FileLifecycleStatus.QUERYABLE,
     },
@@ -387,12 +399,8 @@ def _legacy_state_fields(
         target_status
         in {
             FileLifecycleStatus.OCR_PROCESSING,
+            FileLifecycleStatus.VISUAL_PROCESSING,
             FileLifecycleStatus.LAYOUT_PROCESSING,
-        }
-        and current_status
-        in {
-            FileLifecycleStatus.REPROCESSING,
-            FileLifecycleStatus.REINDEXING,
         }
         and bool(record.get("queryable"))
         and record.get("index_status") == "indexed"
@@ -402,6 +410,7 @@ def _legacy_state_fields(
     if target_status in {
         FileLifecycleStatus.DETECTING,
         FileLifecycleStatus.PARSING,
+        FileLifecycleStatus.VISUAL_PROCESSING,
         FileLifecycleStatus.OCR_PROCESSING,
         FileLifecycleStatus.LAYOUT_PROCESSING,
     }:
@@ -426,7 +435,7 @@ def _legacy_state_fields(
         if index_status in {"pending", "failed"}:
             index_status = (
                 "indexed"
-                if record.get("file_type") in {"word", "pdf"}
+                if record.get("file_type") in {"word", "pdf", "image"}
                 else "not_required"
             )
         return "ready", "parsed", True, index_status
@@ -434,6 +443,7 @@ def _legacy_state_fields(
     index_status = record.get("index_status") or "not_required"
     if current_status in {
         FileLifecycleStatus.INDEXING,
+        FileLifecycleStatus.VISUAL_PROCESSING,
         FileLifecycleStatus.OCR_PROCESSING,
         FileLifecycleStatus.REINDEXING,
     }:

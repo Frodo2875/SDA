@@ -89,6 +89,12 @@ def render_task_center(
                 st.caption(
                     f"{status} · {task.get('message') or task.get('next_action') or '—'}"
                 )
+                document = task.get("document") or {}
+                if document:
+                    st.caption(
+                        f"文档：{document.get('file_name', '—')} · "
+                        f"类型：{document.get('file_type', '—')}"
+                    )
                 progress_detail = task.get("progress_detail") or {}
                 progress_text = format_progress(progress_detail)
                 if progress_detail.get("percent") is not None:

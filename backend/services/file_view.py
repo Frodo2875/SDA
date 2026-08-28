@@ -9,6 +9,7 @@ from openpyxl import load_workbook
 from backend import database
 from backend.services import ocr_service
 from backend.services.file_lifecycle import get_file_lifecycle
+from backend.services.input_router import build_image_preview
 from backend.services.file_locator import FileLocatorError, resolve_by_file_id
 from backend.tools.excel_utils import failure, success
 from backend.tools.file_tools import list_files
@@ -43,9 +44,11 @@ def list_file_views(
     if file_type:
         items = [item for item in items if item.get("file_type") == file_type]
     if lifecycle_status:
+        expected_status = lifecycle_status.casefold()
         items = [
             item for item in items
-            if item.get("lifecycle_status") == lifecycle_status
+            if str(item.get("lifecycle_status") or "").casefold() == expected_status
+            or str(item.get("canonical_status") or "").casefold() == expected_status
         ]
     if sort_by:
         items.sort(
@@ -84,6 +87,11 @@ def get_file_preview(file_id: str) -> dict[str, Any]:
             preview = _preview_word(item["file_id"], path)
         elif item["file_type"] == "pdf":
             preview = _preview_pdf(item["file_id"], path)
+        elif item["file_type"] == "image":
+            image_preview = build_image_preview(path)
+            if not image_preview["ok"]:
+                return image_preview
+            preview = image_preview["data"]
         else:
             return failure("UNSUPPORTED_FILE_TYPE", "当前文件类型不支持快速预览")
     except FileLocatorError as exc:
@@ -134,6 +142,17 @@ def _enrich(item: dict[str, Any]) -> dict[str, Any]:
                 for schema in schemas
             ],
         } if schemas else None
+    if item.get("file_type") == "image" and item.get("file_id"):
+        chunks = database.get_document_chunks(item["file_id"])
+        metadata = (chunks[0].get("metadata") or {}) if chunks else {}
+        enriched["input_route"] = metadata.get("input_route")
+        enriched["mime_type"] = metadata.get("mime_type")
+        enriched["image_format"] = metadata.get("image_format")
+        enriched["width"] = metadata.get("width")
+        enriched["height"] = metadata.get("height")
+        enriched["visual_status"] = (
+            "routed" if metadata.get("input_route") == "VISUAL" else None
+        )
     return enriched
 
 
