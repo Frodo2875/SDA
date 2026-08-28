@@ -286,6 +286,11 @@ def get_document_ocr_page(file_id: str, page_no: int) -> dict[str, Any] | None:
     return OCR_REPOSITORY.get_page(file_id, page_no)
 
 
+def get_document_ocr_regions(file_id: str) -> list[dict[str, Any]]:
+    """Return persisted Visual OCR regions without introducing a second OCR store."""
+    return OCR_REPOSITORY.get_regions_for_file(file_id)
+
+
 def save_evidence_location(evidence: dict[str, Any]) -> None:
     EVIDENCE_REPOSITORY.save(evidence, created_at=utc_now())
 

@@ -1,5 +1,6 @@
-"""Local, bounded OCR adapter for scanned PDF pages."""
+"""Local, bounded Visual OCR adapter for images and selected PDF pages."""
 
+import hashlib
 from pathlib import Path
 from typing import Any, Literal
 
@@ -25,6 +26,25 @@ class OCRPageResult(BaseModel):
     error: str | None = None
     source_type: Literal["text", "ocr"] = "ocr"
     blocks: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class OCRRegionResult(BaseModel):
+    """One persisted OCR region; empty/failed regions never invent text."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    file_id: str | None = Field(default=None, min_length=1, max_length=128)
+    page_no: int | None = Field(default=None, ge=1)
+    image_no: int | None = Field(default=None, ge=1)
+    region_id: str = Field(min_length=1, max_length=128)
+    text: str = ""
+    bbox: list[float] | None = Field(default=None, min_length=4, max_length=4)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    recognition_type: Literal["printed"] = "printed"
+    source_model: str | None = Field(default=None, min_length=1, max_length=128)
+    source_parser: str = Field(min_length=1, max_length=128)
+    status: Literal["success", "empty", "failed"]
+    error: str | None = None
 
 
 def detect_pdf_text(path: Path) -> dict[str, Any]:
@@ -77,13 +97,29 @@ def detect_pdf_type(path: Path) -> dict[str, Any]:
 
 
 def ocr_document(path: Path, pages: list[int] | None = None) -> dict[str, Any]:
-    """OCR selected pages independently and retain successes when another page fails."""
+    """Backward-compatible Visual OCR entry for PDF or image content."""
+    return ocr_visual(path, pages=pages)
+
+
+def ocr_visual(
+    path: Path,
+    pages: list[int] | None = None,
+    *,
+    file_id: str | None = None,
+) -> dict[str, Any]:
+    """OCR image inputs or selected PDF pages with one normalized region contract."""
+    is_image = path.suffix.lower() in {".jpg", ".jpeg", ".png"}
     try:
-        rendered_pages = (
-            _render_pdf_pages(path)
-            if pages is None
-            else _render_pdf_pages(path, pages=pages)
-        )
+        if is_image:
+            if pages is not None and pages != [1]:
+                return failure("OCR_PAGE_INVALID", "图片 OCR 只支持 image_no/page_no 1")
+            rendered_pages = [(1, _render_image(path))]
+        else:
+            rendered_pages = (
+                _render_pdf_pages(path)
+                if pages is None
+                else _render_pdf_pages(path, pages=pages)
+            )
         engine = _create_engine()
     except OCRDependencyError as exc:
         return failure("OCR_DEPENDENCY_MISSING", str(exc))
@@ -95,23 +131,60 @@ def ocr_document(path: Path, pages: list[int] | None = None) -> dict[str, Any]:
     for page_no, image in rendered_pages:
         try:
             raw_result, _ = engine(image)
-            page_blocks = []
-            for raw_block in raw_result or []:
-                normalized = _normalize_block(page_no, raw_block)
+            page_blocks: list[dict[str, Any]] = []
+            for region_index, raw_block in enumerate(raw_result or [], start=1):
+                normalized = _normalize_block(
+                    page_no,
+                    raw_block,
+                    region_index=region_index,
+                    file_id=file_id,
+                    image_input=is_image,
+                )
                 if normalized is not None:
                     page_blocks.append(normalized)
-            if not page_blocks:
-                raise OCRServiceError("OCR_NO_TEXT", "OCR 未识别到可用文本")
-            blocks.extend(page_blocks)
-            page_results.append(_successful_page(page_no, page_blocks))
+            successful = [block for block in page_blocks if block["status"] == "success"]
+            if successful:
+                blocks.extend(page_blocks)
+                page_results.append(_successful_page(page_no, page_blocks))
+            else:
+                empty_regions = page_blocks or [
+                    _empty_or_failed_region(
+                        page_no=page_no,
+                        region_index=1,
+                        file_id=file_id,
+                        image_input=is_image,
+                        status="empty",
+                        error="OCR_NO_TEXT",
+                    )
+                ]
+                blocks.extend(empty_regions)
+                page_results.append(
+                    OCRPageResult(
+                        page_no=page_no,
+                        status="failed",
+                        error="OCR 未识别到可用文本",
+                        source_type="ocr",
+                        blocks=empty_regions,
+                    ).model_dump()
+                )
         except Exception as exc:
             message = str(exc) if isinstance(exc, OCRServiceError) else "OCR 识别过程失败"
+            failed_region = _empty_or_failed_region(
+                page_no=page_no,
+                region_index=1,
+                file_id=file_id,
+                image_input=is_image,
+                status="failed",
+                error=message,
+            )
+            blocks.append(failed_region)
             page_results.append(
                 OCRPageResult(
                     page_no=page_no,
                     status="failed",
                     error=message,
                     source_type="ocr",
+                    blocks=[failed_region],
                 ).model_dump()
             )
     failed_pages = [page["page_no"] for page in page_results if page["status"] == "failed"]
@@ -119,7 +192,17 @@ def ocr_document(path: Path, pages: list[int] | None = None) -> dict[str, Any]:
     status = "success" if not failed_pages else "partial_success" if succeeded else "failed"
     data = {
         "status": status,
-        "blocks": blocks,
+        "blocks": [
+            {
+                "page": region["page_no"],
+                "text": region["text"],
+                "confidence": region["confidence"],
+                "bbox": region["bbox"],
+            }
+            for region in blocks
+            if region.get("status") == "success"
+        ],
+        "regions": blocks,
         "pages": page_results,
         "failed_pages": failed_pages,
         "page_count": len(rendered_pages),
@@ -136,7 +219,12 @@ def ocr_document(path: Path, pages: list[int] | None = None) -> dict[str, Any]:
 
 def ocr_pdf(path: Path, pages: list[int] | None = None) -> dict[str, Any]:
     """Backward-compatible entry point for full or selected-page OCR."""
-    return ocr_document(path, pages=pages)
+    return ocr_visual(path, pages=pages)
+
+
+def ocr_image(path: Path, *, file_id: str | None = None) -> dict[str, Any]:
+    """OCR one JPG/JPEG/PNG through the shared Visual OCR adapter."""
+    return ocr_visual(path, file_id=file_id)
 
 
 def ocr_page(path: Path, page_no: int) -> dict[str, Any]:
@@ -189,6 +277,20 @@ def _render_pdf_pages(
         document.close()
 
 
+def _render_image(path: Path) -> Any:
+    try:
+        import numpy as np
+        from PIL import Image
+    except ImportError as exc:
+        raise OCRDependencyError("缺少 Pillow 或 numpy，无法读取图片") from exc
+    try:
+        with Image.open(path) as source:
+            source.load()
+            return np.asarray(source.convert("RGB"))
+    except Exception as exc:
+        raise OCRServiceError("IMAGE_RENDER_ERROR", "图片无法进入 OCR") from exc
+
+
 def _create_engine() -> Any:
     try:
         from rapidocr_onnxruntime import RapidOCR
@@ -200,13 +302,18 @@ def _create_engine() -> Any:
         raise OCRDependencyError("OCR 引擎初始化失败") from exc
 
 
-def _normalize_block(page_no: int, raw_block: Any) -> dict[str, Any] | None:
+def _normalize_block(
+    page_no: int,
+    raw_block: Any,
+    *,
+    region_index: int,
+    file_id: str | None,
+    image_input: bool,
+) -> dict[str, Any] | None:
     if not isinstance(raw_block, (list, tuple)) or len(raw_block) < 3:
         return None
     raw_box, raw_text, raw_confidence = raw_block[:3]
     text = str(raw_text).strip() if raw_text is not None else ""
-    if not text:
-        return None
     try:
         confidence = float(raw_confidence)
         points = [point for point in raw_box if len(point) >= 2]
@@ -216,31 +323,112 @@ def _normalize_block(page_no: int, raw_block: Any) -> dict[str, Any] | None:
         y_values = [float(point[1]) for point in points]
     except (TypeError, ValueError):
         return None
-    return {
-        "page": int(page_no),
-        "text": text,
-        "confidence": confidence,
-        "bbox": [min(x_values), min(y_values), max(x_values), max(y_values)],
-    }
+    bbox = [min(x_values), min(y_values), max(x_values), max(y_values)]
+    return OCRRegionResult(
+        file_id=file_id,
+        page_no=int(page_no),
+        image_no=int(page_no) if image_input else None,
+        region_id=_region_id(file_id, page_no, region_index, bbox, text),
+        text=text,
+        bbox=bbox,
+        confidence=confidence,
+        recognition_type="printed",
+        source_model="rapidocr-onnxruntime",
+        source_parser="rapidocr",
+        status="success" if text else "empty",
+        error=None if text else "OCR_EMPTY_REGION",
+    ).model_dump()
 
 
 def _successful_page(page_no: int, blocks: list[dict[str, Any]]) -> dict[str, Any]:
+    successful = [block for block in blocks if block.get("status") == "success"]
     bbox = [
-        min(block["bbox"][0] for block in blocks),
-        min(block["bbox"][1] for block in blocks),
-        max(block["bbox"][2] for block in blocks),
-        max(block["bbox"][3] for block in blocks),
+        min(block["bbox"][0] for block in successful),
+        min(block["bbox"][1] for block in successful),
+        max(block["bbox"][2] for block in successful),
+        max(block["bbox"][3] for block in successful),
     ]
     return OCRPageResult(
         page_no=page_no,
-        text="\n".join(block["text"] for block in blocks),
+        text="\n".join(block["text"] for block in successful),
         bbox=bbox,
-        confidence=min(float(block["confidence"]) for block in blocks),
+        confidence=min(float(block["confidence"]) for block in successful),
         status="success",
         error=None,
         source_type="ocr",
         blocks=blocks,
     ).model_dump()
+
+
+def normalize_region_record(
+    *,
+    file_id: str,
+    page_no: int,
+    region_index: int,
+    region: dict[str, Any],
+    image_input: bool = False,
+) -> dict[str, Any]:
+    """Upgrade legacy OCR blocks to the V4.2 region contract before persistence."""
+    text = str(region.get("text") or "")
+    bbox = region.get("bbox")
+    confidence = region.get("confidence")
+    raw_status = str(region.get("status") or ("success" if text else "empty"))
+    status = raw_status if raw_status in {"success", "empty", "failed"} else "failed"
+    return OCRRegionResult(
+        file_id=file_id,
+        page_no=int(region.get("page_no") or region.get("page") or page_no),
+        image_no=(
+            int(region.get("image_no") or page_no)
+            if image_input or region.get("image_no") is not None else None
+        ),
+        region_id=str(region.get("region_id") or _region_id(
+            file_id, page_no, region_index, bbox, text
+        )),
+        text=text,
+        bbox=bbox,
+        confidence=confidence,
+        recognition_type="printed",
+        source_model=str(region.get("source_model") or "rapidocr-onnxruntime"),
+        source_parser=str(region.get("source_parser") or "rapidocr"),
+        status=status,
+        error=region.get("error"),
+    ).model_dump()
+
+
+def _empty_or_failed_region(
+    *,
+    page_no: int,
+    region_index: int,
+    file_id: str | None,
+    image_input: bool,
+    status: Literal["empty", "failed"],
+    error: str,
+) -> dict[str, Any]:
+    return OCRRegionResult(
+        file_id=file_id,
+        page_no=page_no,
+        image_no=page_no if image_input else None,
+        region_id=_region_id(file_id, page_no, region_index, None, ""),
+        text="",
+        bbox=None,
+        confidence=None,
+        recognition_type="printed",
+        source_model="rapidocr-onnxruntime",
+        source_parser="rapidocr",
+        status=status,
+        error=error,
+    ).model_dump()
+
+
+def _region_id(
+    file_id: str | None,
+    page_no: int,
+    region_index: int,
+    bbox: Any,
+    text: str,
+) -> str:
+    payload = f"{file_id or 'unbound'}:{page_no}:{region_index}:{bbox}:{text}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
 
 
 class OCRServiceError(RuntimeError):

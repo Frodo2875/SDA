@@ -38,7 +38,7 @@ V4.0 只建立工程开发基线，不实现 V4 新业务能力，不修改 V1�
 | --- | --- | --- | --- |
 | V4.0 | Baseline | VERIFIED | 核验 V3 基线，建立 V4 日志、覆盖矩阵和测试基线；不开发新功能 |
 | V4.1 | Visual Document Router | VERIFIED | 图片正式进入既有 Document、生命周期、Workspace、Preview、Task 与原子重处理链路 |
-| V4.2 | Visual OCR and Image PDF | NOT_STARTED | 需求和验收标准待对应阶段确认 |
+| V4.2 | Visual OCR and Image PDF | VERIFIED | 复用 V3 PDF OCR，统一图片、扫描/图片型 PDF 与 mixed PDF 的 page-level Visual OCR |
 | V4.3 | Handwriting Recognition | NOT_STARTED | 需求和验收标准待对应阶段确认 |
 | V4.4 | Visual Understanding and KIE | NOT_STARTED | 需求和验收标准待对应阶段确认 |
 | V4.5 | Visual Table | NOT_STARTED | 需求和验收标准待对应阶段确认 |
@@ -147,6 +147,51 @@ conda run -n tuli_env pytest -q
   layout/index/reindex 长任务，但上传本身不会额外创建异步任务。
 - Requirement IDs：`V4.1-P0-01` 至 `V4.1-P0-14`。
 
+### V4.2 Visual OCR、Image PDF 与 Mixed PDF Unified Pipeline
+
+- 本阶段目标：在 V3 扫描 PDF 的逐页 OCR、mixed PDF 路由、异步任务、索引和原子
+  reprocess 基础上，建立一个同时服务 JPG/JPEG/PNG、扫描/图片型 PDF 和 mixed PDF
+  视觉页的统一 OCR 管线，不建设第二套 PDF OCR。
+- 基线 commit：`352b23676f4df3db06f3c8eb153b23d160f7854e`。
+- 实际修改文件：
+  - `backend/services/ocr_service.py`
+  - `backend/services/document_index.py`
+  - `backend/runtime/async_task_runtime.py`
+  - `backend/repositories/ocr_repository.py`
+  - `backend/database.py`
+  - `tests/test_ocr_pipeline.py`
+  - `tests/test_visual_ocr_pipeline_v4.py`
+  - `docs/V4_DEVELOPMENT_LOG.md`
+  - `docs/V4_REQUIREMENT_COVERAGE_AUDIT.md`
+- 新增/修改接口：
+  - 新增内部 `ocr_visual()`、`ocr_image()`、`normalize_region_record()`，既有
+    `ocr_pdf()` / `ocr_document()` 复用同一适配器和页渲染/OCR 引擎。
+  - 新增 `OCRRegionResult` 等价契约，包含 `file_id`、`page_no`/`image_no`、
+    `region_id`、`text`、`bbox`、`confidence`、`recognition_type`、
+    `source_model`、`source_parser`、`status`。
+  - 新增 `get_document_ocr_regions()` 只读扁平视图；region 继续原子保存于 V3
+    `document_ocr_pages.blocks_json`，未新增平行 OCR 表或迁移。
+  - 既有 `ocr_document()` 与 Async OCR Task 扩展为接受 image Document；PDF 仍由
+    V3 page-level router 决定文本页或视觉页。
+- 数据与失败策略：只把 `success` 且非空的 region 文本写入检索 chunk；`empty` 与
+  `failed` region 仍保存位置、置信度和错误，不补写或推测文字。文本页不再进入 OCR，
+  因而不会与 OCR 文本重复。单页失败返回 `partial_success` 和 `failed_pages`；刷新失败页
+  可继续使用旧成功页，并以 `refresh_status=failed` 暴露本次失败供定向 retry。
+- 新增/更新测试：新增 `tests/test_visual_ocr_pipeline_v4.py` 的 8 个 pytest cases，覆盖
+  printed JPG、PNG、中英文数字混合、image-only PDF、mixed PDF page routing、文本/OCR
+  去重、empty region、partial page failure、扫描 PDF 旧结果保护、图片 Async OCR 失败与
+  仅失败页 retry；同步更新 V3 OCR 契约断言以验证新增字段及持久化视图，未删除、跳过或
+  弱化旧行为断言。
+- 测试结果：V4.2 专项 `8 passed in 0.88s`；OCR/Async/V4.1 关键回归组
+  `49 passed in 16.81s`；首次完整回归 `334 passed in 27.68s`；文档更新后最终完整
+  回归 `334 passed in 27.25s`。
+- 未完成项：完整手写识别、KIE、视觉表格、Evidence 3.0、Agentic Retrieval 与
+  Domain Router 均未在本阶段开发。
+- 已知限制：本阶段 `recognition_type` 仅为 `printed`；OCR 效果取决于已有
+  RapidOCR 运行环境和输入质量，未声明或编造准确率。失败页 retry 仍通过既有任务 API
+  触发，不新增自动无限重试机制。
+- Requirement IDs：`V4.2-P0-01` 至 `V4.2-P0-12`。
+
 ### 每阶段开发记录模板
 
 ```markdown
@@ -176,6 +221,10 @@ conda run -n tuli_env pytest -q
 | 2026-08-28 | V4.1 受影响回归 | 未提交工作树 | 受影响的上传/生命周期/PDF/OCR/Workspace/Async/前端测试 | `93 passed in 11.12s` | PASS |
 | 2026-08-28 | V4.1 完整回归（首次） | 未提交工作树 | `conda run -n tuli_env pytest -q` | `326 passed in 20.43s` | PASS |
 | 2026-08-28 | V4.1 文档更新后回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `326 passed in 16.50s` | PASS |
+| 2026-08-28 | V4.2 专项 | 未提交工作树 | `conda run -n tuli_env pytest -q tests/test_visual_ocr_pipeline_v4.py` | `8 passed in 0.88s` | PASS |
+| 2026-08-28 | V4.2 关键回归 | 未提交工作树 | OCR、Async Task、V4.1 Router 相关测试 | `49 passed in 16.81s` | PASS |
+| 2026-08-28 | V4.2 完整回归（首次） | 未提交工作树 | `conda run -n tuli_env pytest -q` | `334 passed in 27.68s` | PASS |
+| 2026-08-28 | V4.2 文档更新后最终回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `334 passed in 27.25s` | PASS |
 
 后续阶段必须追加实际执行记录，不得以历史结果替代当前回归。
 

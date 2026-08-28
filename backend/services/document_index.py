@@ -138,6 +138,18 @@ def parse_pdf(
 
 def ocr_document(file_id: str, pages: list[int] | None = None) -> dict[str, Any]:
     """Process all OCR-needed pages or retry only an explicit 1-based page set."""
+    clean_file_id, record, error = _validated_document(file_id)
+    if error is not None:
+        return error
+    if record["file_type"] == "image":
+        if pages is not None and pages != [1]:
+            return failure("OCR_PAGE_INVALID", "图片 OCR 只支持 image_no/page_no 1")
+        return _index_image(
+            record,
+            reprocess=True,
+            requested_pages=pages,
+            explicit_ocr=True,
+        )
     return parse_pdf(file_id, _ocr_pages=pages)
 
 
@@ -213,8 +225,21 @@ def _index_document(file_id: str, *, reprocess: bool) -> dict[str, Any]:
     )
 
 
-def _index_image(record: dict[str, Any], *, reprocess: bool) -> dict[str, Any]:
-    """Route one verified image through the existing atomic document pipeline."""
+def _index_image(
+    record: dict[str, Any],
+    *,
+    reprocess: bool,
+    requested_pages: list[int] | None = None,
+    explicit_ocr: bool = False,
+) -> dict[str, Any]:
+    """OCR one image through the shared Visual pipeline and atomic index activation."""
+    if requested_pages is not None and requested_pages != [1]:
+        return failure("OCR_PAGE_INVALID", "图片 OCR 只支持 image_no/page_no 1")
+    had_active_index = _has_active_index(record["file_id"])
+    had_active_text = any(
+        str(chunk.get("chunk_text") or "").strip()
+        for chunk in database.get_document_chunks(record["file_id"])
+    )
     resume_error = _resume_failed_index(record)
     if resume_error is not None:
         return resume_error
@@ -278,24 +303,56 @@ def _index_image(record: dict[str, Any], *, reprocess: bool) -> dict[str, Any]:
         )
     visual_started = time.perf_counter()
     route_data = routed["data"]
-    block = make_document_block(
+    recognized = ocr_service.ocr_image(path, file_id=record["file_id"])
+    existing = {
+        page["page_no"]: page
+        for page in database.get_document_ocr_pages(record["file_id"])
+    }
+    page = _recognized_page_results(
+        recognized,
+        [1],
+        existing=existing,
         file_id=record["file_id"],
-        sequence=0,
-        block_type="image",
-        content="",
-        page_no=1,
-        bbox=[0.0, 0.0, float(route_data["width"]), float(route_data["height"])],
-        source_parser="visual-document-router",
-        status="degraded",
-        warnings=["VISUAL_TEXT_EXTRACTION_DEFERRED_TO_V4_2"],
-    )
+        image_input=True,
+        preserve_existing_success=False,
+    )[0]
+    regions = list(page.get("blocks") or [])
+    successful_regions = [
+        region
+        for region in regions
+        if region.get("status") == "success" and str(region.get("text") or "").strip()
+    ]
+    ocr_failed = page.get("status") == "failed" or not successful_regions
     _record_document_stage(
         record,
-        "visual",
+        "visual_ocr",
         visual_started,
-        "success",
-        metrics={"image_count": 1, "text_extracted": False},
+        "failed" if ocr_failed else "success",
+        metrics={
+            "image_count": 1,
+            "region_count": len(regions),
+            "successful_regions": len(successful_regions),
+            "failed_regions": sum(
+                region.get("status") in {"empty", "failed"} for region in regions
+            ),
+        },
+        error_code=recognized.get("error_code") if ocr_failed else None,
     )
+    if ocr_failed and had_active_index and had_active_text:
+        failed = _index_failure(
+            record,
+            recognized.get("error_code") or "OCR_PROCESSING_ERROR",
+            recognized.get("message") or "图片 OCR 未识别到可用文本",
+            failure_stage="ocr",
+        )
+        failed_data = failed.get("data") if isinstance(failed.get("data"), dict) else {}
+        failed["data"] = {
+            **failed_data,
+            "failed_pages": [1],
+            "page_results": [page],
+            "ocr_results": regions,
+        }
+        return failed
 
     layout = transition_file_lifecycle(
         record["file_id"], FileLifecycleStatus.LAYOUT_PROCESSING
@@ -305,22 +362,71 @@ def _index_image(record: dict[str, Any], *, reprocess: bool) -> dict[str, Any]:
             "LAYOUT_STATE_ERROR", layout["message"], {"file_id": record["file_id"]}
         )
     layout_started = time.perf_counter()
-    chunks = blocks_to_chunks(
-        [block],
-        source_type="image",
-        metadata_by_block={
-            block.block_id: {
+    blocks: list[DocumentBlock] = []
+    chunks: list[dict[str, Any]] = []
+    if successful_regions:
+        for region in successful_regions:
+            block = make_document_block(
+                file_id=record["file_id"],
+                sequence=len(blocks),
+                block_type="paragraph",
+                content=str(region["text"]),
+                page_no=1,
+                bbox=region.get("bbox"),
+                confidence=region.get("confidence"),
+                source_parser=str(region.get("source_parser") or "rapidocr"),
+            )
+            blocks.append(block)
+            region_chunks = blocks_to_chunks(
+                [block],
+                source_type="ocr",
+                metadata_by_block={block.block_id: {
+                    "input_route": "VISUAL",
+                    "mime_type": route_data["mime_type"],
+                    "image_format": route_data["image_format"],
+                    "width": route_data["width"],
+                    "height": route_data["height"],
+                    "text_extracted": True,
+                    "region_id": region["region_id"],
+                    "recognition_type": region["recognition_type"],
+                    "source_model": region.get("source_model"),
+                }},
+            )
+            for chunk in region_chunks:
+                chunk["chunk_index"] = len(chunks)
+                chunks.append(chunk)
+    else:
+        block = make_document_block(
+            file_id=record["file_id"],
+            sequence=0,
+            block_type="image",
+            content="",
+            page_no=1,
+            bbox=[0.0, 0.0, float(route_data["width"]), float(route_data["height"])],
+            source_parser="visual-ocr",
+            status="degraded",
+            warnings=["OCR_NO_TEXT"],
+        )
+        blocks.append(block)
+        chunks = blocks_to_chunks(
+            [block],
+            source_type="image",
+            metadata_by_block={block.block_id: {
                 "input_route": "VISUAL",
                 "mime_type": route_data["mime_type"],
                 "image_format": route_data["image_format"],
                 "width": route_data["width"],
                 "height": route_data["height"],
                 "text_extracted": False,
-            }
-        },
-    )
+                "ocr_status": "failed",
+            }},
+        )
     _record_document_stage(
-        record, "layout", layout_started, "success", metrics={"block_count": 1}
+        record,
+        "layout",
+        layout_started,
+        "success",
+        metrics={"block_count": len(blocks)},
     )
     pending_error = _mark_index_pending(record)
     if pending_error is not None:
@@ -329,16 +435,25 @@ def _index_image(record: dict[str, Any], *, reprocess: bool) -> dict[str, Any]:
         record,
         chunks,
         page_count=1,
+        ocr_pages=[page],
         extra_data={
             "input_route": "VISUAL",
             "mime_type": route_data["mime_type"],
             "image_format": route_data["image_format"],
             "width": route_data["width"],
             "height": route_data["height"],
-            "visual_status": "routed",
-            "text_extracted": False,
-            "block_count": 1,
-            "blocks": [block.model_dump()],
+            "visual_status": "ocr_failed" if ocr_failed else "ocr_success",
+            "ocr_used": True,
+            "ocr_status": "failed" if ocr_failed else "success",
+            "status": (
+                "partial_success" if ocr_failed and explicit_ocr else "indexed"
+            ),
+            "failed_pages": [1] if ocr_failed else [],
+            "page_results": [page],
+            "ocr_results": regions,
+            "text_extracted": bool(successful_regions),
+            "block_count": len(blocks),
+            "blocks": [block.model_dump() for block in blocks],
         },
     )
 
@@ -639,9 +754,15 @@ def _parse_ocr_pdf(
             else ocr_service.ocr_document(path, pages=selected)
         )
         recognized_pages = _recognized_page_results(
-            recognized, selected, existing=existing
+            recognized,
+            selected,
+            existing=existing,
+            file_id=record["file_id"],
         )
-        failed_selected = sum(page.get("status") == "failed" for page in recognized_pages)
+        failed_selected = sum(
+            page.get("status") == "failed" or page.get("refresh_status") == "failed"
+            for page in recognized_pages
+        )
         _record_document_stage(
             record,
             "ocr",
@@ -658,10 +779,14 @@ def _parse_ocr_pdf(
         candidate_pages.update({page["page_no"]: page for page in recognized_pages})
 
     ordered_pages = [candidate_pages[page_no] for page_no in sorted(candidate_pages)]
-    failed_pages = [page["page_no"] for page in ordered_pages if page["status"] == "failed"]
+    failed_pages = [
+        page["page_no"] for page in ordered_pages
+        if page["status"] == "failed" or page.get("refresh_status") == "failed"
+    ]
     successful_pages = [page for page in ordered_pages if page["status"] == "success" and page["text"].strip()]
     if not successful_pages:
-        database.replace_document_ocr_pages(record["file_id"], ordered_pages)
+        if not _has_active_index(record["file_id"]):
+            database.replace_document_ocr_pages(record["file_id"], ordered_pages)
         return _index_failure(
             record,
             (recognized or {}).get("error_code") or "OCR_PROCESSING_ERROR",
@@ -688,9 +813,14 @@ def _parse_ocr_pdf(
                 )
             )
             continue
-        raw_blocks = page.get("blocks") or [{
-            "page": page["page_no"], "text": page["text"],
+        raw_blocks = [
+            raw for raw in page.get("blocks") or []
+            if raw.get("status", "success") == "success"
+            and str(raw.get("text") or "").strip()
+        ] or [{
+            "page_no": page["page_no"], "text": page["text"],
             "confidence": page.get("confidence"), "bbox": page.get("bbox"),
+            "source_parser": "pypdf" if page["source_type"] == "text" else "rapidocr",
         }]
         for raw in raw_blocks:
             block = make_document_block(
@@ -701,9 +831,9 @@ def _parse_ocr_pdf(
                     if page["source_type"] == "ocr" and page["status"] == "success"
                     else None
                 ),
-                source_parser=(
+                source_parser=str(raw.get("source_parser") or (
                     "rapidocr" if page["source_type"] == "ocr" else "pypdf"
-                ),
+                )),
                 bbox=(
                     raw.get("bbox")
                     if page["source_type"] == "ocr" and page["status"] == "success"
@@ -768,6 +898,9 @@ def _recognized_page_results(
     selected: list[int],
     *,
     existing: dict[int, dict[str, Any]],
+    file_id: str,
+    image_input: bool = False,
+    preserve_existing_success: bool = True,
 ) -> list[dict[str, Any]]:
     data = result.get("data") if isinstance(result.get("data"), dict) else {}
     supplied = data.get("pages") or []
@@ -775,7 +908,9 @@ def _recognized_page_results(
     if not supplied:
         grouped: dict[int, list[dict[str, Any]]] = {}
         for block in data.get("blocks") or []:
-            grouped.setdefault(int(block["page"]), []).append(block)
+            grouped.setdefault(
+                int(block.get("page_no") or block.get("page")), []
+            ).append(block)
         for page_no, page_blocks in grouped.items():
             by_page[page_no] = {
                 "page_no": page_no,
@@ -790,9 +925,57 @@ def _recognized_page_results(
         page = by_page.get(page_no) or _failed_page_result(
             page_no, result.get("message") or "OCR_PROCESSING_ERROR"
         )
-        if page.get("status") == "failed" and existing.get(page_no, {}).get("status") == "success":
-            page = existing[page_no]
-        page = {**page, "page_no": page_no, "source_type": "ocr", "updated_at": database.utc_now()}
+        attempted_error = page.get("error") or result.get("message")
+        if (
+            preserve_existing_success
+            and page.get("status") == "failed"
+            and existing.get(page_no, {}).get("status") == "success"
+        ):
+            page = {
+                **existing[page_no],
+                "refresh_status": "failed",
+                "refresh_error": attempted_error or "OCR_PROCESSING_ERROR",
+            }
+        raw_regions = list(page.get("blocks") or [])
+        if not raw_regions and page.get("status") == "failed":
+            raw_regions = [{
+                "text": "",
+                "bbox": None,
+                "confidence": None,
+                "status": "failed",
+                "error": page.get("error") or result.get("message") or "OCR_PROCESSING_ERROR",
+            }]
+        regions = [
+            ocr_service.normalize_region_record(
+                file_id=file_id,
+                page_no=page_no,
+                region_index=index,
+                region=region,
+                image_input=image_input,
+            )
+            for index, region in enumerate(raw_regions, start=1)
+        ]
+        successful_regions = [
+            region for region in regions if region["status"] == "success" and region["text"].strip()
+        ]
+        page = {
+            **page,
+            "page_no": page_no,
+            "source_type": "ocr",
+            "blocks": regions,
+            "updated_at": database.utc_now(),
+        }
+        if successful_regions:
+            page["text"] = "\n".join(region["text"] for region in successful_regions)
+            page["bbox"] = _union_bbox(successful_regions)
+            confidences = [
+                float(region["confidence"])
+                for region in successful_regions
+                if region.get("confidence") is not None
+            ]
+            page["confidence"] = min(confidences) if confidences else None
+            page["status"] = "success"
+            page["error"] = None
         normalized.append(page)
     return normalized
 

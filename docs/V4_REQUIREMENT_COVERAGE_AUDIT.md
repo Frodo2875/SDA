@@ -20,7 +20,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | V4-P0-001 | 建立并验证 V4 工程开发基线 | P0 | V4.0 Baseline | VERIFIED | `docs/V4_DEVELOPMENT_LOG.md`; `docs/V4_REQUIREMENT_COVERAGE_AUDIT.md` | 既有完整 `tests/` 测试集 | 修改前：`313 passed in 18.10s`；修改后：`313 passed in 18.31s` | 仅文档与基线核验，不修改 V1–V3 业务代码 |
 | V4-P0-002 | Visual Document Router 顶层能力 | P0 | V4.1 Visual Document Router | VERIFIED | `backend/services/input_router.py`; `backend/services/document_index.py` | `tests/test_visual_document_router_v4.py` | 专项 `13 passed`；完整回归 `326 passed` | 细分证据见第 4 节；未包含 V4.2 OCR |
-| V4-P0-003 | Visual OCR and Image PDF | P0 | V4.2 Visual OCR and Image PDF | NOT_STARTED | TBD | TBD | NOT_RUN | 具体图像 PDF 范围、OCR 契约和验收标准待确认 |
+| V4-P0-003 | Visual OCR and Image PDF | P0 | V4.2 Visual OCR and Image PDF | VERIFIED | `backend/services/ocr_service.py`; `backend/services/document_index.py` | `tests/test_visual_ocr_pipeline_v4.py`; `tests/test_ocr_pipeline.py` | 专项 `8 passed`；完整回归 `334 passed` | 复用 V3 OCR page ledger、mixed routing、Async Task 与原子索引；细分证据见第 5 节 |
 | V4-P0-004 | Handwriting Recognition | P0 | V4.3 Handwriting Recognition | NOT_STARTED | TBD | TBD | NOT_RUN | 具体手写材料范围、输出结构和质量验收标准待确认 |
 | V4-P0-005 | Visual Understanding and KIE | P0 | V4.4 Visual Understanding and KIE | NOT_STARTED | TBD | TBD | NOT_RUN | KIE 字段、Schema、证据与失败语义待确认 |
 | V4-P0-006 | Visual Table | P0 | V4.5 Visual Table | NOT_STARTED | TBD | TBD | NOT_RUN | 表结构、单元格定位和兼容策略待确认 |
@@ -75,7 +75,32 @@
 - 格式/MIME 不是新增数据库列；内容派生元数据随 active image Block/chunk 保存并由
   Workspace 读取，文件身份与生命周期仍由原 `files` 表负责。
 
-## 5. 后续阶段审计规则
+## 5. V4.2 P0 Requirements Coverage Matrix
+
+| Requirement ID | Requirement | Priority | Target V4 Stage | Implementation Status | Code Location | Test Location | Verification Result | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| V4.2-P0-01 | JPG/JPEG/PNG 进入统一 Visual OCR | P0 | V4.2 | VERIFIED | `backend/services/ocr_service.py::ocr_visual`; `backend/services/document_index.py::_index_image` | `test_printed_jpg_and_png_use_visual_ocr_regions` | JPG、PNG 两参数 case PASS | JPEG 与 JPG 使用同一已验证 JPEG 内容路由/解码分支 |
+| V4.2-P0-02 | 扫描、图片型 PDF 复用 V3 OCR | P0 | V4.2 | VERIFIED | `backend/services/ocr_service.py`; `backend/services/document_index.py::_parse_ocr_pdf` | `test_image_only_pdf_uses_same_region_ledger`; V3 `tests/test_ocr_pipeline.py` | PASS | 未新增第二套 PDF OCR |
+| V4.2-P0-03 | Mixed PDF page-level 文本/视觉路由 | P0 | V4.2 | VERIFIED | `backend/services/document_index.py::_parse_ocr_pdf`; existing PDF detector/router | `test_mixed_pdf_routes_only_visual_pages_and_prevents_text_ocr_duplicates`; V3 mixed PDF tests | PASS | 有文本页优先 pypdf，空文本页才 OCR |
+| V4.2-P0-04 | OCR region 契约与持久化 | P0 | V4.2 | VERIFIED | `backend/services/ocr_service.py::OCRRegionResult`; `backend/repositories/ocr_repository.py` | `test_printed_jpg_and_png_use_visual_ocr_regions`; updated `tests/test_ocr_pipeline.py` | PASS | region 保存于既有 `blocks_json` 并提供扁平 getter |
+| V4.2-P0-05 | 保留 bbox 与 confidence | P0 | V4.2 | VERIFIED | `backend/services/ocr_service.py::_normalize_block` | printed/image PDF/empty region tests | PASS | 原始区域坐标与置信度均被保留 |
+| V4.2-P0-06 | empty/failed region 可表达且不自动补字 | P0 | V4.2 | VERIFIED | `backend/services/ocr_service.py`; `backend/services/document_index.py` | `test_ocr_empty_region_keeps_bbox_confidence_and_never_fills_text`; partial failure test | PASS | 只有真实非空 success region 进入检索文本 |
+| V4.2-P0-07 | 中英文与常见数字混合文本可透传 | P0 | V4.2 | VERIFIED | existing RapidOCR adapter; region normalizer | `test_printed_jpg_and_png_use_visual_ocr_regions` | PASS | 验证文字原样保存，不声明 OCR 准确率 |
+| V4.2-P0-08 | 文本层与 OCR 去重 | P0 | V4.2 | VERIFIED | `backend/services/document_index.py::_parse_ocr_pdf` | `test_mixed_pdf_routes_only_visual_pages_and_prevents_text_ocr_duplicates` | PASS | 文本页不调用 OCR，chunk 中各出现一次 |
+| V4.2-P0-09 | OCR 失败保留旧有效文本/region | P0 | V4.2 | VERIFIED | `backend/services/document_index.py::_recognized_page_results`; atomic activation | `test_scanned_pdf_reprocess_failure_preserves_old_chunks_and_regions`; async image preservation test | PASS | 本次刷新失败由 `refresh_status` 和 `failed_pages` 暴露 |
+| V4.2-P0-10 | OCR/visual 接入既有 Async Task | P0 | V4.2 | VERIFIED | `backend/runtime/async_task_runtime.py` | `test_image_async_ocr_failure_preserves_old_regions_and_retry_only_page_one`; existing async tests | PASS | image 为单视觉页；PDF 页数仍使用既有检测器 |
+| V4.2-P0-11 | 单页失败 partial_success，retry 仅失败页 | P0 | V4.2 | VERIFIED | `backend/services/ocr_service.py`; `backend/services/document_index.py`; existing retry runtime | partial/retry tests；V3 `test_o08_retry_only_failed_page_preserves_successful_pages` | PASS | checkpoint 保留 `failed_pages` |
+| V4.2-P0-12 | V1–V3 mixed PDF/OCR 与全量回归保持 | P0 | V4.2 | VERIFIED | 原 V1–V3 modules | 完整 `tests/` | 首次 `334 passed in 27.68s`；最终 `334 passed in 27.25s` | 无删除或 skip 旧测试 |
+
+### 5.1 V4.2 边界与限制
+
+- `recognition_type` 本阶段仅实现 printed OCR；手写识别属于 V4.3。
+- 未开发 KIE、视觉表格、Evidence 3.0、Domain Router 或 Agentic Retrieval。
+- region 复用 `document_ocr_pages.blocks_json`，避免新增平行存储；扁平 region getter 是
+  兼容视图，不改变 V3 page ledger 的数据库结构。
+- 不提供未经真实评测的 OCR 准确率或性能指标。
+
+## 6. 后续阶段审计规则
 
 每个 V4 阶段开始前，应以正式阶段需求补充或拆分对应 Requirement ID，并填写：
 

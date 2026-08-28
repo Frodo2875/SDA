@@ -128,7 +128,21 @@ def test_scanned_pdf_enters_ocr_and_preserves_real_block_metadata(
 
     assert result["ok"] is True
     assert result["data"]["ocr_used"] is True
-    assert result["data"]["ocr_results"] == blocks
+    regions = result["data"]["ocr_results"]
+    assert [
+        {
+            "page": region["page_no"],
+            "text": region["text"],
+            "confidence": region["confidence"],
+            "bbox": region["bbox"],
+        }
+        for region in regions
+    ] == blocks
+    assert all({
+        "file_id", "page_no", "image_no", "region_id", "text", "bbox",
+        "confidence", "recognition_type", "source_model", "source_parser", "status",
+    } <= set(region) for region in regions)
+    assert database.get_document_ocr_regions(pdf_record["file_id"]) == regions
     chunks = database.get_document_chunks(pdf_record["file_id"])
     assert [chunk["page_no"] for chunk in chunks] == [1, 2]
     document_blocks = result["data"]["blocks"]
@@ -203,7 +217,17 @@ def test_ocr_failure_records_reason_and_never_creates_chunks(
     retried = parse_pdf(pdf_record["file_id"])
 
     assert retried["ok"] is True
-    assert retried["data"]["ocr_results"] == recovered_blocks
+    assert [
+        {
+            "page": region["page_no"],
+            "text": region["text"],
+            "confidence": region["confidence"],
+            "bbox": region["bbox"],
+        }
+        for region in retried["data"]["ocr_results"]
+    ] == recovered_blocks
+    assert retried["data"]["ocr_results"][0]["status"] == "success"
+    assert retried["data"]["ocr_results"][0]["region_id"]
     assert get_file_lifecycle(pdf_record["file_id"])["data"]["status"] == "QUERYABLE"
 
 

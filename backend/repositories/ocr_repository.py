@@ -29,6 +29,17 @@ class OCRRepository:
             ).fetchone()
         return self._deserialize(row) if row is not None else None
 
+    def get_regions_for_file(self, file_id: str) -> list[dict[str, Any]]:
+        """Flatten persisted page blocks into the V4.2 region result view."""
+        regions: list[dict[str, Any]] = []
+        for page in self.get_for_file(file_id):
+            for region in page.get("blocks") or []:
+                item = dict(region)
+                item["file_id"] = file_id
+                item["page_no"] = int(item.get("page_no") or page["page_no"])
+                regions.append(item)
+        return regions
+
     def replace_for_file(self, file_id: str, pages: list[dict[str, Any]]) -> None:
         with self._connection_factory() as connection:
             self.replace_in_transaction(connection, file_id, pages)

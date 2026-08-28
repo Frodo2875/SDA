@@ -471,8 +471,8 @@ def _validated_payload(arguments: AsyncTaskCreateRequest) -> dict[str, Any]:
         record = database.get_file_record_by_id(payload["file_id"])
         if record is None:
             raise ValueError("未找到指定文件")
-        if arguments.task_type == "ocr" and record["file_type"] != "pdf":
-            raise ValueError("OCR 任务只支持 PDF")
+        if arguments.task_type == "ocr" and record["file_type"] not in {"pdf", "image"}:
+            raise ValueError("OCR 任务只支持 PDF 或图片")
         if arguments.task_type in {"layout", "index", "reindex"} and record["file_type"] not in {"pdf", "word", "image"}:
             raise ValueError("索引任务只支持 PDF、Word 或图片")
         if pages is not None:
@@ -505,8 +505,14 @@ def _default_executor(task_type: str) -> AsyncTaskExecutor:
         ) -> dict[str, Any]:
             file_id = payload["file_id"]
             if task_type == "ocr":
-                detected = detect_pdf_type(resolve_by_file_id(file_id))
-                total_pages = int(((detected.get("data") or {}).get("page_count") or 0))
+                record = database.get_file_record_by_id(file_id)
+                if record is not None and record["file_type"] == "image":
+                    total_pages = 1
+                else:
+                    detected = detect_pdf_type(resolve_by_file_id(file_id))
+                    total_pages = int(
+                        ((detected.get("data") or {}).get("page_count") or 0)
+                    )
                 selected_pages = payload.get("pages")
                 if selected_pages is not None:
                     total_pages = len(selected_pages)
