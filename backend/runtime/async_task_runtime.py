@@ -429,9 +429,16 @@ def retry_async_task(task_id: str) -> dict[str, Any]:
         return failure("TASK_RETRY_LIMIT", "任务重试次数已达到上限")
     metadata["retry_count"] = retry_count + 1
     failed_pages = list((metadata.get("checkpoint") or {}).get("failed_pages") or [])
+    failed_regions = list(
+        (metadata.get("checkpoint") or {}).get("failed_region_ids") or []
+    )
     failed_items = list((metadata.get("checkpoint") or {}).get("failed_items") or [])
     payload = dict(metadata.get("payload") or {})
-    if metadata.get("task_type") == "ocr" and failed_pages:
+    if metadata.get("task_type") == "ocr" and failed_regions:
+        payload.pop("pages", None)
+        payload["region_ids"] = failed_regions
+    elif metadata.get("task_type") == "ocr" and failed_pages:
+        payload.pop("region_ids", None)
         payload["pages"] = failed_pages
     elif metadata.get("task_type") == "batch" and failed_items:
         payload["student_ids"] = failed_items
@@ -467,6 +474,9 @@ def _validated_payload(arguments: AsyncTaskCreateRequest) -> dict[str, Any]:
     if arguments.task_type in {"ocr", "layout", "index", "reindex"}:
         raw_payload = dict(arguments.payload)
         pages = raw_payload.pop("pages", None) if arguments.task_type == "ocr" else None
+        region_ids = (
+            raw_payload.pop("region_ids", None) if arguments.task_type == "ocr" else None
+        )
         payload = FileIdArguments.model_validate(raw_payload).model_dump()
         record = database.get_file_record_by_id(payload["file_id"])
         if record is None:
@@ -484,6 +494,17 @@ def _validated_payload(arguments: AsyncTaskCreateRequest) -> dict[str, Any]:
             ):
                 raise ValueError("OCR pages 必须是唯一的正整数列表")
             payload["pages"] = pages
+        if region_ids is not None:
+            if pages is not None:
+                raise ValueError("OCR pages 与 region_ids 不能同时指定")
+            if (
+                not isinstance(region_ids, list)
+                or not region_ids
+                or len(set(region_ids)) != len(region_ids)
+                or any(not isinstance(region_id, str) or not region_id.strip() for region_id in region_ids)
+            ):
+                raise ValueError("OCR region_ids 必须是唯一的非空字符串列表")
+            payload["region_ids"] = [region_id.strip() for region_id in region_ids]
         return payload
     if arguments.task_type == "workflow":
         payload = dict(arguments.payload)
@@ -505,6 +526,7 @@ def _default_executor(task_type: str) -> AsyncTaskExecutor:
         ) -> dict[str, Any]:
             file_id = payload["file_id"]
             if task_type == "ocr":
+                selected_regions = payload.get("region_ids")
                 record = database.get_file_record_by_id(file_id)
                 if record is not None and record["file_type"] == "image":
                     total_pages = 1
@@ -516,12 +538,22 @@ def _default_executor(task_type: str) -> AsyncTaskExecutor:
                 selected_pages = payload.get("pages")
                 if selected_pages is not None:
                     total_pages = len(selected_pages)
-                context.update_counts(
-                    0, total_pages, "OCR 页面等待处理", unit="pages",
-                    checkpoint={"phase": "ocr", "processed_pages": []},
-                )
+                if selected_regions is not None:
+                    context.update_counts(
+                        0, len(selected_regions), "OCR region 等待处理", unit="items",
+                        checkpoint={"phase": "ocr", "processed_region_ids": []},
+                    )
+                else:
+                    context.update_counts(
+                        0, total_pages, "OCR 页面等待处理", unit="pages",
+                        checkpoint={"phase": "ocr", "processed_pages": []},
+                    )
                 context.enter_atomic("ocr_index_activation", "OCR处理中；索引切换为原子阶段")
-                result = ocr_document(file_id, pages=selected_pages)
+                result = (
+                    ocr_document(file_id, region_ids=selected_regions)
+                    if selected_regions is not None
+                    else ocr_document(file_id, pages=selected_pages)
+                )
             else:
                 context.update_stage(task_type, f"正在执行 {task_type}")
                 context.enter_atomic(
@@ -541,15 +573,34 @@ def _default_executor(task_type: str) -> AsyncTaskExecutor:
                     selected = set(payload["pages"])
                     pages = [page for page in pages if page.get("page_no") in selected]
                 failed_pages = list(result_data.get("failed_pages") or [])
+                failed_regions = list(result_data.get("failed_region_ids") or [])
                 checkpoint.update(
                     {
                         "processed_pages": [page.get("page_no") for page in pages],
                         "failed_pages": failed_pages,
+                        "processed_region_ids": list(
+                            result_data.get("retried_region_ids") or []
+                        ),
+                        "failed_region_ids": failed_regions,
                     }
                 )
             context.leave_atomic(checkpoint=checkpoint)
             context.raise_if_cancelled()
             if task_type == "ocr":
+                selected_regions = payload.get("region_ids")
+                if selected_regions is not None:
+                    failed_regions = list(result_data.get("failed_region_ids") or [])
+                    context.update_counts(
+                        len(selected_regions), len(selected_regions),
+                        "OCR region 处理完成", unit="items",
+                        counts={
+                            "success_count": len(selected_regions) - len(failed_regions),
+                            "failed_count": len(failed_regions),
+                            "skipped_count": 0,
+                        },
+                        checkpoint=checkpoint,
+                    )
+                    return result
                 pages = result_data.get("page_results") or result_data.get("pages") or []
                 if payload.get("pages") is not None:
                     selected = set(payload["pages"])
@@ -692,6 +743,8 @@ def _finish_task(
         checkpoint["child_task_id"] = str(child_task_id)
     if data.get("failed_pages"):
         checkpoint["failed_pages"] = list(data["failed_pages"])
+    if data.get("failed_region_ids"):
+        checkpoint["failed_region_ids"] = list(data["failed_region_ids"])
     failure_details = data.get("failure_details") or []
     if failure_details:
         checkpoint["failed_items"] = [

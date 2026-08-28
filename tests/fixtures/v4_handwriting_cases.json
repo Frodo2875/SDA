@@ -1,0 +1,32 @@
+{
+  "clear_handwriting": {
+    "text": "张三 2026-08-28",
+    "confidence": 0.95,
+    "recognition_type": "handwritten",
+    "expected_status": "success"
+  },
+  "medium_handwriting": {
+    "text": "请假原因 家中有事",
+    "confidence": 0.72,
+    "recognition_type": "handwritten",
+    "expected_status": "success"
+  },
+  "extremely_unclear_handwriting": {
+    "text": "七七八八可读",
+    "confidence": 0.32,
+    "recognition_type": "handwritten",
+    "expected_status": "low_confidence"
+  },
+  "low_confidence_name": {
+    "text": "姓名：李明",
+    "confidence": 0.82,
+    "recognition_type": "handwritten",
+    "expected_key_field_type": "name"
+  },
+  "low_confidence_phone": {
+    "text": "电话：13800138000",
+    "confidence": 0.84,
+    "recognition_type": "handwritten",
+    "expected_key_field_type": "phone"
+  }
+}

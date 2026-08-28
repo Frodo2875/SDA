@@ -39,7 +39,7 @@ V4.0 只建立工程开发基线，不实现 V4 新业务能力，不修改 V1�
 | V4.0 | Baseline | VERIFIED | 核验 V3 基线，建立 V4 日志、覆盖矩阵和测试基线；不开发新功能 |
 | V4.1 | Visual Document Router | VERIFIED | 图片正式进入既有 Document、生命周期、Workspace、Preview、Task 与原子重处理链路 |
 | V4.2 | Visual OCR and Image PDF | VERIFIED | 复用 V3 PDF OCR，统一图片、扫描/图片型 PDF 与 mixed PDF 的 page-level Visual OCR |
-| V4.3 | Handwriting Recognition | NOT_STARTED | 需求和验收标准待对应阶段确认 |
+| V4.3 | Handwriting Recognition | VERIFIED | 在统一 Visual OCR region 管线中支持手写类型、低置信度安全、冲突核对与 region retry |
 | V4.4 | Visual Understanding and KIE | NOT_STARTED | 需求和验收标准待对应阶段确认 |
 | V4.5 | Visual Table | NOT_STARTED | 需求和验收标准待对应阶段确认 |
 | V4.6 | Evidence 3.0 | NOT_STARTED | 需求和验收标准待对应阶段确认 |
@@ -192,6 +192,57 @@ conda run -n tuli_env pytest -q
   触发，不新增自动无限重试机制。
 - Requirement IDs：`V4.2-P0-01` 至 `V4.2-P0-12`。
 
+### V4.3 Handwriting Recognition
+
+- 本阶段目标：在 V4.2 Visual OCR Pipeline 内增量支持 `printed`、`handwritten`、
+  `mixed`、`unknown`，并建立手写低置信度、关键字段、模型冲突和局部 region retry 的
+  可审计安全语义；未创建独立 OCR 管线或新存储表。
+- 基线：V4.2 tag `v4.2-visual-ocr`，commit
+  `f690506ace691b363acd13be4860ae9434359087`。
+- 实际修改文件：
+  - `backend/services/ocr_service.py`
+  - `backend/services/document_index.py`
+  - `backend/runtime/async_task_runtime.py`
+  - `backend/tools/hybrid_tools.py`
+  - `backend/agent.py`
+  - `tests/fixtures/v4_handwriting_cases.json`
+  - `tests/test_handwriting_recognition_v4.py`
+  - `docs/V4_DEVELOPMENT_LOG.md`
+  - `docs/V4_REQUIREMENT_COVERAGE_AUDIT.md`
+- 新增/修改接口：
+  - `OCRRegionResult.recognition_type` 扩展为四种类型，region 状态扩展
+    `low_confidence`，并增加 `key_field_type`、`review_required`、
+    `review_reason`、`safe_for_high_impact`、`safe_for_identity_match` 和
+    `conflict_sources`。
+  - 新增 `HandwritingThresholds` / `get_handwriting_thresholds()`；通过
+    `HANDWRITING_USABLE_CONFIDENCE`、`HANDWRITING_REVIEW_CONFIDENCE`、
+    `HANDWRITING_KEY_FIELD_CONFIDENCE` 配置归一化置信度策略，要求
+    `usable <= review <= key_field`。
+  - 新增 `retry_visual_regions()`，按既有 bbox 只裁剪并重试指定 region；新增
+    `retry_ocr_regions()`，将成功结果合并进原 page ledger 并通过既有原子索引事务激活。
+  - 既有 `ocr_document()` 与 Async OCR payload 增加可选 `region_ids`；与 `pages`
+    互斥，checkpoint 保存 `failed_region_ids`，Task retry 优先只重试失败 region。
+- 安全策略：手写/unknown 的极低置信度结果保存原始 backend 输出但不写入检索 chunk；
+  姓名、学号、电话、金额、日期只做风险标签（不是 KIE），低于配置阈值时禁止作为
+  high-impact 或唯一身份匹配依据并保留人工核对标记。模型候选文本冲突时不选边，
+  主文本留空，完整保存双方来源；奖学金高影响规则提取会拒绝 unsafe Evidence。
+- 新增测试：固定样本描述 `tests/fixtures/v4_handwriting_cases.json` 与
+  `tests/test_handwriting_recognition_v4.py` 的 12 个 pytest cases，覆盖 clear、medium、
+  extremely unclear、printed+handwritten mixed、低置信度姓名/电话、partial region、
+  model conflict、Async region crop retry、threshold 配置、unknown 以及高影响阻断。
+- 测试结果：V4.3 专项 `12 passed in 0.55s`；OCR/Async/Agent Safety 关键回归
+  `84 passed in 5.29s`；V4.1/V4.2/V4.3 兼容组 `33 passed in 12.70s`。首次完整回归
+  为 `345 passed, 1 failed in 29.13s`，定位并修复普通空白图片 reindex 状态兼容问题；
+  修复后完整回归 `346 passed in 30.09s`；文档更新后最终完整回归
+  `346 passed in 30.19s`。
+- 未完成项：KIE、视觉表格、Evidence 3.0、Domain Router、Agentic Retrieval 以及真实
+  手写 Evaluation 未在本阶段开发。
+- 已知限制：固定样本验证的是可计算契约、管线和安全行为，不代表手写准确率；默认本地
+  backend 仍为既有 RapidOCR，专用手写 backend 需按同一归一化 region 契约接入。
+  clear/medium/extremely unclear 的真实质量和“七七八八可读”等指标留待 V4.11 固定数据集
+  人工评估，本阶段不声明准确率或性能数据。
+- Requirement IDs：`V4.3-P0-01` 至 `V4.3-P0-12`。
+
 ### 每阶段开发记录模板
 
 ```markdown
@@ -225,6 +276,11 @@ conda run -n tuli_env pytest -q
 | 2026-08-28 | V4.2 关键回归 | 未提交工作树 | OCR、Async Task、V4.1 Router 相关测试 | `49 passed in 16.81s` | PASS |
 | 2026-08-28 | V4.2 完整回归（首次） | 未提交工作树 | `conda run -n tuli_env pytest -q` | `334 passed in 27.68s` | PASS |
 | 2026-08-28 | V4.2 文档更新后最终回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `334 passed in 27.25s` | PASS |
+| 2026-08-28 | V4.3 专项 | 未提交工作树 | `conda run -n tuli_env pytest -q tests/test_handwriting_recognition_v4.py` | `12 passed in 0.55s` | PASS；固定样本管线测试，非准确率指标 |
+| 2026-08-28 | V4.3 关键回归 | 未提交工作树 | OCR、Async、Agent Safety 相关测试 | `84 passed in 5.29s` | PASS |
+| 2026-08-28 | V4.3 首次完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `345 passed, 1 failed in 29.13s` | 发现 V4.1 空白图片普通 reindex 状态兼容问题，已修复 |
+| 2026-08-28 | V4.3 修复后完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `346 passed in 30.09s` | PASS |
+| 2026-08-28 | V4.3 文档更新后最终回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `346 passed in 30.19s` | PASS |
 
 后续阶段必须追加实际执行记录，不得以历史结果替代当前回归。
 

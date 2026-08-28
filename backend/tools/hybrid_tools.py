@@ -190,6 +190,9 @@ def _extract_rules(
         if result.get("ok") is not True:
             continue
         for evidence in result.get("evidence") or []:
+            if evidence.get("safe_for_high_impact") is False:
+                ambiguous = True
+                continue
             text = _chunk_text(evidence)
             section = _award_section(text, award_name)
             if not section:
@@ -290,7 +293,11 @@ def _formal_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
         "value_summary",
     )
     formal = {key: evidence.get(key) for key in keys}
-    for key in ("block_id", "table", "cell", "bbox", "confidence"):
+    for key in (
+        "block_id", "table", "cell", "bbox", "confidence",
+        "recognition_type", "region_id", "review_required",
+        "review_reason", "safe_for_high_impact", "safe_for_identity_match",
+    ):
         if evidence.get(key) is not None:
             formal[key] = evidence[key]
     return formal

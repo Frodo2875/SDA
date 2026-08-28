@@ -21,7 +21,7 @@
 | V4-P0-001 | 建立并验证 V4 工程开发基线 | P0 | V4.0 Baseline | VERIFIED | `docs/V4_DEVELOPMENT_LOG.md`; `docs/V4_REQUIREMENT_COVERAGE_AUDIT.md` | 既有完整 `tests/` 测试集 | 修改前：`313 passed in 18.10s`；修改后：`313 passed in 18.31s` | 仅文档与基线核验，不修改 V1–V3 业务代码 |
 | V4-P0-002 | Visual Document Router 顶层能力 | P0 | V4.1 Visual Document Router | VERIFIED | `backend/services/input_router.py`; `backend/services/document_index.py` | `tests/test_visual_document_router_v4.py` | 专项 `13 passed`；完整回归 `326 passed` | 细分证据见第 4 节；未包含 V4.2 OCR |
 | V4-P0-003 | Visual OCR and Image PDF | P0 | V4.2 Visual OCR and Image PDF | VERIFIED | `backend/services/ocr_service.py`; `backend/services/document_index.py` | `tests/test_visual_ocr_pipeline_v4.py`; `tests/test_ocr_pipeline.py` | 专项 `8 passed`；完整回归 `334 passed` | 复用 V3 OCR page ledger、mixed routing、Async Task 与原子索引；细分证据见第 5 节 |
-| V4-P0-004 | Handwriting Recognition | P0 | V4.3 Handwriting Recognition | NOT_STARTED | TBD | TBD | NOT_RUN | 具体手写材料范围、输出结构和质量验收标准待确认 |
+| V4-P0-004 | Handwriting Recognition | P0 | V4.3 Handwriting Recognition | VERIFIED | `backend/services/ocr_service.py`; `backend/services/document_index.py` | `tests/test_handwriting_recognition_v4.py`; `tests/fixtures/v4_handwriting_cases.json` | 专项 `12 passed`；完整回归 `346 passed` | 验证管线和安全契约，不将固定样本结果表述为准确率；细分证据见第 6 节 |
 | V4-P0-005 | Visual Understanding and KIE | P0 | V4.4 Visual Understanding and KIE | NOT_STARTED | TBD | TBD | NOT_RUN | KIE 字段、Schema、证据与失败语义待确认 |
 | V4-P0-006 | Visual Table | P0 | V4.5 Visual Table | NOT_STARTED | TBD | TBD | NOT_RUN | 表结构、单元格定位和兼容策略待确认 |
 | V4-P0-007 | Evidence 3.0 | P0 | V4.6 Evidence 3.0 | NOT_STARTED | TBD | TBD | NOT_RUN | 必须增量复用 Evidence 2.0；新增契约待确认 |
@@ -100,7 +100,32 @@
   兼容视图，不改变 V3 page ledger 的数据库结构。
 - 不提供未经真实评测的 OCR 准确率或性能指标。
 
-## 6. 后续阶段审计规则
+## 6. V4.3 P0 Requirements Coverage Matrix
+
+| Requirement ID | Requirement | Priority | Target V4 Stage | Implementation Status | Code Location | Test Location | Verification Result | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| V4.3-P0-01 | printed/handwritten/mixed/unknown 统一 region 类型 | P0 | V4.3 | VERIFIED | `backend/services/ocr_service.py::OCRRegionResult`; `_normalize_block` | mixed、unknown、固定手写测试 | PASS | 仍使用 V4.2 同一 Visual OCR 入口和 ledger |
+| V4.3-P0-02 | 清晰手写进入可用结果 | P0 | V4.3 | VERIFIED | `backend/services/ocr_service.py` | `test_fixed_clear_medium_and_extremely_unclear_handwriting[clear_handwriting-False]` | PASS | 固定 adapter 样本验证管线，不代表真实准确率 |
+| V4.3-P0-03 | 中等潦草手写基础可用并可核对 | P0 | V4.3 | VERIFIED | handwriting confidence policy | medium fixed sample case | PASS | 文本可索引，同时保留 review 标记 |
+| V4.3-P0-04 | 极潦草允许 low_confidence/failed，禁止强猜 | P0 | V4.3 | VERIFIED | `_apply_handwriting_safety`; index success-region filter | extremely unclear fixed sample case | PASS | backend 原值保留，但不进入检索 chunk |
+| V4.3-P0-05 | 手写 region 保存文本、位置、置信度、类型、模型、ID、状态 | P0 | V4.3 | VERIFIED | `OCRRegionResult`; existing `document_ocr_pages.blocks_json` | fixed samples；conflict persistence test | PASS | 不新增表或第二套模型 |
+| V4.3-P0-06 | 关键字段低置信度禁止高影响/唯一身份匹配并保留核对 | P0 | V4.3 | VERIFIED | `_detect_key_field_type`; `_apply_handwriting_safety`; retrieval metadata | low-confidence name/phone tests；high-impact rejection test | PASS | 支持 name/student_id/phone/amount/date 风险标签；不是 KIE |
+| V4.3-P0-07 | 单页内 partial region failure 支持 partial_success | P0 | V4.3 | VERIFIED | `ocr_visual` failed-region aggregation | `test_partial_region_failure_is_reported_without_losing_successful_text` | PASS | 成功 region 保留并可索引 |
+| V4.3-P0-08 | 失败/review region 局部 retry | P0 | V4.3 | VERIFIED | `retry_visual_regions`; `retry_ocr_regions` | `test_failed_region_retry_crops_only_that_region_and_keeps_region_id` | PASS | bbox crop；保持原 region_id；原子激活 |
+| V4.3-P0-09 | OCR/handwriting 模型冲突不静默选边 | P0 | V4.3 | VERIFIED | `_normalized_conflict_sources`; `_apply_handwriting_safety` | `test_model_conflict_preserves_both_sources_and_never_silently_selects` | PASS | 主文本留空，保存候选文本、模型、parser 与 confidence |
+| V4.3-P0-10 | confidence threshold 配置化且模型无关 | P0 | V4.3 | VERIFIED | `HandwritingThresholds`; `get_handwriting_thresholds` | `test_handwriting_thresholds_are_configurable_not_model_specific` | PASS | 使用归一化 0..1 契约，不绑定特定模型分数常量 |
+| V4.3-P0-11 | 手写安全标记传递到 Evidence/高影响判断 | P0 | V4.3 | VERIFIED | `document_index.retrieve_document`; `backend/tools/hybrid_tools.py`; Agent prompt | high-impact rejection test；Agent/Hybrid regressions | PASS | unsafe handwriting Evidence 不生成高影响规则条件 |
+| V4.3-P0-12 | V1–V3 与 V4.1–V4.2 回归保持 | P0 | V4.3 | VERIFIED | 原有 modules | 完整 `tests/` | 修复后 `346 passed in 30.09s`；最终 `346 passed in 30.19s` | 首轮发现的 V4.1 状态兼容问题已修复；无删除或 skip 旧测试 |
+
+### 6.1 V4.3 边界与限制
+
+- 本阶段固定样本只提供可计算的数据结构、adapter 测试入口和安全验收，不产生或声称
+  手写准确率、“七七八八可读率”或性能指标；真实 Evaluation 留到 V4.11。
+- 默认本地 backend 仍为 V4.2 既有 RapidOCR；专用手写模型必须输出同一归一化 region
+  契约后接入，不改变索引、Async Task 或持久化系统。
+- 关键字段识别只用于风险标记，不构成 V4.4 KIE 实现。
+
+## 7. 后续阶段审计规则
 
 每个 V4 阶段开始前，应以正式阶段需求补充或拆分对应 Requirement ID，并填写：
 

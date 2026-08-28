@@ -136,11 +136,19 @@ def parse_pdf(
     )
 
 
-def ocr_document(file_id: str, pages: list[int] | None = None) -> dict[str, Any]:
+def ocr_document(
+    file_id: str,
+    pages: list[int] | None = None,
+    region_ids: list[str] | None = None,
+) -> dict[str, Any]:
     """Process all OCR-needed pages or retry only an explicit 1-based page set."""
     clean_file_id, record, error = _validated_document(file_id)
     if error is not None:
         return error
+    if pages is not None and region_ids is not None:
+        return failure("OCR_RETRY_SCOPE_INVALID", "页级和 region 级重试不能同时指定")
+    if region_ids is not None:
+        return retry_ocr_regions(clean_file_id, region_ids)
     if record["file_type"] == "image":
         if pages is not None and pages != [1]:
             return failure("OCR_PAGE_INVALID", "图片 OCR 只支持 image_no/page_no 1")
@@ -151,6 +159,88 @@ def ocr_document(file_id: str, pages: list[int] | None = None) -> dict[str, Any]
             explicit_ocr=True,
         )
     return parse_pdf(file_id, _ocr_pages=pages)
+
+
+def retry_ocr_regions(file_id: str, region_ids: list[str]) -> dict[str, Any]:
+    """Retry failed/review regions and atomically activate a merged OCR candidate."""
+    clean_file_id, record, error = _validated_document(file_id)
+    if error is not None:
+        return error
+    requested = [str(region_id or "").strip() for region_id in region_ids]
+    if not requested or any(not item for item in requested) or len(set(requested)) != len(requested):
+        return failure("OCR_REGION_INVALID", "region_ids 必须非空且唯一")
+    pages = database.get_document_ocr_pages(clean_file_id)
+    by_region = {
+        str(region["region_id"]): region
+        for page in pages for region in page.get("blocks") or []
+        if region.get("region_id")
+    }
+    if any(region_id not in by_region for region_id in requested):
+        return failure("OCR_REGION_NOT_FOUND", "指定 region 不存在于当前有效 OCR 结果")
+    retryable = [
+        by_region[region_id] for region_id in requested
+        if by_region[region_id].get("status") in {"low_confidence", "empty", "failed"}
+        or by_region[region_id].get("review_required")
+    ]
+    if len(retryable) != len(requested):
+        return failure("OCR_REGION_NOT_RETRYABLE", "只能重试失败、低置信度或待核对 region")
+    try:
+        path = resolve_by_file_id(clean_file_id)
+    except FileLocatorError as exc:
+        return failure("FILE_NOT_FOUND", str(exc))
+    started = start_ocr_processing(clean_file_id)
+    if not started["ok"]:
+        return failure("OCR_STATE_ERROR", started["message"], {"file_id": clean_file_id})
+    retried = ocr_service.retry_visual_regions(path, retryable, file_id=clean_file_id)
+    retry_data = retried.get("data") if isinstance(retried.get("data"), dict) else {}
+    replacements = {
+        str(region["region_id"]): region for region in retry_data.get("regions") or []
+        if region.get("region_id") and region.get("status") == "success"
+    }
+    if not replacements:
+        failed = _index_failure(
+            record,
+            retried.get("error_code") or "OCR_REGION_RETRY_FAILED",
+            retried.get("message") or "OCR region 重试失败",
+            failure_stage="ocr",
+        )
+        failed["data"] = {
+            **(failed.get("data") or {}),
+            "failed_region_ids": list(retry_data.get("failed_region_ids") or requested),
+            "retried_region_ids": requested,
+        }
+        return failed
+    merged_pages = _merge_retried_regions(pages, replacements)
+    blocks, chunks = _ocr_pages_to_index(clean_file_id, merged_pages)
+    pending_error = _mark_index_pending(record)
+    if pending_error is not None:
+        return pending_error
+    failed_region_ids = list(retry_data.get("failed_region_ids") or [])
+    review_region_ids = [
+        str(region["region_id"])
+        for page in merged_pages for region in page.get("blocks") or []
+        if region.get("review_required")
+    ]
+    return _persist_index(
+        record,
+        chunks,
+        page_count=len(merged_pages),
+        ocr_pages=merged_pages,
+        extra_data={
+            "status": "partial_success" if failed_region_ids else "indexed",
+            "ocr_status": "partial_success" if failed_region_ids else "success",
+            "retried_region_ids": requested,
+            "failed_region_ids": failed_region_ids,
+            "review_required_region_ids": review_region_ids,
+            "verification_required": bool(review_region_ids),
+            "page_results": merged_pages,
+            "ocr_results": [
+                region for page in merged_pages for region in page.get("blocks") or []
+            ],
+            "block_count": len(blocks),
+            "blocks": [block.model_dump() for block in blocks],
+        },
+    )
 
 
 def index_document(file_id: str) -> dict[str, Any]:
@@ -322,6 +412,13 @@ def _index_image(
         for region in regions
         if region.get("status") == "success" and str(region.get("text") or "").strip()
     ]
+    failed_region_ids = [
+        str(region["region_id"]) for region in regions
+        if region.get("status") in {"low_confidence", "empty", "failed"}
+    ]
+    review_region_ids = [
+        str(region["region_id"]) for region in regions if region.get("review_required")
+    ]
     ocr_failed = page.get("status") == "failed" or not successful_regions
     _record_document_stage(
         record,
@@ -390,6 +487,7 @@ def _index_image(
                     "region_id": region["region_id"],
                     "recognition_type": region["recognition_type"],
                     "source_model": region.get("source_model"),
+                    **_region_safety_metadata(region),
                 }},
             )
             for chunk in region_chunks:
@@ -444,11 +542,17 @@ def _index_image(
             "height": route_data["height"],
             "visual_status": "ocr_failed" if ocr_failed else "ocr_success",
             "ocr_used": True,
-            "ocr_status": "failed" if ocr_failed else "success",
+            "ocr_status": (
+                "failed" if ocr_failed else "partial_success" if failed_region_ids else "success"
+            ),
             "status": (
-                "partial_success" if ocr_failed and explicit_ocr else "indexed"
+                "partial_success"
+                if explicit_ocr and (ocr_failed or failed_region_ids) else "indexed"
             ),
             "failed_pages": [1] if ocr_failed else [],
+            "failed_region_ids": failed_region_ids,
+            "review_required_region_ids": review_region_ids,
+            "verification_required": bool(review_region_ids),
             "page_results": [page],
             "ocr_results": regions,
             "text_extracted": bool(successful_regions),
@@ -565,6 +669,15 @@ def retrieve_document(
                 value_summary=_excerpt(row["chunk_text"], arguments.query),
             )
         )
+        evidence[-1].update({
+            key: metadata.get(key)
+            for key in (
+                "region_id", "recognition_type", "key_field_type",
+                "review_required", "review_reason", "safe_for_high_impact",
+                "safe_for_identity_match", "conflict_sources",
+            )
+            if metadata.get(key) is not None
+        })
         evidence[-1]["score"] = round(
             float(row.get("retrieval_score"))
             if row.get("retrieval_score") is not None
@@ -647,6 +760,8 @@ def retrieve_document(
     warnings = [retrieval["warning"]] if retrieval["warning"] else []
     if low_confidence_pages:
         warnings.append("LOW_OCR_CONFIDENCE_REVIEW_REQUIRED")
+    if any(item.get("review_required") for item in evidence):
+        warnings.append("HANDWRITING_REVIEW_REQUIRED")
     result.update(
         {
             "evidence": evidence,
@@ -783,6 +898,18 @@ def _parse_ocr_pdf(
         page["page_no"] for page in ordered_pages
         if page["status"] == "failed" or page.get("refresh_status") == "failed"
     ]
+    failed_region_ids = [
+        str(region["region_id"])
+        for page in ordered_pages
+        for region in page.get("blocks") or []
+        if region.get("status") in {"low_confidence", "empty", "failed"}
+    ]
+    review_region_ids = [
+        str(region["region_id"])
+        for page in ordered_pages
+        for region in page.get("blocks") or []
+        if region.get("review_required")
+    ]
     successful_pages = [page for page in ordered_pages if page["status"] == "success" and page["text"].strip()]
     if not successful_pages:
         if not _has_active_index(record["file_id"]):
@@ -844,6 +971,7 @@ def _parse_ocr_pdf(
             block_chunks = blocks_to_chunks(
                 [block],
                 source_type="ocr" if page["source_type"] == "ocr" else "pdf",
+                metadata_by_block={block.block_id: _region_safety_metadata(raw)},
             )
             for chunk in block_chunks:
                 chunk["chunk_index"] = len(chunks)
@@ -860,12 +988,18 @@ def _parse_ocr_pdf(
         ocr_pages=ordered_pages,
         extra_data={
             "ocr_used": True,
-            "ocr_status": "partial_success" if failed_pages else "success",
-            "status": "partial_success" if failed_pages else "indexed",
+            "ocr_status": (
+                "partial_success" if failed_pages or failed_region_ids else "success"
+            ),
+            "status": (
+                "partial_success" if failed_pages or failed_region_ids else "indexed"
+            ),
             "pdf_type": pdf_type,
             "failed_pages": failed_pages,
+            "failed_region_ids": failed_region_ids,
+            "review_required_region_ids": review_region_ids,
             "low_confidence_pages": low_confidence_pages,
-            "verification_required": bool(low_confidence_pages),
+            "verification_required": bool(low_confidence_pages or review_region_ids),
             "page_results": ordered_pages,
             "ocr_results": ocr_results,
             "block_count": len(blocks),
@@ -978,6 +1112,104 @@ def _recognized_page_results(
             page["error"] = None
         normalized.append(page)
     return normalized
+
+
+def _region_safety_metadata(region: dict[str, Any]) -> dict[str, Any]:
+    """Expose handwriting review controls without changing legacy printed metadata."""
+    recognition_type = str(region.get("recognition_type") or "printed")
+    if (
+        recognition_type == "printed"
+        and not region.get("review_required")
+        and not region.get("conflict_sources")
+    ):
+        return {}
+    return {
+        "region_id": region.get("region_id"),
+        "recognition_type": recognition_type,
+        "key_field_type": region.get("key_field_type"),
+        "review_required": bool(region.get("review_required")),
+        "review_reason": region.get("review_reason"),
+        "safe_for_high_impact": bool(region.get("safe_for_high_impact", False)),
+        "safe_for_identity_match": bool(region.get("safe_for_identity_match", False)),
+        "conflict_sources": list(region.get("conflict_sources") or []),
+    }
+
+
+def _merge_retried_regions(
+    pages: list[dict[str, Any]], replacements: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    for original in pages:
+        page = dict(original)
+        regions = [
+            dict(replacements.get(str(region.get("region_id"))) or region)
+            for region in page.get("blocks") or []
+        ]
+        successful = [
+            region for region in regions
+            if region.get("status") == "success" and str(region.get("text") or "").strip()
+        ]
+        page["blocks"] = regions
+        if page.get("source_type") == "ocr":
+            page["text"] = "\n".join(str(region["text"]) for region in successful)
+            page["bbox"] = _union_bbox(successful)
+            confidences = [
+                float(region["confidence"])
+                for region in successful if region.get("confidence") is not None
+            ]
+            page["confidence"] = min(confidences) if confidences else None
+            page["status"] = "success" if successful else "failed"
+            page["error"] = None if successful else "OCR_REGION_NO_USABLE_TEXT"
+            page["updated_at"] = database.utc_now()
+        merged.append(page)
+    return merged
+
+
+def _ocr_pages_to_index(
+    file_id: str, pages: list[dict[str, Any]]
+) -> tuple[list[DocumentBlock], list[dict[str, Any]]]:
+    """Rebuild one candidate from the existing page ledger after local retry."""
+    blocks: list[DocumentBlock] = []
+    chunks: list[dict[str, Any]] = []
+    for page in pages:
+        if page.get("status") != "success":
+            continue
+        raw_regions = [
+            region for region in page.get("blocks") or []
+            if region.get("status") == "success" and str(region.get("text") or "").strip()
+        ]
+        if not raw_regions and str(page.get("text") or "").strip():
+            raw_regions = [{
+                "text": page["text"],
+                "bbox": page.get("bbox"),
+                "confidence": page.get("confidence"),
+                "source_parser": "pypdf" if page.get("source_type") == "text" else "rapidocr",
+            }]
+        for region in raw_regions:
+            block = make_document_block(
+                file_id=file_id,
+                sequence=len(blocks),
+                block_type="paragraph",
+                content=str(region["text"]),
+                page_no=int(page["page_no"]),
+                bbox=region.get("bbox") if page.get("source_type") == "ocr" else None,
+                confidence=(
+                    region.get("confidence") if page.get("source_type") == "ocr" else None
+                ),
+                source_parser=str(region.get("source_parser") or (
+                    "rapidocr" if page.get("source_type") == "ocr" else "pypdf"
+                )),
+            )
+            blocks.append(block)
+            generated = blocks_to_chunks(
+                [block],
+                source_type="ocr" if page.get("source_type") == "ocr" else "pdf",
+                metadata_by_block={block.block_id: _region_safety_metadata(region)},
+            )
+            for chunk in generated:
+                chunk["chunk_index"] = len(chunks)
+                chunks.append(chunk)
+    return blocks, chunks
 
 
 def _union_bbox(blocks: list[dict[str, Any]]) -> list[float] | None:
