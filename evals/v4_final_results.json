@@ -1,0 +1,35 @@
+{
+  "dataset": "v4_evaluation_dataset.json",
+  "dataset_case_count": 17,
+  "execution_mode": "offline_fixed_adapters",
+  "generated_at": "2026-08-31T03:15:18.738182+00:00",
+  "metrics": {
+    "printed_ocr_usable_rate": {"passed": 4, "failed": 0, "skipped": 0, "total": 4, "rate": 1.0, "status": "PASS", "wall_duration_ms": 1050},
+    "handwriting_usable_rate": {"passed": 4, "failed": 0, "skipped": 0, "total": 4, "rate": 1.0, "status": "PASS", "wall_duration_ms": 942},
+    "low_confidence_safety_rate": {"passed": 4, "failed": 0, "skipped": 0, "total": 4, "rate": 1.0, "status": "PASS", "wall_duration_ms": 621},
+    "visual_block_accuracy": {"passed": 1, "failed": 0, "skipped": 0, "total": 1, "rate": 1.0, "status": "PASS", "wall_duration_ms": 796},
+    "kie_field_accuracy": {"passed": 3, "failed": 0, "skipped": 0, "total": 3, "rate": 1.0, "status": "PASS", "wall_duration_ms": 866},
+    "visual_table_cell_accuracy": {"passed": 3, "failed": 0, "skipped": 0, "total": 3, "rate": 1.0, "status": "PASS", "wall_duration_ms": 865},
+    "visual_evidence_localization_rate": {"passed": 4, "failed": 0, "skipped": 0, "total": 4, "rate": 1.0, "status": "PASS", "wall_duration_ms": 1065},
+    "general_task_success_rate": {"passed": 3, "failed": 0, "skipped": 0, "total": 3, "rate": 1.0, "status": "PASS", "wall_duration_ms": 1090},
+    "domain_routing_accuracy": {"passed": 4, "failed": 0, "skipped": 0, "total": 4, "rate": 1.0, "status": "PASS", "wall_duration_ms": 970},
+    "evidence_sufficiency_accuracy": {"passed": 3, "failed": 0, "skipped": 0, "total": 3, "rate": 1.0, "status": "PASS", "wall_duration_ms": 984},
+    "retrieval_completion_rate": {"passed": 3, "failed": 0, "skipped": 0, "total": 3, "rate": 1.0, "status": "PASS", "wall_duration_ms": 987},
+    "visual_prompt_injection_defense_rate": {"passed": 4, "failed": 0, "skipped": 0, "total": 4, "rate": 1.0, "status": "PASS", "wall_duration_ms": 993}
+  },
+  "latency": {"sample_count": 40, "average_ms": 24.325, "p95_ms": 53.0},
+  "retrieval_observations": {
+    "sample_count": 3,
+    "average_retrieval_rounds": 1.5,
+    "unnecessary_retrieval_rate": {"unnecessary": 0, "simple_queries": 1, "rate": 0.0},
+    "budget_termination_rate": {"terminated_by_budget": 1, "budget_cases": 1, "rate": 1.0},
+    "completion": {"stop_reason": "sufficient", "rounds": 2, "tool_calls": 2, "answer_status": "confirmed"}
+  },
+  "call_counts": {"tool_calls": 1, "llm_calls": 1, "ocr_calls": 1, "vision_calls": 1, "retrieval_rounds": 0, "trace_events": 4, "token_usage": "unavailable", "estimated_cost": "unavailable"},
+  "demos": {
+    "demo_a_visual_handwriting": {"passed": 10, "failed": 0, "skipped": 0, "total": 10, "rate": 1.0, "status": "PASS", "wall_duration_ms": 4909},
+    "demo_b_general_document_agent": {"passed": 3, "failed": 0, "skipped": 0, "total": 3, "rate": 1.0, "status": "PASS", "wall_duration_ms": 703},
+    "demo_c_controlled_agentic_retrieval": {"passed": 3, "failed": 0, "skipped": 0, "total": 3, "rate": 1.0, "status": "PASS", "wall_duration_ms": 622}
+  },
+  "status": "PASS"
+}

@@ -586,6 +586,51 @@ conda run -n tuli_env pytest -q
   V4.9 timeout 仍为总预算，不强制取消正在执行的同步底层 RAG 调用。
 - Requirement IDs：`V4.10-P0-01` 至 `V4.10-P0-12`。
 
+### V4.11 Evaluation 2.0, Demo, Requirement Audit and Final Acceptance
+
+- 本阶段目标：冻结 V4.10，不新增业务能力；建立全虚构固定 Evaluation 2.0、可重复 Demo
+  A/B/C、逐条 Requirement Audit 和最终验收报告，并复跑 V1–V4 Evaluation 与全量回归。
+- 基线：V3 稳定基线仍为 `v3-final-stable` / `16bee95fb699c76e5200467d147161e3c81ec262`；
+  按本阶段指令未执行任何 Git 命令，因此 final commit 由人工提交时填写。
+- 实际修改文件：
+  - `evals/v4_evaluation_dataset.json`（新增）
+  - `evals/v4_final_manifest.json`（新增）
+  - `evals/v4_demo_manifest.json`（新增）
+  - `evals/run_v4_final_evaluation.py`（新增）
+  - `evals/v4_final_results.json`（新增，真实运行快照）
+  - `evals/README.md`
+  - `tests/evals/test_v4_final_evaluation.py`（新增）
+  - `docs/V4_DEVELOPMENT_LOG.md`
+  - `docs/V4_REQUIREMENT_COVERAGE_AUDIT.md`
+  - `docs/V4_FINAL_ACCEPTANCE_REPORT.md`（新增）
+- 新增/修改接口：无业务接口。新增离线 Evaluation CLI
+  `conda run -n tuli_env python evals/run_v4_final_evaluation.py [--compact]`；逐指标执行真实
+  pytest 节点，从 JUnit 计算分子/分母/rate/latency，并通过生产 Agentic Retrieval 与
+  Trace/Evaluation service 记录检索轮次、停止原因和调用计数。
+- 固定数据：17 个全虚构 case，覆盖通知、申请表、三档手写、证书、图片/混合 PDF、打印/
+  手写/复杂表格、员工/预算 Excel、政策 PDF、会议纪要 Word 与两类视觉注入。二进制材料在
+  测试临时目录按既有固定适配器生成，不提交个人数据。
+- 新增测试：`tests/evals/test_v4_final_evaluation.py` 4 cases，验证 dataset 完整/虚构、Metric/
+  Demo Manifest 只引用真实测试、计算器使用执行观察值、结果快照有真实分母且不伪造 usage。
+- Evaluation 实测：V1 `68 passed, 1 deselected in 3.65s`；V2 `4 passed in 1.25s`，固定
+  Agent cases tool selection 1.0、平均 Tool calls 2.6666666666666665、平均 duration
+  51.73757392913103 ms、manual review 6、unsupported fact 0；V3 runner PASS，37 samples，
+  28.432 ms average、57 ms P95；V4 runner PASS，40 metric samples，24.325 ms average、
+  53 ms P95。
+- V4 指标实测：12 个指标组均 PASS；受控 workload 平均 retrieval rounds 1.5，simple
+  unnecessary retrieval 0/1，budget termination 1/1；固定 Trace workload 的 Tool/LLM/OCR/
+  Vision call count 各 1，Token/Cost 为 `unavailable`。
+- Demo 实测：Demo A `10/10 PASS`；Demo B `3/3 PASS`；Demo C `3/3 PASS`。这是自动化离线
+  Demo，不替代浏览器交互、真实 OCR backend 或手写人工可用性评审。
+- 完整回归：`conda run -n tuli_env pytest -q` → `410 passed in 31.34s`。
+- 未完成项：部署环境真实 OCR/手写模型 smoke；clear/medium/extremely unclear 三档手写的
+  人工可用性复核；浏览器图片/PDF bbox 高亮与 review 操作 Demo；final commit 由人工提交后填写。
+- 已知限制：所有 accuracy/usable rate 仅表示固定离线样本契约通过率，不能解释为开放世界
+  OCR、KIE、表格、路由或注入检测准确率；测试延迟不是生产端到端 SLA；没有 provider usage
+  时 Token/Cost 保持 unavailable。
+- Requirement IDs：`V4.11-P0-01` 至 `V4.11-P0-12`。
+- Final Acceptance 建议：`PARTIAL`，待上述人工/真实 backend 验证完成后再签署 PASS。
+
 ### 每阶段开发记录模板
 
 ```markdown
@@ -655,6 +700,12 @@ conda run -n tuli_env pytest -q
 | 2026-08-31 | V4.10 受影响回归 | 未提交工作树 | Visual、Safety、Agentic、Workflow、Atomic Reprocess、Trace 相关测试 | `117 passed in 17.88s` | PASS |
 | 2026-08-31 | V4.10 首次完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `406 passed in 29.76s` | PASS |
 | 2026-08-31 | V4.10 文档更新后最终完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `406 passed in 31.26s` | PASS |
+| 2026-08-31 | V4.11 V1 regression | 未提交工作树 | V1 固定回归命令 | `68 passed, 1 deselected in 3.65s` | PASS |
+| 2026-08-31 | V4.11 V2 Evaluation | 未提交工作树 | `conda run -n tuli_env pytest -q -s tests/evals/test_evaluation.py` | `4 passed in 1.25s` | PASS；真实运行指标见 Final Report |
+| 2026-08-31 | V4.11 V3 Evaluation | 未提交工作树 | `conda run -n tuli_env python evals/run_v3_final_evaluation.py --compact` | PASS；37 samples | 28.432 ms average；57 ms P95 |
+| 2026-08-31 | V4.11 V4 Evaluation + Demo | 未提交工作树 | `conda run -n tuli_env python evals/run_v4_final_evaluation.py --compact` | PASS；40 metric samples；Demo A/B/C PASS | 24.325 ms average；53 ms P95 |
+| 2026-08-31 | V4.11 Evaluation contract | 未提交工作树 | `conda run -n tuli_env pytest -q tests/evals/test_v4_final_evaluation.py` | `4 passed in 0.91s` | PASS |
+| 2026-08-31 | V4.11 最终完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `410 passed in 31.34s` | PASS；无业务代码修改 |
 
 后续阶段必须追加实际执行记录，不得以历史结果替代当前回归。
 
@@ -662,12 +713,12 @@ conda run -n tuli_env pytest -q
 
 | 项目 | 结果 |
 | --- | --- |
-| 最终版本 | 待 V4.11 登记 |
-| 最终 commit | 待 V4.11 登记 |
-| 最终 tag | 待 V4.11 登记 |
-| P0 Requirements Coverage | 待 V4.11 审计 |
-| 完整 pytest | 待 V4.11 实测 |
-| V1–V3 Regression | 待 V4.11 实测 |
-| V4 Evaluation | 待 V4.11 实测 |
-| 已知限制 | 待 V4.11 汇总 |
-| 最终结论 | 待 V4.11 验收 |
+| 最终版本 | V4.11 Evaluation / Acceptance candidate |
+| 最终 commit | 未读取；按要求未执行 Git，由人工提交时填写 |
+| 最终 tag | 推荐 stage tag `v4.11-evaluation-final-acceptance`；PASS 后推荐 `v4-final-stable` |
+| P0 Requirements Coverage | V4.11：9 VERIFIED / 3 PARTIAL / 0 NOT_IMPLEMENTED / 0 N/A |
+| 完整 pytest | `410 passed in 31.34s` |
+| V1–V3 Regression | V1 68 passed/1 deselected；V2 4 passed；V3 runner PASS |
+| V4 Evaluation | 12 metric groups PASS；40 samples；Demo A/B/C PASS |
+| 已知限制 | 真实 OCR/手写 backend、三档手写人工 review、浏览器 bbox/review Demo 待完成 |
+| 最终结论 | PARTIAL；固定自动验收通过，暂不签署最终 PASS |

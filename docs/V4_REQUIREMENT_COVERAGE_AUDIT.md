@@ -6,7 +6,8 @@
 - V4 开发分支：`feature/v4-development`
 - V3 稳定基线 tag：`v3-final-stable`
 - V3 稳定基线 commit：`16bee95fb699c76e5200467d147161e3c81ec262`
-- 状态仅使用：`NOT_STARTED`、`PARTIAL`、`IMPLEMENTED`、`VERIFIED`、`BLOCKED`。
+- 开发阶段状态使用：`NOT_STARTED`、`PARTIAL`、`IMPLEMENTED`、`VERIFIED`、`BLOCKED`；
+  V4.11 最终复核使用：`VERIFIED`、`PARTIAL`、`NOT_IMPLEMENTED`、`N/A`。
 - `IMPLEMENTED` 表示代码已实现但尚未完成要求的全部验证；`VERIFIED` 表示实现及对应验证均通过。
 - 未实现功能不得因 V1–V3 已有相邻能力而标记为完成。
 
@@ -29,7 +30,7 @@
 | V4-P0-009 | Domain Router and General Document Tasks | P0 | V4.8 Domain Router | VERIFIED | `backend/services/domain_router.py`; `backend/tools/general_tools.py`; `backend/agent.py` | `tests/test_domain_router_v4.py`; legacy Agent/Trace tests | 专项 `9 passed`；完整回归 `383 passed` | 严格 Schema、General fallback、执行级 Tool 隔离和 Evidence 驱动的 Excel+PDF 规则任务；细分证据见第 11 节 |
 | V4-P0-010 | Controlled Agentic Retrieval | P0 | V4.9 Agentic Retrieval | VERIFIED | `backend/services/agentic_retrieval.py`; Core/Student Adapter thin ports | `tests/test_agentic_retrieval_v4.py`; legacy RAG/Evidence/Safety tests | 专项 `13 passed`；完整回归 `396 passed` | RAG 2.0 上方只读控制层；细分证据见第 12 节 |
 | V4-P0-011 | Visual Safety, Retrieval Guardrails and Trace Upgrade | P0 | V4.10 Visual Safety and Trace | VERIFIED | `visual_safety.py`; existing Safety/Approval; visual/agentic/trace services | `tests/test_visual_safety_trace_v4.py`; legacy Safety/Workflow/Trace tests | 专项 `10 passed`；完整回归 `406 passed` | 保持 V3 risk/Approval，视觉数据统一无权限，低置信度写入前 review；细分证据见第 13 节 |
-| V4-P0-012 | V4 Evaluation and Final Acceptance | P0 | V4.11 Evaluation and Final Acceptance | NOT_STARTED | TBD | TBD | NOT_RUN | 只登记真实固定数据集、测试结果和指标，不预设或编造数值 |
+| V4-P0-012 | V4 Evaluation and Final Acceptance | P0 | V4.11 Evaluation and Final Acceptance | PARTIAL | `evals/v4_*`; `docs/V4_FINAL_ACCEPTANCE_REPORT.md` | `tests/evals/test_v4_final_evaluation.py`; V1–V4 Evaluation | 固定自动评估与 Demo PASS；真实 OCR/手写及浏览器人工验收待执行 | 不把 fixed adapter 通过率外推为生产准确率；细分证据见第 14 节 |
 
 ## 3. V4.0 基线审计证据
 
@@ -313,7 +314,33 @@
   thinking、system/full prompt。Token/Cost 仍只来自 provider 实际 usage。
 - V4.11 最终 Evaluation 与验收未提前实现。
 
-## 14. 后续阶段审计规则
+## 14. V4.11 Final Requirement Coverage Matrix
+
+| Requirement ID | Requirement | Final Status | Code / Artifact | Test / Real Execution Evidence | Notes |
+| --- | --- | --- | --- | --- | --- |
+| V4.11-P0-01 | 至少 16 类全虚构固定材料 | PARTIAL | `evals/v4_evaluation_dataset.json`（17 cases） | dataset contract test PASS | 类型与期望齐全，二进制由既有测试临时生成；尚未形成一套可人工浏览的真实手写栅格/PDF/Word 文件包 |
+| V4.11-P0-02 | V4 指标可重复、真实计算且不预设结果 | VERIFIED | `v4_final_manifest.json`; `run_v4_final_evaluation.py`; `v4_final_results.json` | V4 runner PASS；40 metric samples | 比例来自本次 JUnit；检索轮次来自生产控制层执行；Token/Cost 不可得时为 unavailable |
+| V4.11-P0-03 | V1/V2/V3 original Evaluation 复跑 | VERIFIED | 原 `evals/` 与 `tests/evals/` | V1 `68 passed, 1 deselected`; V2 `4 passed`; V3 runner PASS/37 samples | 未修改旧 Manifest、旧测试或旧结果定义 |
+| V4.11-P0-04 | Printed/handwriting/blocks/KIE/table/Evidence 指标 | VERIFIED | V4 metric manifest | 对应固定指标组均 PASS | 仅代表固定离线适配器契约；真实 OCR/手写模型准确率未测 |
+| V4.11-P0-05 | General/Domain/Sufficiency/Retrieval 指标 | VERIFIED | V4 runner + production control observations | 指标组 PASS；平均 controlled rounds 1.5 | simple case 0 次不必要检索；预算 case 按 budget 停止 |
+| V4.11-P0-06 | Visual prompt injection defense | VERIFIED | Safety metric group | S401–S404：4/4 PASS | 固定攻击样本；不是开放世界恶意内容检测准确率 |
+| V4.11-P0-07 | V4 latency/P95 与调用计数 | VERIFIED | V4 runner | 40 samples；24.325 ms average；53 ms P95；固定 Trace workload Tool/LLM/OCR/Vision 各 1 | 是测试进程内固定样本耗时，不是生产端到端 SLA |
+| V4.11-P0-08 | Demo A 图片+手写材料 | PARTIAL | `v4_demo_manifest.json` | 自动链路 10/10 PASS | upload/OCR/blocks/KIE/bbox/review 已测；真实手写人工可用性和浏览器高亮待人工验收 |
+| V4.11-P0-09 | Demo B General Document Agent | VERIFIED | General/Core/Domain tests | 自动链路 3/3 PASS | Excel+PDF 规则任务由 Python 判断并返回实际 Evidence；Word 通用解析由既有回归覆盖 |
+| V4.11-P0-10 | Demo C Controlled Agentic Retrieval | VERIFIED | Agentic Retrieval tests | 自动链路 3/3 PASS | Need→不足→第二轮→stop 及 not-found 非否定措辞均验证 |
+| V4.11-P0-11 | 全量 pytest 无回归 | VERIFIED | 完整 `tests/` | `410 passed in 31.34s` | 新增 4 个 Evaluation contract tests；旧测试未删除、skip 或弱化 |
+| V4.11-P0-12 | Final Acceptance PASS 判定 | PARTIAL | `docs/V4_FINAL_ACCEPTANCE_REPORT.md` | 固定自动验收 PASS；人工/真实 backend 未完成 | 当前不建议宣告最终 PASS |
+
+### 14.1 最终覆盖汇总
+
+- VERIFIED：9
+- PARTIAL：3
+- NOT_IMPLEMENTED：0
+- N/A：0
+- 顶层 V4.0–V4.10：11/11 已有阶段实现、专项测试与当时完整回归证据。
+- V4.11 最终结论：`PARTIAL`；不因 fixed adapter 全通过而覆盖未执行的人工验证。
+
+## 15. 后续阶段审计规则
 
 每个 V4 阶段开始前，应以正式阶段需求补充或拆分对应 Requirement ID，并填写：
 

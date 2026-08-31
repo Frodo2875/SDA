@@ -1,0 +1,20 @@
+{
+  "demo_a_visual_handwriting": [
+    "tests/test_visual_document_router_v4.py::test_jpg_jpeg_png_upload_as_formal_visual_documents",
+    "tests/test_handwriting_recognition_v4.py::test_fixed_clear_medium_and_extremely_unclear_handwriting",
+    "tests/test_visual_understanding_v4.py::test_visual_blocks_cover_required_types_and_parent_provenance",
+    "tests/test_visual_understanding_v4.py::test_basic_kie_field_keeps_bbox_and_source_region_without_mutating_ocr",
+    "tests/test_evidence_v4.py::test_image_region_evidence_opens_preview_and_highlights_bbox",
+    "tests/test_visual_understanding_v4.py::test_low_confidence_kie_stays_review_candidate"
+  ],
+  "demo_b_general_document_agent": [
+    "tests/test_document_agent_core_v4.py::test_general_core_unknown_excel_field_filter_and_aggregate",
+    "tests/test_domain_router_v4.py::test_non_student_excel_query_does_not_require_or_create_student_entity",
+    "tests/test_domain_router_v4.py::test_excel_pdf_general_mixed_task_uses_python_and_explicit_rule_evidence"
+  ],
+  "demo_c_controlled_agentic_retrieval": [
+    "tests/test_agentic_retrieval_v4.py::test_ar_second_round_retrieves_only_unmet_need_and_stops_sufficient",
+    "tests/test_agentic_retrieval_v4.py::test_ar_missing_need_is_not_treated_as_fact_nonexistence",
+    "tests/test_agentic_retrieval_v4.py::test_ar_round_and_stop_trace_contain_control_fields"
+  ]
+}

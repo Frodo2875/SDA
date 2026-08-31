@@ -40,3 +40,17 @@ python evals/run_v3_requirement_tests.py
 这里的 accuracy/rate 分母是 Manifest 中的固定、受控验收案例，不代表开放世界生产数据的
 统计精度。自然语言表达质量继续人工复核。Token usage 或价格不可获得时输出
 `unavailable`，不以 0 伪装为真实用量或成本。
+
+## V4 Evaluation 2.0
+
+- `v4_evaluation_dataset.json`：17 个全虚构固定材料规范；二进制材料由测试在临时目录生成。
+- `v4_final_manifest.json`：视觉、手写、KIE、表格、Evidence、General、Domain、Agentic
+  Retrieval 与 Safety 指标到真实 pytest 节点的映射。
+- `v4_demo_manifest.json`：Demo A/B/C 的可重复自动验收链路。
+- `run_v4_final_evaluation.py`：以本次 JUnit 结果计算 rate、平均/P95 延迟；通过生产控制层
+  实测检索轮次、停止原因和 Trace 调用计数。
+- `v4_final_results.json`：V4.11 实际运行快照，不是预填目标。
+
+运行：`python evals/run_v4_final_evaluation.py`。所有 usable/accuracy/rate 仅表示固定离线
+样本与适配器契约通过率，不代表真实 OCR/手写模型的开放数据准确率；三个手写样本保留人工
+复核入口。不可获得的 Token/Cost 明确输出 `unavailable`。

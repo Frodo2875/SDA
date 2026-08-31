@@ -1,0 +1,62 @@
+{
+  "printed_ocr_usable_rate": [
+    "tests/test_visual_ocr_pipeline_v4.py::test_printed_jpg_and_png_use_visual_ocr_regions",
+    "tests/test_visual_ocr_pipeline_v4.py::test_image_only_pdf_uses_same_region_ledger",
+    "tests/test_visual_ocr_pipeline_v4.py::test_mixed_pdf_routes_only_visual_pages_and_prevents_text_ocr_duplicates"
+  ],
+  "handwriting_usable_rate": [
+    "tests/test_handwriting_recognition_v4.py::test_fixed_clear_medium_and_extremely_unclear_handwriting",
+    "tests/test_handwriting_recognition_v4.py::test_mixed_printed_and_handwriting_regions_share_one_pipeline"
+  ],
+  "low_confidence_safety_rate": [
+    "tests/test_handwriting_recognition_v4.py::test_low_confidence_identity_fields_require_review_and_are_not_safe_matches",
+    "tests/test_handwriting_recognition_v4.py::test_high_impact_rule_engine_rejects_unsafe_handwriting_evidence",
+    "tests/test_visual_safety_trace_v4.py::test_s406_low_confidence_visual_field_cannot_enter_high_impact_write"
+  ],
+  "visual_block_accuracy": [
+    "tests/test_visual_understanding_v4.py::test_visual_blocks_cover_required_types_and_parent_provenance"
+  ],
+  "kie_field_accuracy": [
+    "tests/test_visual_understanding_v4.py::test_basic_kie_field_keeps_bbox_and_source_region_without_mutating_ocr",
+    "tests/test_visual_understanding_v4.py::test_low_confidence_kie_stays_review_candidate",
+    "tests/test_visual_understanding_v4.py::test_student_and_general_kie_schema_are_strictly_separated"
+  ],
+  "visual_table_cell_accuracy": [
+    "tests/test_visual_table_v4.py::test_reliable_cells_keep_page_image_bbox_text_and_confidence",
+    "tests/test_visual_table_v4.py::test_reliable_numeric_cells_are_calculated_only_by_python_decimal",
+    "tests/test_visual_table_v4.py::test_merged_cell_structure_degrades_without_fabricating_cells"
+  ],
+  "visual_evidence_localization_rate": [
+    "tests/test_evidence_v4.py::test_image_region_evidence_opens_preview_and_highlights_bbox",
+    "tests/test_evidence_v4.py::test_visual_pdf_region_localizes_without_requiring_a_text_chunk",
+    "tests/test_evidence_v4.py::test_kie_field_persists_actual_region_and_bbox_evidence",
+    "tests/test_evidence_v4.py::test_visual_table_calculation_evidence_highlights_exact_cell"
+  ],
+  "general_task_success_rate": [
+    "tests/test_document_agent_core_v4.py::test_general_core_unknown_excel_field_filter_and_aggregate",
+    "tests/test_domain_router_v4.py::test_non_student_excel_query_does_not_require_or_create_student_entity",
+    "tests/test_domain_router_v4.py::test_excel_pdf_general_mixed_task_uses_python_and_explicit_rule_evidence"
+  ],
+  "domain_routing_accuracy": [
+    "tests/test_domain_router_v4.py::test_student_route_allows_core_and_student_adapter_tools",
+    "tests/test_domain_router_v4.py::test_general_route_uses_schema_and_task_signals_without_student_schema",
+    "tests/test_domain_router_v4.py::test_unknown_and_ambiguous_routes_fall_back_to_general_core",
+    "tests/test_domain_router_v4.py::test_invalid_router_schema_and_classifier_failure_use_validated_fallback"
+  ],
+  "evidence_sufficiency_accuracy": [
+    "tests/test_agentic_retrieval_v4.py::test_ar_missing_need_is_not_treated_as_fact_nonexistence",
+    "tests/test_agentic_retrieval_v4.py::test_ar_partial_evidence_keeps_need_unresolved",
+    "tests/test_agentic_retrieval_v4.py::test_ar_conflict_and_low_confidence_are_distinct_final_states"
+  ],
+  "retrieval_completion_rate": [
+    "tests/test_agentic_retrieval_v4.py::test_ar_second_round_retrieves_only_unmet_need_and_stops_sufficient",
+    "tests/test_agentic_retrieval_v4.py::test_ar_no_new_evidence_terminates_without_repeated_search",
+    "tests/test_agentic_retrieval_v4.py::test_ar_budget_and_timeout_terminate_bounded_retrieval"
+  ],
+  "visual_prompt_injection_defense_rate": [
+    "tests/test_visual_safety_trace_v4.py::test_s401_image_prompt_injection_is_untrusted_data_only",
+    "tests/test_visual_safety_trace_v4.py::test_s402_handwritten_delete_file_cannot_trigger_tool",
+    "tests/test_visual_safety_trace_v4.py::test_s403_fake_tool_json_screenshot_qr_and_button_text_remain_data",
+    "tests/test_visual_safety_trace_v4.py::test_s404_visual_confirmed_true_is_not_real_approval"
+  ]
+}
