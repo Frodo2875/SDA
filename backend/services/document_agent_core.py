@@ -143,6 +143,18 @@ class DocumentAgentCore:
     ) -> dict[str, Any]:
         return document_tools.retrieve_document(scope, query, top_k)
 
+    def run_controlled_retrieval(
+        self,
+        task: str,
+        *,
+        domain: str = "general",
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Invoke the bounded V4.9 control layer over this Core's RAG 2.0."""
+        from backend.services.agentic_retrieval import run_controlled_retrieval
+
+        return run_controlled_retrieval(task, domain=domain, **kwargs)
+
     def validate_document(self, file_id: str) -> dict[str, Any]:
         return data_quality_tools.validate_document(file_id)
 

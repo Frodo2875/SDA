@@ -45,7 +45,7 @@ V4.0 只建立工程开发基线，不实现 V4 新业务能力，不修改 V1�
 | V4.6 | Evidence 3.0 | VERIFIED | 增量扩展 Evidence 2.0 envelope，统一视觉 region/Cell 来源并支持图片、PDF bbox 定位 |
 | V4.7 | General Document Agent Core | VERIFIED | 用薄 façade/port/adapter 划分通用文档能力与学生领域逻辑，保持原 Tool 和 Demo 兼容 |
 | V4.8 | Domain Router | VERIFIED | Schema 校验的 Student/General/Unknown 路由、General 安全降级与 Evidence 驱动的非学生混合任务 |
-| V4.9 | Agentic Retrieval | NOT_STARTED | 需求和验收标准待对应阶段确认 |
+| V4.9 | Agentic Retrieval | VERIFIED | RAG 2.0 上方的 Information Need、Evidence Sufficiency、受控补检索、硬预算与停止条件 |
 | V4.10 | Visual Safety and Trace | NOT_STARTED | 需求和验收标准待对应阶段确认 |
 | V4.11 | Evaluation and Final Acceptance | NOT_STARTED | 汇总 V4 固定评估、完整回归与最终验收 |
 
@@ -473,6 +473,57 @@ conda run -n tuli_env pytest -q
   预算阈值规则和调用方确认的字段/单位；规则缺失或预算非数值时安全失败，不推断复杂法条。
 - Requirement IDs：`V4.8-P0-01` 至 `V4.8-P0-12`。
 
+### V4.9 Controlled Agentic Retrieval
+
+- 本阶段目标：在 V3 RAG 2.0 上方建立只读、可审计、受预算约束的检索控制层；复用原
+  Hybrid Retrieval、metadata hard filter、Top-N rerank 和 Evidence，不替换底层检索。
+- 基线：V4.8 tag `v4.8-domain-router`，commit
+  `142d98460cf9ae7fe42240aac513c1044e8da104`；开发开始时工作区干净。
+- 开发前审计：确认 `document_index.retrieve_document()` 已统一执行 eligible file 过滤、
+  page/year/student/document metadata 硬约束、`hybrid_retrieve()`、rerank fallback 和
+  Evidence 2/3 输出；Core 与 Student Adapter 已提供稳定 retrieval port，Safety Policy、
+  Trace、Workflow/Approval 继续由原模块拥有。
+- 实际修改文件：
+  - `backend/services/agentic_retrieval.py`（新增）
+  - `backend/services/document_agent_core.py`
+  - `backend/services/student_domain_adapter.py`
+  - `tests/test_agentic_retrieval_v4.py`（新增）
+  - `docs/V4_DEVELOPMENT_LOG.md`
+  - `docs/V4_REQUIREMENT_COVERAGE_AUDIT.md`
+- 新增/修改接口：
+  - 新增严格 `InformationNeed`、`RetrievalBudget`、`SufficiencyEvaluation`；Need 包含
+    need_id/type/name/description/status/scope/evidence_ids，并提供 query、required_terms、
+    minimum_evidence 和受控 rewrite 候选。
+  - 新增 `is_complex_retrieval_task()`、`build_information_needs()`、
+    `evaluate_evidence_sufficiency()`、`rewrite_retrieval_query()`、
+    `run_controlled_retrieval()`；简单查询返回 bypass，不创建 Need 或循环。
+  - Sufficiency 明确区分 sufficient/partial/missing/conflict/low_confidence；最终状态明确区分
+    confirmed/not_found/conflict/low_confidence，not_found 明示“不等于事实不存在”。
+  - 只补检索未满足 Need；已满足 Need 不重复调用。每轮记录 query、原 scope、候选数、
+    selected Evidence IDs、新 Evidence 数、sufficiency、reason code 和 stop reason。
+  - 默认 `max_rounds=3`、`max_tool_calls=6`、`timeout_seconds=10`，均严格 Schema 校验且可配置；
+    支持 sufficient/budget/no_new_evidence/scope_exhausted/error 停止原因。
+  - 用户 file/file_ids/year/page/metadata scope 是不可扩张上界；Need 可更窄但冲突或扩大 scope
+    会被拒绝。受控 query rewrite 从不接受或修改 scope。
+  - 每次实际 retrieval 先调用既有 Safety Policy 并写 safety trace；控制层仅执行只读
+    `retrieve_document`，不执行写入、Workflow 节点或 Approval，返回值显式标记未绕过边界。
+  - `DocumentAgentCore.run_controlled_retrieval()` 与
+    `StudentDomainAdapter.run_controlled_retrieval()` 为薄入口；原 ToolRegistry、RAG 2.0、
+    Evidence 存储和 Agent loop 均未替换。
+- 新增测试：`tests/test_agentic_retrieval_v4.py` 共 13 个 pytest cases，覆盖 simple no-loop、
+  missing、partial、conflict、low confidence、second-round retrieval、已满足 Need 不重搜、
+  历史状态不可信、no-new-evidence、tool-call/timeout budget、显式 scope、scope exhausted/error、
+  每轮/stop Trace，以及 Student/General complex task。
+- 测试结果：V4.9 专项 `13 passed in 0.76s`；RAG/Evidence/Agent/Safety/Domain/Workflow
+  受影响回归 `110 passed in 4.05s`；第一次完整回归 `396 passed in 37.70s`；文档更新后
+  最终完整回归 `396 passed in 30.07s`。
+- 未完成项：V4.10 Visual Safety and Trace 专项扩展及 V4.11 Evaluation/最终验收未提前开发。
+- 已知限制：Information Need 构建是保守确定性拆分，不声明任务分解准确率；复杂调用方可
+  显式提交严格 Need schema。当前控制层是同步只读 service/Core API，不新增 LLM Tool，
+  因而保持依赖旧 Tool definitions 的客户端兼容。timeout 是总时间预算，在当前同步底层调用
+  返回后终止后续轮次，不强制中断正在执行的 RAG 2.0 调用。
+- Requirement IDs：`V4.9-P0-01` 至 `V4.9-P0-13`。
+
 ### 每阶段开发记录模板
 
 ```markdown
@@ -534,6 +585,10 @@ conda run -n tuli_env pytest -q
 | 2026-08-31 | V4.8 Domain/Agent/Trace 定向回归 | 未提交工作树 | Domain Router、Agent、Trace Context | `29 passed in 1.42s` | PASS；Domain metrics 复用既有 LLM Trace |
 | 2026-08-31 | V4.8 首次完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `383 passed in 28.08s` | PASS |
 | 2026-08-31 | V4.8 文档更新后最终完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `383 passed in 30.69s` | PASS |
+| 2026-08-31 | V4.9 专项 | 未提交工作树 | `conda run -n tuli_env pytest -q tests/test_agentic_retrieval_v4.py` | `13 passed in 0.76s` | PASS |
+| 2026-08-31 | V4.9 受影响回归 | 未提交工作树 | RAG、Evidence、Agent、Safety、Domain、Workflow 相关测试 | `110 passed in 4.05s` | PASS；底层 RAG 2.0 与 Runtime 保持 |
+| 2026-08-31 | V4.9 首次完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `396 passed in 37.70s` | PASS |
+| 2026-08-31 | V4.9 文档更新后最终完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `396 passed in 30.07s` | PASS |
 
 后续阶段必须追加实际执行记录，不得以历史结果替代当前回归。
 

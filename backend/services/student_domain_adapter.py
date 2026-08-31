@@ -48,6 +48,10 @@ class DocumentCorePort(Protocol):
         self, scope: dict[str, Any], query: str, top_k: int = 5
     ) -> dict[str, Any]: ...
 
+    def run_controlled_retrieval(
+        self, task: str, *, domain: str = "general", **kwargs: Any
+    ) -> dict[str, Any]: ...
+
 
 @dataclass(frozen=True)
 class StudentDomainAdapter:
@@ -127,6 +131,14 @@ class StudentDomainAdapter:
         self, scope: dict[str, Any], query: str, top_k: int = 5
     ) -> dict[str, Any]:
         return self.core.retrieve_document(scope, query, top_k)
+
+    def run_controlled_retrieval(
+        self, task: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        """Use the same Core control layer while retaining student domain context."""
+        return self.core.run_controlled_retrieval(
+            task, domain="student", **kwargs
+        )
 
     def prepare_report_write(
         self,

@@ -27,7 +27,7 @@
 | V4-P0-007 | Evidence 3.0 | P0 | V4.6 Evidence 3.0 | VERIFIED | `backend/evidence.py`; `backend/services/evidence_locator.py`; existing `evidence_locations` | `tests/test_evidence_v4.py`; legacy Evidence tests | 专项 `7 passed`；完整回归 `370 passed` | 增量复用 Evidence 2.0 与原定位/Trace；细分证据见第 9 节 |
 | V4-P0-008 | General Document Agent Core | P0 | V4.7 General Document Agent Core | VERIFIED | `document_agent_core.py`; `student_domain_adapter.py` | `tests/test_document_agent_core_v4.py`; legacy Agent/Tool tests | 专项 `4 passed`；完整回归 `374 passed` | 薄 façade/port/adapter，旧 Tool 名称与 handler 保持；细分证据见第 10 节 |
 | V4-P0-009 | Domain Router and General Document Tasks | P0 | V4.8 Domain Router | VERIFIED | `backend/services/domain_router.py`; `backend/tools/general_tools.py`; `backend/agent.py` | `tests/test_domain_router_v4.py`; legacy Agent/Trace tests | 专项 `9 passed`；完整回归 `383 passed` | 严格 Schema、General fallback、执行级 Tool 隔离和 Evidence 驱动的 Excel+PDF 规则任务；细分证据见第 11 节 |
-| V4-P0-010 | Agentic Retrieval | P0 | V4.9 Agentic Retrieval | NOT_STARTED | TBD | TBD | NOT_RUN | 必须保持 RAG 2.0 兼容；规划、检索与停止条件待确认 |
+| V4-P0-010 | Controlled Agentic Retrieval | P0 | V4.9 Agentic Retrieval | VERIFIED | `backend/services/agentic_retrieval.py`; Core/Student Adapter thin ports | `tests/test_agentic_retrieval_v4.py`; legacy RAG/Evidence/Safety tests | 专项 `13 passed`；完整回归 `396 passed` | RAG 2.0 上方只读控制层；细分证据见第 12 节 |
 | V4-P0-011 | Visual Safety and Trace | P0 | V4.10 Visual Safety and Trace | NOT_STARTED | TBD | TBD | NOT_RUN | 必须复用 Agent Safety 与 Trace；视觉输入威胁模型待确认 |
 | V4-P0-012 | V4 Evaluation and Final Acceptance | P0 | V4.11 Evaluation and Final Acceptance | NOT_STARTED | TBD | TBD | NOT_RUN | 只登记真实固定数据集、测试结果和指标，不预设或编造数值 |
 
@@ -257,7 +257,36 @@
   隐含规则、字段单位不确定或非数值预算均不猜测，需后续显式扩展规则 schema。
 - V4.9 Agentic Retrieval、V4.10 Visual Safety/Trace 专项和 V4.11 Evaluation 未提前实现。
 
-## 12. 后续阶段审计规则
+## 12. V4.9 P0 Requirements Coverage Matrix
+
+| Requirement ID | Requirement | Priority | Target V4 Stage | Implementation Status | Code Location | Test Location | Verification Result | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| V4.9-P0-01 | 简单查询不强制 Agentic loop，复杂任务才创建 Need | P0 | V4.9 | VERIFIED | `is_complex_retrieval_task`; `build_information_needs`; bypass branch | `test_ar_simple_query_does_not_create_need_or_loop`; domain complex test | PASS | bypass 为零 Need、零 retrieval call；原单次 RAG 路径保持 |
+| V4.9-P0-02 | Information Need 包含规定身份、类型、描述、状态、scope、Evidence IDs | P0 | V4.9 | VERIFIED | `InformationNeed` | 专项所有 Need assertions | PASS | Pydantic extra=forbid；另含 query/required terms/minimum/rewrite 配置 |
+| V4.9-P0-03 | Sufficiency 支持 sufficient/partial/missing/conflict/low_confidence | P0 | V4.9 | VERIFIED | `evaluate_evidence_sufficiency`; `SufficiencyEvaluation` | missing/partial/conflict/low/second-round tests | PASS | 冲突不选边；低 confidence/review 不升级为 sufficient |
+| V4.9-P0-04 | 只补检索未满足 Need，已满足 Need 不重复搜索 | P0 | V4.9 | VERIFIED | unresolved Need loop；per-Need Evidence ledger | `test_ar_satisfied_need_is_not_retrieved_again_while_missing_need_retries` | PASS | satisfied fact 仅调用一次，missing rule 独立补检索 |
+| V4.9-P0-05 | Controlled Query Rewrite 与 Controlled Re-retrieval | P0 | V4.9 | VERIFIED | `rewrite_retrieval_query`; `run_controlled_retrieval` | second-round；no-new；scope tests | PASS | 最多两种内建补充/交叉核验改写；可提供最多五个受控候选；不修改 scope |
+| V4.9-P0-06 | max_rounds、max_tool_calls、timeout/top_k 预算配置 | P0 | V4.9 | VERIFIED | `RetrievalBudget`; budget checks | `test_ar_budget_and_timeout_terminate_bounded_retrieval` | PASS | 默认 3 rounds/6 calls/10 seconds；严格上界；总 timeout 不强杀当前同步调用 |
+| V4.9-P0-07 | 每轮记录规定的 query/scope/candidates/selected/new/sufficiency/stop | P0 | V4.9 | VERIFIED | `_attempt_record`; `_trace_attempt`; `_trace_stop` | `test_ar_round_and_stop_trace_contain_control_fields` | PASS | 返回结构保存所有字段；Trace 保存 round metrics 与最终 stop event |
+| V4.9-P0-08 | 支持 sufficient/budget/no_new_evidence/scope_exhausted/error 停止原因 | P0 | V4.9 | VERIFIED | controlled loop stop conditions | sufficient、budget、no-new、scope exhausted/error tests | PASS | max rounds耗尽也归 budget；错误不继续检索 |
+| V4.9-P0-09 | 用户限定 file/year/page/metadata scope 不可突破 | P0 | V4.9 | VERIFIED | `_constrain_scope`; immutable scope copy；V3 hard filters | `test_ar_explicit_file_year_and_metadata_scope_never_expands`; V3 metadata tests | PASS | Need 只能等于或窄于全局 scope；冲突扩大直接参数失败 |
+| V4.9-P0-10 | 未找到 Evidence 不等于事实不存在，最终四态明确 | P0 | V4.9 | VERIFIED | `_answer_status`; `_answer_message` | missing/conflict/low/confirmed tests | PASS | confirmed/not_found/conflict/low_confidence；not_found 有明确非否定提示 |
+| V4.9-P0-11 | 不能信任 Memory/历史声称的已满足状态 | P0 | V4.9 | VERIFIED | run 初始化当前 Evidence ledger | `test_ar_does_not_trust_caller_claimed_sufficient_without_current_evidence` | PASS | 每次运行从 missing/空 Evidence IDs 开始，只信任本次 RAG Evidence |
+| V4.9-P0-12 | 不绕过 Workflow/Safety/Approval，Student/General 共用 Core | P0 | V4.9 | VERIFIED | Core/Student Adapter ports；Core Safety assessment；safety trace | AR Trace；Student/General complex task tests；legacy Workflow/Safety tests | PASS | 每次 retrieval 先过原 Safety；控制层只读，不执行写/确认操作；边界标记为 false |
+| V4.9-P0-13 | 复用 Hybrid Retrieval/Metadata/Rerank/Evidence 且 V1–V4.8 不回归 | P0 | V4.9 | VERIFIED | 委托 `DOCUMENT_AGENT_CORE.retrieve_document`; no new retriever/index/store | legacy RAG/Evidence + 完整 `tests/` | 受影响 `110 passed in 4.05s`；首次 `396 passed in 37.70s`；最终 `396 passed in 30.07s` | 未改 `hybrid_retrieval.py`、`document_index.retrieve_document`、Evidence schema 或 ToolRegistry |
+
+### 12.1 V4.9 边界与限制
+
+- 控制层不包含新的 keyword/vector/rerank 实现或 Evidence 存储；所有候选与 Evidence 来自
+  V3 `retrieve_document()`，因此 RAG 2.0 的硬 scope 与 fallback 行为保持权威。
+- 默认 Need builder 只对有明确多步骤/规则/比较信号的复杂请求进行保守拆分；调用方可用
+  严格 schema 显式提供 Need，但不能预先声明 sufficient 绕过本次检索。
+- timeout 是整个控制循环的墙钟预算；为避免线程化改变 SQLite/RAG 2.0 行为，当前同步
+  retrieval 返回后才判断超时并停止后续调用，不对正在执行的底层调用做强制取消。
+- 本阶段未把控制层注册为新 LLM Tool，保持既有 Tool definitions 精确兼容；V4.10/V4.11
+  安全专项与 Evaluation 未提前实现。
+
+## 13. 后续阶段审计规则
 
 每个 V4 阶段开始前，应以正式阶段需求补充或拆分对应 Requirement ID，并填写：
 
