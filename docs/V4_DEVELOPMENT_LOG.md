@@ -41,7 +41,7 @@ V4.0 只建立工程开发基线，不实现 V4 新业务能力，不修改 V1�
 | V4.2 | Visual OCR and Image PDF | VERIFIED | 复用 V3 PDF OCR，统一图片、扫描/图片型 PDF 与 mixed PDF 的 page-level Visual OCR |
 | V4.3 | Handwriting Recognition | VERIFIED | 在统一 Visual OCR region 管线中支持手写类型、低置信度安全、冲突核对与 region retry |
 | V4.4 | Visual Understanding and KIE | VERIFIED | 基于 DocumentBlock/OCR region 派生 VisualBlock、保守分类与带来源的基础 KIE |
-| V4.5 | Visual Table | NOT_STARTED | 需求和验收标准待对应阶段确认 |
+| V4.5 | Visual Table | VERIFIED | 复用 V3 Table/Row/Column/Cell，支持视觉/手写 Cell、可靠计算门槛与安全降级 |
 | V4.6 | Evidence 3.0 | NOT_STARTED | 需求和验收标准待对应阶段确认 |
 | V4.7 | General Document Agent Core | NOT_STARTED | 需求和验收标准待对应阶段确认 |
 | V4.8 | Domain Router | NOT_STARTED | 需求和验收标准待对应阶段确认 |
@@ -287,6 +287,51 @@ conda run -n tuli_env pytest -q
   学生字段。VisualBlock 是可重复派生视图，原子事实源仍为 OCR page/region ledger。
 - Requirement IDs：`V4.4-P0-01` 至 `V4.4-P0-12`。
 
+### V4.5 Visual Table and Handwritten Table Processing
+
+- 本阶段目标：优先复用 V3 `TableStructure` / `TableRow` / `TableColumn` / `TableCell`，
+  在 OCR region 和 VisualBlock 上支持清晰打印图片表格、基础手写表格、Cell 几何与
+  可靠性门槛；结构不可靠时保留 table block、OCR 文本和原图 region，不伪造 Cell。
+- 基线：V4.4 tag `v4.4-visual-understanding`，commit
+  `947ce61255dc49b768b2ebc48c1150aace9736e3`。
+- 实际修改文件：
+  - `backend/table_structure.py`
+  - `backend/services/ocr_service.py`
+  - `backend/services/visual_table.py`
+  - `backend/tools/document_tools.py`
+  - `tests/test_visual_table_v4.py`
+  - `docs/V4_DEVELOPMENT_LOG.md`
+  - `docs/V4_REQUIREMENT_COVERAGE_AUDIT.md`
+- 新增/修改接口：
+  - V3 `TableCell` 增加 `image_no`、recognition/source region/parser/model、
+    `status` 与 `safe_for_calculation`；Table、Row、Column 增加视觉 page/image/bbox，
+    Table 增加 confidence、recognition、source regions 和 fallback。
+  - `build_simple_table()` 与 `degraded_table()` 保持旧调用兼容，同时接受视觉几何与来源。
+  - OCR region 增加可选 `table_id_hint`、row/column index、row/column span、table bbox 和
+    structure hint；继续保存在原 `document_ocr_pages.blocks_json`。
+  - 新增 `extract_visual_tables()` 与 `calculate_visual_table()`，并从既有
+    `backend.tools.document_tools` 导出。
+- 可靠性与安全策略：只有显式提供、坐标唯一、从 0 连续、完整矩形且每个候选 Cell
+  都有 bbox 时才调用 V3 `build_simple_table()`。缺格、重复坐标、合并 Cell、无边框手绘
+  或无几何信息时直接生成 `degraded_table()`，Row/Column/Cell 均为空。手写低 confidence
+  Cell 保留文本、bbox 和 confidence，但 `safe_for_calculation=false`。
+- 精确计算：调用方必须显式提交同一可靠 Table 的 Cell IDs；服务再次校验 Table/Cell
+  状态和严格数值格式后，才交给 Python `Decimal` 执行 sum/avg/min/max/count。低置信度、
+  非数值或降级表格均返回可解释失败，不存在 LLM 从图片读取或猜测数字的路径。
+- 新增测试：`tests/test_visual_table_v4.py` 共 8 个 pytest cases，覆盖 printed table
+  image、基础 handwritten table、Table/Cell page/image/bbox/text/confidence、低置信度手写
+  Cell、Python Decimal 计算及非数值拒绝、merged-cell 降级、borderless hand-drawn 降级、
+  incomplete grid 零 Cell fallback 和原文继续可查询。
+- 测试结果：V4.5 专项 `8 passed in 0.60s`；Table/Visual/OCR/RAG/Evidence 受影响回归
+  `121 passed in 6.27s`；首次完整回归 `363 passed in 31.09s`；文档更新后最终完整回归
+  `363 passed in 29.48s`。
+- 未完成项：复杂合并单元格、无边框手绘结构推断、复杂表格语义/图表推理、Evidence 3.0、
+  Domain Router 与 Agentic Retrieval 未在本阶段开发。
+- 已知限制：视觉 layout backend 必须给出明确 cell row/column 与 bbox；本阶段不从 OCR
+  文本猜测网格。Cell confidence 使用可配置的归一化阈值
+  `VISUAL_TABLE_CELL_CONFIDENCE_THRESHOLD`（默认 0.85），不声明表格识别准确率。
+- Requirement IDs：`V4.5-P0-01` 至 `V4.5-P0-12`。
+
 ### 每阶段开发记录模板
 
 ```markdown
@@ -330,6 +375,10 @@ conda run -n tuli_env pytest -q
 | 2026-08-28 | V4.4 首次完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `355 passed in 28.92s` | PASS |
 | 2026-08-28 | V4.4 文档更新后最终回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `355 passed in 29.65s` | PASS |
 | 2026-08-31 | V4.4 中断恢复后复核 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `355 passed in 31.98s` | PASS；使用重新执行的可确认结果 |
+| 2026-08-31 | V4.5 专项 | 未提交工作树 | `conda run -n tuli_env pytest -q tests/test_visual_table_v4.py` | `8 passed in 0.60s` | PASS |
+| 2026-08-31 | V4.5 受影响回归 | 未提交工作树 | Table、Visual、OCR、RAG、Evidence 相关测试 | `121 passed in 6.27s` | PASS |
+| 2026-08-31 | V4.5 首次完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `363 passed in 31.09s` | PASS |
+| 2026-08-31 | V4.5 文档更新后最终回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `363 passed in 29.48s` | PASS |
 
 后续阶段必须追加实际执行记录，不得以历史结果替代当前回归。
 

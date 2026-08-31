@@ -23,7 +23,7 @@
 | V4-P0-003 | Visual OCR and Image PDF | P0 | V4.2 Visual OCR and Image PDF | VERIFIED | `backend/services/ocr_service.py`; `backend/services/document_index.py` | `tests/test_visual_ocr_pipeline_v4.py`; `tests/test_ocr_pipeline.py` | 专项 `8 passed`；完整回归 `334 passed` | 复用 V3 OCR page ledger、mixed routing、Async Task 与原子索引；细分证据见第 5 节 |
 | V4-P0-004 | Handwriting Recognition | P0 | V4.3 Handwriting Recognition | VERIFIED | `backend/services/ocr_service.py`; `backend/services/document_index.py` | `tests/test_handwriting_recognition_v4.py`; `tests/fixtures/v4_handwriting_cases.json` | 专项 `12 passed`；完整回归 `346 passed` | 验证管线和安全契约，不将固定样本结果表述为准确率；细分证据见第 6 节 |
 | V4-P0-005 | Visual Understanding and KIE | P0 | V4.4 Visual Understanding and KIE | VERIFIED | `backend/services/visual_understanding.py`; `backend/document_blocks.py` | `tests/test_visual_understanding_v4.py` | 专项 `9 passed`；完整回归 `355 passed` | 只读派生 VisualBlock/分类/KIE；细分证据见第 7 节 |
-| V4-P0-006 | Visual Table | P0 | V4.5 Visual Table | NOT_STARTED | TBD | TBD | NOT_RUN | 表结构、单元格定位和兼容策略待确认 |
+| V4-P0-006 | Visual Table | P0 | V4.5 Visual Table | VERIFIED | `backend/services/visual_table.py`; `backend/table_structure.py` | `tests/test_visual_table_v4.py` | 专项 `8 passed`；完整回归 `363 passed` | 复用 V3 Table schema；细分证据见第 8 节 |
 | V4-P0-007 | Evidence 3.0 | P0 | V4.6 Evidence 3.0 | NOT_STARTED | TBD | TBD | NOT_RUN | 必须增量复用 Evidence 2.0；新增契约待确认 |
 | V4-P0-008 | General Document Agent Core | P0 | V4.7 General Document Agent Core | NOT_STARTED | TBD | TBD | NOT_RUN | 核心 Agent 边界、Tool 与 Runtime 复用方案待确认 |
 | V4-P0-009 | Domain Router | P0 | V4.8 Domain Router | NOT_STARTED | TBD | TBD | NOT_RUN | 领域集合、路由契约和 fallback 待确认 |
@@ -150,7 +150,33 @@
   原始 OCR 保持事实源。
 - Student schema hint 只在显式 `domain=student` 时启用；General 始终保持通用 field/value。
 
-## 8. 后续阶段审计规则
+## 8. V4.5 P0 Requirements Coverage Matrix
+
+| Requirement ID | Requirement | Priority | Target V4 Stage | Implementation Status | Code Location | Test Location | Verification Result | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| V4.5-P0-01 | 复用 V3 Table/Row/Column/Cell Schema | P0 | V4.5 | VERIFIED | `backend/table_structure.py`; `visual_table.py` | printed table；existing `test_layout_blocks.py` | PASS | 增量扩展可选视觉字段，旧调用兼容 |
+| V4.5-P0-02 | 清晰二维打印图片表格 | P0 | V4.5 | VERIFIED | `extract_visual_tables`; V3 `build_simple_table` | `test_simple_printed_table_image_reuses_table_row_column_cell_schema` | PASS | 只接受完整显式矩形网格 |
+| V4.5-P0-03 | 基础手写表格 | P0 | V4.5 | VERIFIED | OCR recognition metadata；visual table builder | `test_simple_handwritten_table_preserves_recognition_type` | PASS | 不声明真实识别准确率 |
+| V4.5-P0-04 | Table/Cell 关联 page/image、bbox、text、confidence | P0 | V4.5 | VERIFIED | extended `TableStructure` / `TableCell` | `test_reliable_cells_keep_page_image_bbox_text_and_confidence` | PASS | Cell 同时关联 source_region_id |
+| V4.5-P0-05 | 手写 Cell 支持 low confidence | P0 | V4.5 | VERIFIED | `_cell_confidence_threshold`; cell geometry mapping | `test_low_confidence_handwritten_cell_is_kept_but_not_calculable` | PASS | 文本与位置保留，禁止精确计算 |
+| V4.5-P0-06 | 结构可靠后才生成 Row/Column/Cell，禁止补造 | P0 | V4.5 | VERIFIED | `_structure_warning`; `_build_visual_table` complete-grid check | printed/incomplete/merged tests | PASS | 缺格或重复坐标直接零 Cell 降级 |
+| V4.5-P0-07 | 精确数值仅交给 Python | P0 | V4.5 | VERIFIED | `calculate_visual_table` | `test_reliable_numeric_cells_are_calculated_only_by_python_decimal` | PASS | execution_engine=python_decimal；显式 Cell IDs |
+| V4.5-P0-08 | 低置信度和非数值 Cell 禁止猜测计算 | P0 | V4.5 | VERIFIED | calculation reliability/numeric guards | low-confidence test；non-numeric assertion | PASS | 返回可解释错误，不调用 LLM |
+| V4.5-P0-09 | 合并单元格结构失败安全降级 | P0 | V4.5 | VERIFIED | `_structure_warning`; V3 `degraded_table` | `test_merged_cell_structure_degrades_without_fabricating_cells` | PASS | table block + OCR text + original region；零 Cell |
+| V4.5-P0-10 | 无边框手绘表格失败安全降级 | P0 | V4.5 | VERIFIED | `table_structure_hint=borderless_hand_drawn` | `test_hand_drawn_borderless_table_degrades_safely` | PASS | 不推测网格边界 |
+| V4.5-P0-11 | 表格失败不使整份文档不可查询 | P0 | V4.5 | VERIFIED | visual table is read-only derived view | `test_incomplete_grid_safe_fallback_keeps_document_queryable` | PASS | 原 OCR chunk 与 QUERYABLE 保持 |
+| V4.5-P0-12 | V1–V3 与 V4.1–V4.4 回归保持 | P0 | V4.5 | VERIFIED | 原有 modules | 完整 `tests/` | 首次 `363 passed in 31.09s`；最终 `363 passed in 29.48s` | 无删除或 skip 旧测试 |
+
+### 8.1 V4.5 边界与限制
+
+- 本阶段只处理 layout backend 明确给出 row/column/bbox 的简单二维网格，不从 OCR 文本
+  或图片外观猜测 Cell。
+- merged-cell、borderless hand-drawn、缺格、重复坐标与无 bbox 均保留原始 OCR 和图像
+  region，但不生成任何结构化 Cell。
+- 手写 Cell 可以保留为 low-confidence 候选；只有可靠 Cell 可进入 Python Decimal 计算。
+- 不开发复杂表格语义、图表推理或 LLM 图片数值读取。
+
+## 9. 后续阶段审计规则
 
 每个 V4 阶段开始前，应以正式阶段需求补充或拆分对应 Requirement ID，并填写：
 
