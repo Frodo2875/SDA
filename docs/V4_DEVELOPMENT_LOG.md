@@ -42,7 +42,7 @@ V4.0 只建立工程开发基线，不实现 V4 新业务能力，不修改 V1�
 | V4.3 | Handwriting Recognition | VERIFIED | 在统一 Visual OCR region 管线中支持手写类型、低置信度安全、冲突核对与 region retry |
 | V4.4 | Visual Understanding and KIE | VERIFIED | 基于 DocumentBlock/OCR region 派生 VisualBlock、保守分类与带来源的基础 KIE |
 | V4.5 | Visual Table | VERIFIED | 复用 V3 Table/Row/Column/Cell，支持视觉/手写 Cell、可靠计算门槛与安全降级 |
-| V4.6 | Evidence 3.0 | NOT_STARTED | 需求和验收标准待对应阶段确认 |
+| V4.6 | Evidence 3.0 | VERIFIED | 增量扩展 Evidence 2.0 envelope，统一视觉 region/Cell 来源并支持图片、PDF bbox 定位 |
 | V4.7 | General Document Agent Core | NOT_STARTED | 需求和验收标准待对应阶段确认 |
 | V4.8 | Domain Router | NOT_STARTED | 需求和验收标准待对应阶段确认 |
 | V4.9 | Agentic Retrieval | NOT_STARTED | 需求和验收标准待对应阶段确认 |
@@ -332,6 +332,50 @@ conda run -n tuli_env pytest -q
   `VISUAL_TABLE_CELL_CONFIDENCE_THRESHOLD`（默认 0.85），不声明表格识别准确率。
 - Requirement IDs：`V4.5-P0-01` 至 `V4.5-P0-12`。
 
+### V4.6 Evidence 3.0 and Visual Evidence Localization
+
+- 本阶段目标：在既有 `Evidence`、`evidence_locations` JSON 存储、答案 Evidence 收集器和
+  原文定位 API 上增量扩展视觉来源，不建立平行 Evidence 表或第二套来源系统；统一覆盖
+  Excel、Text/Visual PDF、Image、Visual Table、Handwriting 和 Word 定位。
+- 基线：V4.5 tag `v4.5-visual-table`，commit `5f2d21f`。
+- 实际修改文件：
+  - `backend/evidence.py`
+  - `backend/agent.py`
+  - `backend/services/document_index.py`
+  - `backend/services/evidence_locator.py`
+  - `backend/services/visual_understanding.py`
+  - `backend/services/visual_table.py`
+  - `frontend/components/evidence_panel.py`
+  - `tests/test_evidence_v4.py`
+  - `docs/V4_DEVELOPMENT_LOG.md`
+  - `docs/V4_REQUIREMENT_COVERAGE_AUDIT.md`
+- 新增/修改接口：
+  - `Evidence` 增加向后兼容的 `evidence_version`、`locator_type`、image/region/row/column、
+    recognition/source、handwriting confidence、review/conflict 等可选字段；继续保存在原
+    `evidence_locations.locator_json`。
+  - 新增 `serialize_evidence()` / `deserialize_evidence()`；缺少版本字段的旧 payload 按
+    Evidence 2.0 加载，旧 Excel/Text PDF/Word 工具响应继续保持原字段集合。
+  - `locate_evidence()` 增加独立图片 preview + bbox、Visual PDF page + region/bbox、视觉
+    Table Cell bbox 定位；定位失败继续返回安全提示并写入现有 Trace。
+  - KIE 候选通过既有 `build_evidence()` 持久化，且只有保留 bbox 的字段才能形成 KIE；
+    `calculate_visual_table()` 为实际参与 Decimal 计算的 Cell 生成持久 Evidence chain。
+  - `retrieve_document()` 只读匹配现有 OCR ledger 形成 visual/handwriting provenance，不改变
+    V3 chunk metadata；答案收集器继续只暴露实际 Tool/结论 chain，并显式排除 memory/history。
+- 新增测试：`tests/test_evidence_v4.py` 共 7 个 pytest cases，覆盖 Evidence 2/3 schema
+  compatibility、图片 preview/bbox、Visual PDF region、KIE bbox 回溯、手写冲突与低 confidence
+  展示数据、视觉 Cell 精确定位以及 Memory/历史 Evidence 排除。
+- 测试结果：V4.6 专项 `7 passed in 0.68s`；专项加既有 Evidence/Visual 回归
+  `32 passed in 1.46s`；首次完整回归 `369 passed, 1 failed in 30.13s`，发现打印 OCR
+  chunk metadata 兼容问题；改为 Evidence 生成时只读 OCR ledger 后，受影响回归
+  `24 passed in 1.88s`，修复后完整回归 `370 passed in 27.50s`；Evidence 2 响应注解兼容
+  复核 `43 passed in 5.30s`，最终完整回归 `370 passed in 35.45s`。
+- 未完成项：浏览器/PDF canvas 的真实像素级 overlay、跨页组合 Evidence、定位缓存和复杂
+  表格合并 Cell 定位不在本阶段实现；V4.7 General Document Agent Core 未提前开发。
+- 已知限制：Streamlit 图片预览展示原图并明确列出高亮 bbox，尚未绘制覆盖层；PDF 返回
+  page + bbox/region 供当前预览入口使用。定位失败不改变事实回答，只显示定位失败并记录
+  Trace。冲突来源保留而不选边，低置信度手写只能作为需核对 Evidence。
+- Requirement IDs：`V4.6-P0-01` 至 `V4.6-P0-13`。
+
 ### 每阶段开发记录模板
 
 ```markdown
@@ -379,6 +423,11 @@ conda run -n tuli_env pytest -q
 | 2026-08-31 | V4.5 受影响回归 | 未提交工作树 | Table、Visual、OCR、RAG、Evidence 相关测试 | `121 passed in 6.27s` | PASS |
 | 2026-08-31 | V4.5 首次完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `363 passed in 31.09s` | PASS |
 | 2026-08-31 | V4.5 文档更新后最终回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `363 passed in 29.48s` | PASS |
+| 2026-08-31 | V4.6 专项 | 未提交工作树 | `conda run -n tuli_env pytest -q tests/test_evidence_v4.py` | `7 passed in 0.68s` | PASS |
+| 2026-08-31 | V4.6 首次完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `369 passed, 1 failed in 30.13s` | 发现 V3 扫描 PDF chunk metadata 精确兼容回归，未删除或弱化测试 |
+| 2026-08-31 | V4.6 修复后受影响回归 | 未提交工作树 | OCR、Evidence、RAG、Hybrid 相关测试 | `24 passed in 1.88s` | PASS；Evidence 生成时只读 OCR ledger |
+| 2026-08-31 | V4.6 修复后完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `370 passed in 27.50s` | PASS |
+| 2026-08-31 | V4.6 最终完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `370 passed in 35.45s` | PASS；Evidence 2 响应注解兼容复核后执行 |
 
 后续阶段必须追加实际执行记录，不得以历史结果替代当前回归。
 

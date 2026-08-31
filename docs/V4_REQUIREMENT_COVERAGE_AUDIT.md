@@ -24,7 +24,7 @@
 | V4-P0-004 | Handwriting Recognition | P0 | V4.3 Handwriting Recognition | VERIFIED | `backend/services/ocr_service.py`; `backend/services/document_index.py` | `tests/test_handwriting_recognition_v4.py`; `tests/fixtures/v4_handwriting_cases.json` | 专项 `12 passed`；完整回归 `346 passed` | 验证管线和安全契约，不将固定样本结果表述为准确率；细分证据见第 6 节 |
 | V4-P0-005 | Visual Understanding and KIE | P0 | V4.4 Visual Understanding and KIE | VERIFIED | `backend/services/visual_understanding.py`; `backend/document_blocks.py` | `tests/test_visual_understanding_v4.py` | 专项 `9 passed`；完整回归 `355 passed` | 只读派生 VisualBlock/分类/KIE；细分证据见第 7 节 |
 | V4-P0-006 | Visual Table | P0 | V4.5 Visual Table | VERIFIED | `backend/services/visual_table.py`; `backend/table_structure.py` | `tests/test_visual_table_v4.py` | 专项 `8 passed`；完整回归 `363 passed` | 复用 V3 Table schema；细分证据见第 8 节 |
-| V4-P0-007 | Evidence 3.0 | P0 | V4.6 Evidence 3.0 | NOT_STARTED | TBD | TBD | NOT_RUN | 必须增量复用 Evidence 2.0；新增契约待确认 |
+| V4-P0-007 | Evidence 3.0 | P0 | V4.6 Evidence 3.0 | VERIFIED | `backend/evidence.py`; `backend/services/evidence_locator.py`; existing `evidence_locations` | `tests/test_evidence_v4.py`; legacy Evidence tests | 专项 `7 passed`；完整回归 `370 passed` | 增量复用 Evidence 2.0 与原定位/Trace；细分证据见第 9 节 |
 | V4-P0-008 | General Document Agent Core | P0 | V4.7 General Document Agent Core | NOT_STARTED | TBD | TBD | NOT_RUN | 核心 Agent 边界、Tool 与 Runtime 复用方案待确认 |
 | V4-P0-009 | Domain Router | P0 | V4.8 Domain Router | NOT_STARTED | TBD | TBD | NOT_RUN | 领域集合、路由契约和 fallback 待确认 |
 | V4-P0-010 | Agentic Retrieval | P0 | V4.9 Agentic Retrieval | NOT_STARTED | TBD | TBD | NOT_RUN | 必须保持 RAG 2.0 兼容；规划、检索与停止条件待确认 |
@@ -176,7 +176,35 @@
 - 手写 Cell 可以保留为 low-confidence 候选；只有可靠 Cell 可进入 Python Decimal 计算。
 - 不开发复杂表格语义、图表推理或 LLM 图片数值读取。
 
-## 9. 后续阶段审计规则
+## 9. V4.6 P0 Requirements Coverage Matrix
+
+| Requirement ID | Requirement | Priority | Target V4 Stage | Implementation Status | Code Location | Test Location | Verification Result | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| V4.6-P0-01 | Evidence 统一序列化并兼容 Evidence 2.0 | P0 | V4.6 | VERIFIED | `backend/evidence.py::Evidence`; `serialize_evidence`; `deserialize_evidence` | `test_evidence_3_serialization_accepts_legacy_evidence_2_payload`; V3 Evidence tests | PASS | 原 `evidence_locations.locator_json` 继续使用，无迁移/新表；旧响应字段集合保持 |
+| V4.6-P0-02 | Excel file/sheet/field/record 与 Table/Cell 不回归 | P0 | V4.6 | VERIFIED | existing `build_evidence`; `_locate_excel` | `tests/test_evidence_v3.py`; `test_evidence_location_v3.py`; Hybrid tests | PASS | Evidence 2.0 精确响应契约保留 |
+| V4.6-P0-03 | Text PDF 与 Word file/page/chunk/block 定位不回归 | P0 | V4.6 | VERIFIED | `_locate_document`; existing RAG builder | V3 location；Document RAG tests | PASS | chunk/block/paragraph 行为保持 |
+| V4.6-P0-04 | Visual PDF page/region/block/bbox/confidence 定位 | P0 | V4.6 | VERIFIED | `document_index.retrieve_document`; `_locate_document` | `test_visual_pdf_region_localizes_without_requiring_a_text_chunk` | PASS | 无 text chunk 时可由活动 OCR region 验证定位 |
+| V4.6-P0-05 | 独立图片 image/region/bbox/confidence 打开与高亮 | P0 | V4.6 | VERIFIED | `_locate_image`; `build_image_preview`; evidence panel | `test_image_region_evidence_opens_preview_and_highlights_bbox` | PASS | 返回受限 base64 preview 与 highlight bbox；UI 明示 bbox |
+| V4.6-P0-06 | KIE 字段回溯实际 bbox/source region | P0 | V4.6 | VERIFIED | `visual_understanding.extract_key_fields`; existing Evidence store | `test_kie_field_persists_actual_region_and_bbox_evidence` | PASS | 无 bbox 时不生成 KIE 候选；不替代 OCR |
+| V4.6-P0-07 | OCR/handwriting 结果形成 Evidence | P0 | V4.6 | VERIFIED | `build_evidence`; RAG OCR ledger matching | image/PDF/handwriting tests；V4.3 regressions | PASS | 保留 recognition/parser/model/confidence；手写另存 handwriting confidence |
+| V4.6-P0-08 | Visual Table 定位 table/row/column/cell/bbox | P0 | V4.6 | VERIFIED | `visual_table.calculate_visual_table`; `_locate_visual_table` | `test_visual_table_calculation_evidence_highlights_exact_cell`; V4.5 tests | PASS | 只为实际参与 Python Decimal 计算的可靠 Cell 形成 chain |
+| V4.6-P0-09 | 最终回答只暴露实际参与的 Evidence | P0 | V4.6 | VERIFIED | `agent._collect_evidence`; existing conclusion-chain rule | `test_unused_retrieval_source_is_not_exposed_after_evaluation`; memory test | PASS | authoritative conclusion chain 排除未使用检索候选 |
+| V4.6-P0-10 | Memory/历史回答不得作为事实 Evidence | P0 | V4.6 | VERIFIED | Agent prompt；`_collect_evidence` source guard | `test_memory_and_history_are_never_exposed_as_fact_evidence` | PASS | memory/history/chat 来源被过滤 |
+| V4.6-P0-11 | OCR/KIE 冲突不静默选边，低置信度手写展示 text+confidence | P0 | V4.6 | VERIFIED | Evidence conflict/review fields；locator；evidence panel | `test_handwriting_conflict_keeps_all_sources_and_requires_review`; V4.3 conflict tests | PASS | 保存全部 conflict_sources，status=conflict，强制 review |
+| V4.6-P0-12 | 定位失败不改变回答并记录 Trace | P0 | V4.6 | VERIFIED | `_location_failure`; existing Trace service | `test_r209_location_failure_keeps_safe_message_and_records_trace` | PASS | 定位 API 只读；返回明确失败，不改事实内容 |
+| V4.6-P0-13 | V1–V3 与 V4.1–V4.5 完整回归保持 | P0 | V4.6 | VERIFIED | 原有 modules | 完整 `tests/` | 首次 `369 passed, 1 failed`；修复后 `370 passed in 27.50s`；最终 `370 passed in 35.45s` | 首轮精确 metadata 回归已通过只读 ledger 匹配修复；无删除或 skip 旧测试 |
+
+### 9.1 V4.6 边界与限制
+
+- 当前 Streamlit 图片预览展示原图并列出 bbox，未实现浏览器 canvas 覆盖层；返回的
+  `highlight.bbox` 已可供后续 UI 消费。PDF 定位返回 page + region/bbox。
+- Visual Table 只定位 V4.5 已可靠解析的 Cell；降级表格没有伪造 Cell，因此只能保留
+  table block、OCR text 与 original image region。
+- 定位服务验证活动 OCR region/Cell 后返回预览；来源已失效时明确失败并写 Trace，不对
+  答案事实内容做任何修改。
+- 未实现跨页组合 Evidence、复杂 merged-cell 定位或定位缓存，也未提前开发 V4.7。
+
+## 10. 后续阶段审计规则
 
 每个 V4 阶段开始前，应以正式阶段需求补充或拆分对应 Requirement ID，并填写：
 

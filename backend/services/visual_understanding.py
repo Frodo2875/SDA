@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from backend import database
 from backend.document_blocks import BlockType, DocumentBlock
-from backend.evidence import make_evidence_id
+from backend.evidence import build_evidence, make_evidence_id
 from backend.services import ocr_service
 from backend.tools.excel_utils import failure, success
 
@@ -218,6 +218,10 @@ def extract_key_fields(
             label, value = (part.strip() for part in match.groups())
             if not value:
                 continue
+            # KIE is only a derived candidate when its source geometry remains
+            # openable. OCR text without geometry stays queryable but is not KIE.
+            if block.bbox is None:
+                continue
             field_name = hints.get(label, label) if domain == "student" else label
             confidence = block.confidence
             needs_review = (
@@ -227,22 +231,33 @@ def extract_key_fields(
                 or not block.safe_for_high_impact
             )
             region_id = block.source_region_ids[0]
-            evidence = {
-                "evidence_id": make_evidence_id(
+            evidence = build_evidence(
+                evidence_id=make_evidence_id(
                     file_id=record["file_id"], block_id=block.block_id,
                     region_id=region_id, field=field_name, value=value,
                 ),
-                "file_id": record["file_id"],
-                "page_no": block.page_no,
-                "image_no": block.image_no,
-                "block_id": block.block_id,
-                "region_id": region_id,
-                "bbox": block.bbox,
-                "confidence": confidence,
-                "source_parser": block.source_parser,
-                "source_model": block.source_model,
-                "text_excerpt": line.strip(),
-            }
+                source_type="unstructured",
+                locator_type="image" if record["file_type"] == "image" else "visual_pdf",
+                file_id=record["file_id"],
+                file_name=record["file_name"],
+                page_no=block.page_no,
+                image_no=block.image_no,
+                chunk_id=None,
+                block_id=block.block_id,
+                region_id=region_id,
+                table=None,
+                cell=None,
+                bbox=block.bbox,
+                confidence=confidence,
+                recognition_type=block.recognition_type,
+                source_parser=block.source_parser,
+                source_model=block.source_model,
+                field=field_name,
+                record_key=None,
+                value_summary=value,
+                text_excerpt=line.strip(),
+                review_required=needs_review,
+            )
             field_id = hashlib.sha256(
                 f"{evidence['evidence_id']}:{field_name}".encode("utf-8")
             ).hexdigest()[:32]

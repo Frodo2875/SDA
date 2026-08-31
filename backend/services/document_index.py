@@ -636,6 +636,7 @@ def retrieve_document(
     for row in rows:
         record = eligible[row["file_id"]]
         metadata = row.get("metadata") or {}
+        region = _evidence_region_for_row(row, metadata)
         block_id = metadata.get("block_id")
         table = metadata.get("table_id") or (
             f"table:{metadata['table_no']}"
@@ -658,23 +659,33 @@ def retrieve_document(
                 file_name=record["file_name"],
                 sheet=None,
                 page_no=row["page_no"],
+                image_no=(metadata.get("image_no") or (region or {}).get("image_no") or 1) if record["file_type"] == "image" else None,
                 chunk_id=row["chunk_id"],
                 block_id=block_id,
+                region_id=metadata.get("region_id") or (region or {}).get("region_id"),
                 table=table,
                 cell=cell,
+                row_index=metadata.get("row_index", metadata.get("row_no")),
+                column_index=metadata.get("column_index", metadata.get("column_no")),
                 bbox=metadata.get("bbox"),
                 confidence=metadata.get("confidence"),
+                recognition_type=metadata.get("recognition_type") or (region or {}).get("recognition_type"),
+                source_parser=metadata.get("source_parser") or (metadata.get("block") or {}).get("source_parser") or (region or {}).get("source_parser"),
+                source_model=metadata.get("source_model") or (region or {}).get("source_model"),
                 field=None,
                 record_key=None,
                 value_summary=_excerpt(row["chunk_text"], arguments.query),
+                text_excerpt=_excerpt(row["chunk_text"], arguments.query),
+                review_required=bool(metadata.get("review_required") or (region or {}).get("review_required")),
+                conflict_sources=list(metadata.get("conflict_sources") or (region or {}).get("conflict_sources") or []),
             )
         )
         evidence[-1].update({
             key: metadata.get(key)
             for key in (
-                "region_id", "recognition_type", "key_field_type",
+                "key_field_type",
                 "review_required", "review_reason", "safe_for_high_impact",
-                "safe_for_identity_match", "conflict_sources",
+                "safe_for_identity_match",
             )
             if metadata.get(key) is not None
         })
@@ -1133,6 +1144,30 @@ def _region_safety_metadata(region: dict[str, Any]) -> dict[str, Any]:
         "safe_for_identity_match": bool(region.get("safe_for_identity_match", False)),
         "conflict_sources": list(region.get("conflict_sources") or []),
     }
+
+
+def _evidence_region_for_row(
+    row: dict[str, Any], metadata: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Read OCR provenance for Evidence without changing the V3 chunk schema."""
+    regions = database.get_document_ocr_regions(str(row.get("file_id") or ""))
+    region_id = metadata.get("region_id")
+    if region_id:
+        return next(
+            (region for region in regions if region.get("region_id") == region_id),
+            None,
+        )
+    bbox = metadata.get("bbox") or (metadata.get("block") or {}).get("bbox")
+    page_no = row.get("page_no")
+    if bbox is None:
+        return None
+    return next(
+        (
+            region for region in regions
+            if region.get("page_no") == page_no and region.get("bbox") == bbox
+        ),
+        None,
+    )
 
 
 def _merge_retried_regions(

@@ -1,5 +1,6 @@
 """Clickable Evidence provenance without exposing hidden reasoning."""
 
+import base64
 from collections.abc import Callable
 from html import escape
 from typing import Any
@@ -12,6 +13,10 @@ def evidence_location(item: dict[str, Any]) -> list[str]:
     location = []
     if item.get("page_no") is not None:
         location.append(f"Page：{item['page_no']}")
+    if item.get("image_no") is not None:
+        location.append(f"Image：{item['image_no']}")
+    if item.get("region_id"):
+        location.append(f"Region：{item['region_id']}")
     if item.get("block_id"):
         location.append(f"Block：{item['block_id']}")
     if item.get("table"):
@@ -28,6 +33,10 @@ def evidence_location(item: dict[str, Any]) -> list[str]:
         location.append(f"Chunk：{item['chunk_id']}")
     if item.get("confidence") is not None:
         location.append(f"置信度：{float(item['confidence']):.2f}")
+    if item.get("handwriting_confidence") is not None:
+        location.append(f"手写置信度：{float(item['handwriting_confidence']):.2f}")
+    if item.get("review_required"):
+        location.append("需要核对")
     return location
 
 
@@ -109,6 +118,25 @@ def render_location_preview(location: dict[str, Any]) -> None:
                 f"{escape(str(location.get('text') or '（空）'))}</mark></div>",
                 unsafe_allow_html=True,
             )
+            _render_visual_review(location)
+        elif location_type == "image":
+            st.caption(
+                f"Image · 第 {location.get('image_no') or 1} 张"
+                + (f" · Region {location['region_id']}" if location.get("region_id") else "")
+            )
+            preview = location.get("preview") or {}
+            encoded = preview.get("content_base64")
+            if encoded:
+                st.image(
+                    base64.b64decode(encoded),
+                    caption=f"高亮区域 BBox：{location.get('bbox')}",
+                    use_container_width=True,
+                )
+            if location.get("bbox"):
+                st.warning(f"高亮区域 BBox：{location['bbox']}")
+            if location.get("text"):
+                st.markdown(f"> {escape(str(location['text']))}")
+            _render_visual_review(location)
         elif location_type == "excel":
             st.caption(
                 f"Excel · Sheet {location.get('sheet')} · Cell {location.get('cell_id')}"
@@ -134,3 +162,16 @@ def render_location_preview(location: dict[str, Any]) -> None:
             )
             st.caption(f"Word · {position}")
             st.markdown(f"> {escape(str(location.get('text') or '（空）'))}")
+
+
+def _render_visual_review(location: dict[str, Any]) -> None:
+    if location.get("handwriting_confidence") is not None:
+        st.caption(
+            f"手写识别置信度：{float(location['handwriting_confidence']):.2f}"
+        )
+    if location.get("review_required"):
+        st.warning("该识别结果置信度较低或存在冲突，需要人工核对。")
+    conflicts = location.get("conflict_sources") or []
+    if conflicts:
+        st.error("识别来源存在冲突，系统未静默选择任一结果。")
+        st.json(conflicts)

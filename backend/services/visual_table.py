@@ -7,6 +7,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
 from backend import database
+from backend.evidence import build_evidence, make_evidence_id
 from backend.services import ocr_service
 from backend.services.visual_understanding import VisualBlock
 from backend.table_structure import TableStructure, build_simple_table, degraded_table
@@ -144,6 +145,47 @@ def calculate_visual_table(
             "max": lambda: max(numbers),
         }[operation]()
         value = int(calculated) if calculated == calculated.to_integral_value() else float(calculated)
+    record = database.get_file_record_by_id(table.file_id)
+    if record is None:
+        return failure("FILE_NOT_FOUND", "视觉表格来源文件已不可用")
+    evidence = []
+    for cell in cells:
+        item = build_evidence(
+            evidence_id=make_evidence_id(
+                file_id=table.file_id, table_id=table.table_id,
+                cell_id=cell.cell_id, operation=operation,
+            ),
+            source_type="unstructured",
+            locator_type="visual_table",
+            file_id=table.file_id,
+            file_name=record["file_name"],
+            page_no=cell.page_no,
+            image_no=cell.image_no,
+            chunk_id=None,
+            block_id=table.table_id,
+            region_id=cell.source_region_id,
+            table=table.table_id,
+            cell=cell.cell_id,
+            row_index=cell.row_index,
+            column_index=cell.column_index,
+            bbox=cell.bbox,
+            confidence=cell.confidence,
+            recognition_type=cell.recognition_type,
+            source_parser=cell.source_parser,
+            source_model=cell.source_model,
+            field=None,
+            record_key=None,
+            value_summary=cell.cell_text,
+            text_excerpt=cell.cell_text,
+            review_required=False,
+        )
+        # Retain the V4.5 response aliases while the persisted locator uses the
+        # canonical Evidence table/cell fields.
+        item.update({
+            "cell_id": cell.cell_id,
+            "source_region_id": cell.source_region_id,
+        })
+        evidence.append(item)
     return success(
         {
             "status": "calculated",
@@ -152,19 +194,8 @@ def calculate_visual_table(
             "operation": operation,
             "cell_ids": requested,
             "value": value,
-            "evidence": [
-                {
-                    "cell_id": cell.cell_id,
-                    "row_index": cell.row_index,
-                    "column_index": cell.column_index,
-                    "page_no": cell.page_no,
-                    "image_no": cell.image_no,
-                    "bbox": cell.bbox,
-                    "confidence": cell.confidence,
-                    "source_region_id": cell.source_region_id,
-                }
-                for cell in cells
-            ],
+            "evidence": evidence,
+            "evidence_chain": evidence,
         },
         "视觉表格精确计算完成",
     )
