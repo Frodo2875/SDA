@@ -149,6 +149,7 @@ class StudentDomainAdapter:
         student_name: str,
         content: str,
         task_id: str | None = None,
+        evidence_context: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Delegate the existing student report HITL/version workflow unchanged."""
         return confirmation.create_pending_action(
@@ -158,6 +159,7 @@ class StudentDomainAdapter:
             student_name=student_name,
             content=content,
             task_id=task_id,
+            evidence_context=evidence_context,
         )
 
 

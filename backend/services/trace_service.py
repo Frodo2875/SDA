@@ -31,7 +31,7 @@ def record_trace(
     safe_output = max(0, int(output_tokens))
     safe_total = max(safe_input + safe_output, int(total_tokens or 0))
     runtime_metrics = _runtime_metrics(tool_name, result)
-    runtime_metrics.update(metrics or {})
+    runtime_metrics.update(_strip_hidden_reasoning(metrics or {}))
     trace = {
         "trace_id": uuid4().hex,
         "task_id": task_id,
@@ -39,7 +39,9 @@ def record_trace(
         "step_id": step_id,
         "event_type": str(event_type)[:64],
         "tool_name": str(tool_name)[:128] if tool_name else None,
-        "arguments_summary": redacted_json(arguments, max_length=1000),
+        "arguments_summary": redacted_json(
+            _strip_hidden_reasoning(arguments), max_length=1000
+        ),
         "result_summary": _result_summary(result),
         "duration_ms": max(0, int(duration_ms)),
         "retry_count": max(0, int(retry_count)),
@@ -136,6 +138,25 @@ def _runtime_metrics(tool_name: str | None, result: Any) -> dict[str, Any]:
         ],
         "top_score": max(scores) if scores else None,
     }
+
+
+_HIDDEN_REASONING_KEYS = frozenset({
+    "chain_of_thought", "chain-of-thought", "cot", "reasoning",
+    "hidden_reasoning", "thinking", "system_prompt", "full_prompt",
+})
+
+
+def _strip_hidden_reasoning(value: Any) -> Any:
+    """Keep observable outcomes while refusing hidden reasoning payload keys."""
+    if isinstance(value, dict):
+        return {
+            key: _strip_hidden_reasoning(item)
+            for key, item in value.items()
+            if str(key).strip().casefold() not in _HIDDEN_REASONING_KEYS
+        }
+    if isinstance(value, (list, tuple)):
+        return [_strip_hidden_reasoning(item) for item in value]
+    return value
 
 
 def _optional_duration(value: Any) -> int | None:

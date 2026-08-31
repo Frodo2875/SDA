@@ -427,11 +427,7 @@ def _index_image(
         "failed" if ocr_failed else "success",
         metrics={
             "image_count": 1,
-            "region_count": len(regions),
-            "successful_regions": len(successful_regions),
-            "failed_regions": sum(
-                region.get("status") in {"empty", "failed"} for region in regions
-            ),
+            **_visual_region_trace_metrics(regions),
         },
         error_code=recognized.get("error_code") if ocr_failed else None,
     )
@@ -899,6 +895,11 @@ def _parse_ocr_pdf(
                 "total_pages": len(recognized_pages),
                 "successful_pages": len(recognized_pages) - failed_selected,
                 "failed_pages": failed_selected,
+                **_visual_region_trace_metrics([
+                    region
+                    for page in recognized_pages
+                    for region in page.get("blocks") or []
+                ]),
             },
             error_code=(recognized or {}).get("error_code") if failed_selected else None,
         )
@@ -1495,19 +1496,76 @@ def _record_document_stage(
 ) -> None:
     """Persist stage observability without making Trace authoritative."""
     try:
+        duration_ms = max(0, int((time.perf_counter() - started) * 1000))
+        provided = dict(metrics or {})
+        page_count = provided.get("page_count", provided.get("total_pages"))
+        success_count = provided.get(
+            "successful_regions", provided.get("successful_pages")
+        )
+        failure_count = provided.get("failed_regions", provided.get("failed_pages"))
+        standardized = {
+            "latency_ms": duration_ms,
+            "page_count": page_count,
+            "image_count": provided.get("image_count"),
+            "region_count": provided.get("region_count"),
+            "ocr_success_count": success_count,
+            "ocr_failure_count": failure_count,
+            "ocr_call_count": 1 if stage in {"ocr", "visual_ocr"} else 0,
+            "vision_call_count": 1 if stage in {"detect", "visual_ocr", "layout"} else 0,
+            "visual_processing_duration_ms": (
+                duration_ms if stage in {"detect", "ocr", "visual_ocr", "layout"}
+                else None
+            ),
+        }
         record_trace(
             session_id=f"document:{record['file_id']}",
             event_type="document_stage",
             tool_name=f"{stage}_document",
             arguments={"file_id": record["file_id"], "stage": stage},
             result={"status": status, "file_id": record["file_id"]},
-            duration_ms=max(0, int((time.perf_counter() - started) * 1000)),
+            duration_ms=duration_ms,
             result_status=status,
             error_code=error_code,
-            metrics={"stage": stage, **(metrics or {})},
+            metrics={
+                "stage": stage,
+                **{key: value for key, value in standardized.items() if value is not None},
+                **provided,
+            },
         )
     except Exception:
         pass
+
+
+def _visual_region_trace_metrics(
+    regions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    handwriting_confidences = [
+        float(region["confidence"])
+        for region in regions
+        if region.get("recognition_type") in {"handwritten", "mixed"}
+        and isinstance(region.get("confidence"), (int, float))
+    ]
+    return {
+        "region_count": len(regions),
+        "successful_regions": sum(
+            region.get("status") == "success" for region in regions
+        ),
+        "failed_regions": sum(
+            region.get("status") in {"low_confidence", "empty", "failed"}
+            for region in regions
+        ),
+        "handwriting_region_count": sum(
+            region.get("recognition_type") in {"handwritten", "mixed"}
+            for region in regions
+        ),
+        "handwriting_confidence": (
+            min(handwriting_confidences) if handwriting_confidences else None
+        ),
+        "handwriting_confidence_average": (
+            round(sum(handwriting_confidences) / len(handwriting_confidences), 6)
+            if handwriting_confidences else None
+        ),
+    }
 
 
 def _mark_index_pending(record: dict[str, Any]) -> dict[str, Any] | None:

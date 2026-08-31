@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from backend.services.visual_safety import assess_visual_document_data
 from backend.tools.excel_utils import failure, success
 
 
@@ -99,6 +100,13 @@ class OCRRegionResult(BaseModel):
     table_structure_hint: Literal[
         "grid", "merged_cells", "borderless_hand_drawn", "unknown"
     ] | None = None
+    trust_level: Literal["untrusted_document_data"] = "untrusted_document_data"
+    instruction_authority: Literal["none"] = "none"
+    approval_authority: Literal["none"] = "none"
+    can_trigger_tool: bool = False
+    can_change_tool_risk: bool = False
+    can_approve: bool = False
+    detected_untrusted_patterns: list[str] = Field(default_factory=list)
 
 
 def detect_pdf_text(path: Path) -> dict[str, Any]:
@@ -690,11 +698,18 @@ def _apply_handwriting_safety(region: OCRRegionResult) -> OCRRegionResult:
     confidence = region.confidence
     status = region.status
     reasons: list[str] = []
+    visual_security = assess_visual_document_data(
+        searchable,
+        source_type=region.recognition_type,
+        confidence=region.confidence,
+        review_required=region.review_required,
+    )
     if status in {"empty", "failed"}:
         return region.model_copy(update={
             "key_field_type": key_field_type,
             "safe_for_high_impact": False,
             "safe_for_identity_match": False,
+            "detected_untrusted_patterns": visual_security["detected_patterns"],
         })
     if is_visual_uncertain and confidence is not None and confidence < policy.usable_confidence:
         status = "low_confidence"
@@ -712,6 +727,8 @@ def _apply_handwriting_safety(region: OCRRegionResult) -> OCRRegionResult:
     if conflict:
         status = "low_confidence"
         reasons.append("RECOGNITION_MODEL_CONFLICT")
+    if visual_security["detected_patterns"]:
+        reasons.append("VISUAL_UNTRUSTED_INSTRUCTION_LIKE_DATA")
     review_required = region.review_required or bool(reasons)
     identity_field = key_field_type in {"name", "student_id", "phone"}
     return region.model_copy(update={
@@ -720,13 +737,17 @@ def _apply_handwriting_safety(region: OCRRegionResult) -> OCRRegionResult:
         "review_required": review_required,
         "review_reason": region.review_reason or (";".join(dict.fromkeys(reasons)) or None),
         "safe_for_high_impact": (
-            region.safe_for_high_impact and status == "success" and not review_required
+            region.safe_for_high_impact
+            and status == "success"
+            and not review_required
+            and not visual_security["detected_patterns"]
         ),
         "safe_for_identity_match": (
             region.safe_for_identity_match
             and not (identity_field and review_required)
             and not conflict
         ),
+        "detected_untrusted_patterns": visual_security["detected_patterns"],
     })
 
 

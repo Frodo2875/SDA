@@ -28,7 +28,7 @@
 | V4-P0-008 | General Document Agent Core | P0 | V4.7 General Document Agent Core | VERIFIED | `document_agent_core.py`; `student_domain_adapter.py` | `tests/test_document_agent_core_v4.py`; legacy Agent/Tool tests | 专项 `4 passed`；完整回归 `374 passed` | 薄 façade/port/adapter，旧 Tool 名称与 handler 保持；细分证据见第 10 节 |
 | V4-P0-009 | Domain Router and General Document Tasks | P0 | V4.8 Domain Router | VERIFIED | `backend/services/domain_router.py`; `backend/tools/general_tools.py`; `backend/agent.py` | `tests/test_domain_router_v4.py`; legacy Agent/Trace tests | 专项 `9 passed`；完整回归 `383 passed` | 严格 Schema、General fallback、执行级 Tool 隔离和 Evidence 驱动的 Excel+PDF 规则任务；细分证据见第 11 节 |
 | V4-P0-010 | Controlled Agentic Retrieval | P0 | V4.9 Agentic Retrieval | VERIFIED | `backend/services/agentic_retrieval.py`; Core/Student Adapter thin ports | `tests/test_agentic_retrieval_v4.py`; legacy RAG/Evidence/Safety tests | 专项 `13 passed`；完整回归 `396 passed` | RAG 2.0 上方只读控制层；细分证据见第 12 节 |
-| V4-P0-011 | Visual Safety and Trace | P0 | V4.10 Visual Safety and Trace | NOT_STARTED | TBD | TBD | NOT_RUN | 必须复用 Agent Safety 与 Trace；视觉输入威胁模型待确认 |
+| V4-P0-011 | Visual Safety, Retrieval Guardrails and Trace Upgrade | P0 | V4.10 Visual Safety and Trace | VERIFIED | `visual_safety.py`; existing Safety/Approval; visual/agentic/trace services | `tests/test_visual_safety_trace_v4.py`; legacy Safety/Workflow/Trace tests | 专项 `10 passed`；完整回归 `406 passed` | 保持 V3 risk/Approval，视觉数据统一无权限，低置信度写入前 review；细分证据见第 13 节 |
 | V4-P0-012 | V4 Evaluation and Final Acceptance | P0 | V4.11 Evaluation and Final Acceptance | NOT_STARTED | TBD | TBD | NOT_RUN | 只登记真实固定数据集、测试结果和指标，不预设或编造数值 |
 
 ## 3. V4.0 基线审计证据
@@ -286,7 +286,34 @@
 - 本阶段未把控制层注册为新 LLM Tool，保持既有 Tool definitions 精确兼容；V4.10/V4.11
   安全专项与 Evaluation 未提前实现。
 
-## 13. 后续阶段审计规则
+## 13. V4.10 P0 Requirements Coverage Matrix
+
+| Requirement ID | Requirement | Priority | Target V4 Stage | Implementation Status | Code Location | Test Location | Verification Result | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| V4.10-P0-01 | JPG/PNG/image PDF/OCR/handwriting/visual model/table OCR/KIE 永远是 Untrusted Document Data | P0 | V4.10 | VERIFIED | `visual_safety.VISUAL_UNTRUSTED_SOURCES`; OCR/Visual/KIE/Table security fields | S401-S404；legacy visual tests | PASS | 原文保留；instruction/approval authority=none；不能触发 Tool/改变 policy/risk/批准 |
+| V4.10-P0-02 | 文档中的忽略规则、Tool JSON、confirmed/fake approval、screenshot/QR/button 不升级权限 | P0 | V4.10 | VERIFIED | `assess_visual_document_data`; OCR safety application；Agent prompt/context | S401、S402、S403、S404 | PASS | pattern 仅作安全标记；命中强制 review，ToolRegistry 不从文档数据解析调用 |
+| V4.10-P0-03 | 完全复用 V3 Tool Risk Policy | P0 | V4.10 | VERIFIED | existing `classify_tool_risk`; `assess_tool_execution` | S401 risk assertion；S407；V3 Safety tests | PASS | 未修改 HIGH/MEDIUM/LOW 集合或分类算法；Visual 读取仍为 LOW/MEDIUM，未知 mutation fail closed |
+| V4.10-P0-04 | write/delete/rollback HIGH 风险继续要求真实 Approval/HITL | P0 | V4.10 | VERIFIED | existing `assess_high_risk_action`; Confirmation DB binding | S404、S407；legacy Approval tests | PASS | 视觉 confirmed=true 无 approval authority；只有 DB pending→confirmed binding 可执行 |
+| V4.10-P0-05 | low-confidence/conflict visual field 不得直接进入高影响 write | P0 | V4.10 | VERIFIED | `assess_visual_high_impact_write`; `confirmation.create_pending_action(evidence_context)` | S406 | PASS | conflict=reject；low/review/unsafe=require_user_review；无 pending action；高 confidence 仍需真实 Approval |
+| V4.10-P0-06 | Agentic Retrieval 强制 max rounds/calls/timeout 与 immutable scope | P0 | V4.10 | VERIFIED | V4.9 `RetrievalBudget`; `_constrain_scope`; controlled loop | S405；V4.9 budget/scope tests | PASS | rewrite 无 scope 参数；全局 file/year/page/metadata 是不可扩张上界，越界前零调用失败 |
+| V4.10-P0-07 | Trace 包含 domain 与检索 round/query/scope/candidate/new/sufficiency transition/stop/latency | P0 | V4.10 | VERIFIED | Domain trace；`agentic_retrieval._attempt_record/_trace_attempt/_trace_stop` | S410；V4.9 Trace test | PASS | 同时保留 selected Evidence、reason、tool-call budget；scope/query 经过 bounded redaction serialization |
+| V4.10-P0-08 | Trace 包含 visual duration、page/image/region、OCR 结果、手写置信度、classification/KIE | P0 | V4.10 | VERIFIED | `document_index._record_document_stage`; visual understanding traces | S410；visual/OCR affected tests | PASS | classification/KIE 只记录状态、数量、置信度/时延，不记录原文或隐藏推理 |
+| V4.10-P0-09 | Trace/Evaluation 保留 LLM/OCR/Vision counts、latency、Workflow/Async/Approval/Tool/Token/Cost/Error/Version | P0 | V4.10 | VERIFIED | `trace_service`; `evaluation_service`; existing Runtime traces | S406/S410；legacy Trace Evaluation/Workflow/Async/Version tests | PASS | 新增 counts/visual/agentic 段；旧顶层与 token/cost/workflow/error 字段不移除 |
+| V4.10-P0-10 | Trace 绝不保存完整 Chain-of-Thought | P0 | V4.10 | VERIFIED | `trace_service._strip_hidden_reasoning` | S410 | PASS | arguments/metrics 递归丢弃 CoT/reasoning/thinking/system/full prompt 键，只保存可观察结果 |
+| V4.10-P0-11 | Workflow resume 与 atomic reindex/reprocess 不回归 | P0 | V4.10 | VERIFIED | existing Task Runner；atomic index activation | S408、S409；legacy Workflow/Router/OCR tests | PASS | resume 不重放已完成 write；损坏图片重处理保留旧 active chunks/queryable/indexed |
+| V4.10-P0-12 | V1–V4.9 全量回归保持 | P0 | V4.10 | VERIFIED | 原有 modules；增量安全字段/可选 evidence_context | 完整 `tests/` | 首次 `406 passed in 29.76s`；最终 `406 passed in 31.26s` | 无删除、skip 或弱化旧测试；未改变 Tool definitions、RAG 2.0 或 Approval 状态机 |
+
+### 13.1 V4.10 边界与限制
+
+- Visual injection pattern 是确定性安全信号，不是恶意内容准确率指标；无论是否命中，视觉
+  来源的 authority 都固定为 none。命中不会删除原文，只阻止其成为控制/审批依据。
+- 低置信度视觉 Evidence 必须在产品核对入口完成后再重新提交；本阶段后端明确返回
+  require_user_review/reject，不把文档中的 confirmed=true 当作核对结果。
+- Trace 记录可观察 query/scope/计数/状态/时延并经过 redaction；不记录 Chain-of-Thought、
+  thinking、system/full prompt。Token/Cost 仍只来自 provider 实际 usage。
+- V4.11 最终 Evaluation 与验收未提前实现。
+
+## 14. 后续阶段审计规则
 
 每个 V4 阶段开始前，应以正式阶段需求补充或拆分对应 Requirement ID，并填写：
 

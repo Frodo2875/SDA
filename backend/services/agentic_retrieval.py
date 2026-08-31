@@ -321,17 +321,21 @@ def run_controlled_retrieval(
                 attempt = _attempt_record(
                     round_no, need, query, scope_payload, 0, [], 0,
                     need.status, "error", "SAFETY_POLICY_BLOCKED_RETRIEVAL",
+                    sufficiency_before=evaluation_before["status"],
                 )
                 attempts.append(attempt)
                 _trace_attempt(session_id, attempt)
                 stop_reason = "error"
                 break
+            retrieval_started = time.perf_counter()
             try:
                 result = retrieve(deepcopy(scope_payload), query, budget.top_k)
             except Exception as exc:
                 attempt = _attempt_record(
                     round_no, need, query, scope_payload, 0, [], 0,
                     need.status, "error", f"RETRIEVAL_ERROR:{type(exc).__name__}",
+                    sufficiency_before=evaluation_before["status"],
+                    latency_ms=max(0, round((time.perf_counter() - retrieval_started) * 1000)),
                 )
                 attempts.append(attempt)
                 _trace_attempt(session_id, attempt)
@@ -346,6 +350,8 @@ def run_controlled_retrieval(
                 attempt = _attempt_record(
                     round_no, need, query, scope_payload, 0, [], 0,
                     need.status, "error", str(result_error or "INVALID_RETRIEVAL_RESULT"),
+                    sufficiency_before=evaluation_before["status"],
+                    latency_ms=max(0, round((time.perf_counter() - retrieval_started) * 1000)),
                 )
                 attempts.append(attempt)
                 _trace_attempt(session_id, attempt)
@@ -379,6 +385,8 @@ def run_controlled_retrieval(
                 evaluation["status"],
                 None,
                 evaluation["reason_code"],
+                sufficiency_before=evaluation_before["status"],
+                latency_ms=max(0, round((time.perf_counter() - retrieval_started) * 1000)),
             )
             attempts.append(attempt)
             _trace_attempt(session_id, attempt)
@@ -544,7 +552,11 @@ def _attempt_record(
     sufficiency: SufficiencyStatus,
     stop_reason: StopReason | None,
     reason_code: str,
+    *,
+    sufficiency_before: SufficiencyStatus | None = None,
+    latency_ms: int = 0,
 ) -> dict[str, Any]:
+    before = sufficiency_before or need.status
     return {
         "round": round_no,
         "need_id": need.need_id,
@@ -554,8 +566,12 @@ def _attempt_record(
         "selected_evidence": selected_evidence,
         "new_evidence_count": new_evidence_count,
         "sufficiency": sufficiency,
+        "sufficiency_before": before,
+        "sufficiency_after": sufficiency,
+        "sufficiency_transition": f"{before}->{sufficiency}",
         "stop_reason": stop_reason,
         "reason_code": reason_code,
+        "latency_ms": max(0, int(latency_ms)),
     }
 
 
@@ -596,11 +612,20 @@ def _trace_attempt(session_id: str, attempt: dict[str, Any]) -> None:
                 "message": attempt["reason_code"],
             },
             result_status="failed" if attempt["stop_reason"] == "error" else "success",
+            duration_ms=attempt["latency_ms"],
             metrics={
-                key: attempt[key] for key in (
-                    "round", "need_id", "candidates", "selected_evidence",
-                    "new_evidence_count", "sufficiency", "stop_reason", "reason_code",
-                )
+                "retrieval_round": attempt["round"],
+                "query": attempt["query"],
+                "scope": attempt["scope"],
+                "candidate_count": attempt["candidates"],
+                **{
+                    key: attempt[key] for key in (
+                        "round", "need_id", "candidates", "selected_evidence",
+                        "new_evidence_count", "sufficiency", "sufficiency_before",
+                        "sufficiency_after", "sufficiency_transition", "stop_reason",
+                        "reason_code", "latency_ms",
+                    )
+                },
             },
         )
     except Exception:

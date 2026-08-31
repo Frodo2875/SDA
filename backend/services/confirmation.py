@@ -28,6 +28,8 @@ from backend.services.file_versioning import (
     preview_word_diff,
 )
 from backend.services.file_lifecycle import delete_uploaded_file
+from backend.services.trace_service import record_trace
+from backend.services.visual_safety import assess_visual_high_impact_write
 from backend.tools.file_tools import get_file_info
 from backend.tools.word_tools import write_word
 
@@ -60,6 +62,7 @@ def create_pending_action(
     student_name: str,
     content: str,
     task_id: str | None = None,
+    evidence_context: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Freeze one proposed Word append without modifying the target file."""
     file_result = get_file_info(target_file)
@@ -73,6 +76,46 @@ def create_pending_action(
         return _failure("INVALID_TARGET_FILE", "待确认写入目标必须是 Word 文件")
     if not isinstance(content, str) or not content.strip():
         return _failure("INVALID_ACTION_CONTENT", "待写入内容不能为空")
+
+    visual_guard = assess_visual_high_impact_write(evidence_context)
+    try:
+        if visual_guard["reason_code"] != "NO_UNSAFE_VISUAL_EVIDENCE":
+            record_trace(
+                session_id=session_id,
+                task_id=task_id,
+                event_type="visual_write_guard",
+                tool_name="write_word",
+                arguments={"evidence_ids": visual_guard["evidence_ids"]},
+                result={
+                    "ok": visual_guard["decision"] == "confirm",
+                    "status": visual_guard["decision"],
+                    "message": visual_guard["reason_code"],
+                },
+                result_status=visual_guard["decision"],
+                error_code=(
+                    None if visual_guard["decision"] == "confirm"
+                    else visual_guard["reason_code"]
+                ),
+                metrics={
+                    "review_decision": visual_guard["decision"],
+                    "reason_code": visual_guard["reason_code"],
+                    "real_approval_still_required": True,
+                },
+            )
+    except Exception:
+        pass
+    if visual_guard["decision"] == "reject":
+        return _failure(
+            "VISUAL_FIELD_REJECTED",
+            "视觉字段 Evidence 存在冲突，已拒绝进入高影响写入流程。",
+            visual_guard,
+        )
+    if visual_guard["decision"] == "require_user_review":
+        return _failure(
+            "VISUAL_FIELD_REVIEW_REQUIRED",
+            "低置信度视觉字段必须先由用户核对，不能直接进入写入 Approval。",
+            visual_guard,
+        )
 
     record = database.get_file_record(target_file)
     if record is None:

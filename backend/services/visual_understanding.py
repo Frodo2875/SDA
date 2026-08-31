@@ -6,6 +6,7 @@ Classification and KIE are derived views. They never replace or mutate source OC
 import hashlib
 import os
 import re
+import time
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -14,6 +15,7 @@ from backend import database
 from backend.document_blocks import BlockType, DocumentBlock
 from backend.evidence import build_evidence, make_evidence_id
 from backend.services import ocr_service
+from backend.services.trace_service import record_trace
 from backend.tools.excel_utils import failure, success
 
 
@@ -35,6 +37,13 @@ class VisualBlock(DocumentBlock):
     review_required: bool = False
     safe_for_high_impact: bool = True
     safe_for_identity_match: bool = True
+    trust_level: Literal["untrusted_document_data"] = "untrusted_document_data"
+    instruction_authority: Literal["none"] = "none"
+    approval_authority: Literal["none"] = "none"
+    can_trigger_tool: bool = False
+    can_change_tool_risk: bool = False
+    can_approve: bool = False
+    detected_untrusted_patterns: list[str] = Field(default_factory=list)
 
     def visual_dump(self) -> dict[str, Any]:
         payload = self.model_dump()
@@ -76,6 +85,13 @@ class VisualKeyField(BaseModel):
     source_parser: str | None = None
     source_model: str | None = None
     evidence: dict[str, Any]
+    trust_level: Literal["untrusted_document_data"] = "untrusted_document_data"
+    instruction_authority: Literal["none"] = "none"
+    approval_authority: Literal["none"] = "none"
+    can_trigger_tool: bool = False
+    can_change_tool_risk: bool = False
+    can_approve: bool = False
+    detected_untrusted_patterns: list[str] = Field(default_factory=list)
 
 
 STUDENT_SCHEMA_HINTS = {
@@ -154,6 +170,15 @@ def extract_visual_blocks(
             review_required=bool(region.get("review_required")),
             safe_for_high_impact=bool(region.get("safe_for_high_impact", not degraded)),
             safe_for_identity_match=bool(region.get("safe_for_identity_match", not degraded)),
+            trust_level="untrusted_document_data",
+            instruction_authority="none",
+            approval_authority="none",
+            can_trigger_tool=False,
+            can_change_tool_risk=False,
+            can_approve=False,
+            detected_untrusted_patterns=list(
+                region.get("detected_untrusted_patterns") or []
+            ),
             status="degraded" if degraded else "normal",
             warnings=warnings,
         ))
@@ -175,6 +200,7 @@ def classify_document(
     blocks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Conservatively classify visual documents; unknown remains queryable."""
+    started = time.perf_counter()
     record = database.get_file_record_by_id(str(file_id).strip())
     if record is None:
         return failure("FILE_NOT_FOUND", "未找到指定文件")
@@ -187,7 +213,20 @@ def classify_document(
             status="failed", reason="VISUAL_CLASSIFICATION_FAILED",
             general_query_allowed=True,
         )
-    return success(classification.model_dump(), "文档分类完成")
+    result = success(classification.model_dump(), "文档分类完成")
+    _record_visual_understanding_trace(
+        record["file_id"],
+        "classification",
+        started,
+        classification.status,
+        {
+            "classification_status": classification.status,
+            "document_type": classification.document_type,
+            "classification_confidence": classification.confidence,
+            "region_count": len(classification.evidence_region_ids),
+        },
+    )
+    return result
 
 
 def extract_key_fields(
@@ -198,6 +237,7 @@ def extract_key_fields(
     blocks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Extract explicit label/value candidates with mandatory source-region evidence."""
+    started = time.perf_counter()
     record = database.get_file_record_by_id(str(file_id).strip())
     if record is None:
         return failure("FILE_NOT_FOUND", "未找到指定文件")
@@ -257,6 +297,13 @@ def extract_key_fields(
                 value_summary=value,
                 text_excerpt=line.strip(),
                 review_required=needs_review,
+                trust_level="untrusted_document_data",
+                instruction_authority="none",
+                approval_authority="none",
+                can_trigger_tool=False,
+                can_change_tool_risk=False,
+                can_approve=False,
+                detected_untrusted_patterns=list(block.detected_untrusted_patterns),
             )
             field_id = hashlib.sha256(
                 f"{evidence['evidence_id']}:{field_name}".encode("utf-8")
@@ -278,8 +325,15 @@ def extract_key_fields(
                 source_parser=block.source_parser,
                 source_model=block.source_model,
                 evidence=evidence,
+                trust_level="untrusted_document_data",
+                instruction_authority="none",
+                approval_authority="none",
+                can_trigger_tool=False,
+                can_change_tool_risk=False,
+                can_approve=False,
+                detected_untrusted_patterns=list(block.detected_untrusted_patterns),
             ))
-    return success(
+    result = success(
         {
             "file_id": record["file_id"],
             "domain": domain,
@@ -293,6 +347,51 @@ def extract_key_fields(
         },
         "视觉关键字段候选提取完成",
     )
+    _record_visual_understanding_trace(
+        record["file_id"],
+        "kie",
+        started,
+        result["data"]["status"],
+        {
+            "domain": domain,
+            "kie_status": result["data"]["status"],
+            "kie_field_count": len(fields),
+            "kie_review_required_count": sum(
+                field.status == "review_required" for field in fields
+            ),
+            "region_count": len({field.source_region_id for field in fields}),
+        },
+    )
+    return result
+
+
+def _record_visual_understanding_trace(
+    file_id: str,
+    stage: str,
+    started: float,
+    status: str,
+    metrics: dict[str, Any],
+) -> None:
+    try:
+        duration_ms = max(0, round((time.perf_counter() - started) * 1000))
+        record_trace(
+            session_id=f"document:{file_id}",
+            event_type="visual_understanding",
+            tool_name=f"{stage}_document",
+            arguments={"file_id": file_id, "stage": stage},
+            result={"ok": status != "failed", "status": status, "message": stage},
+            duration_ms=duration_ms,
+            result_status=status,
+            metrics={
+                "stage": stage,
+                "latency_ms": duration_ms,
+                "visual_processing_duration_ms": duration_ms,
+                "vision_call_count": 1,
+                **metrics,
+            },
+        )
+    except Exception:
+        pass
 
 
 def _load_visual_blocks(

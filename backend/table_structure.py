@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from backend.services.visual_safety import assess_visual_document_data
+
 
 class TableCell(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -25,6 +27,13 @@ class TableCell(BaseModel):
     source_model: str | None = Field(default=None, min_length=1, max_length=128)
     status: Literal["reliable", "low_confidence", "failed"] = "reliable"
     safe_for_calculation: bool = True
+    trust_level: Literal["untrusted_document_data"] = "untrusted_document_data"
+    instruction_authority: Literal["none"] = "none"
+    approval_authority: Literal["none"] = "none"
+    can_trigger_tool: bool = False
+    can_change_tool_risk: bool = False
+    can_approve: bool = False
+    detected_untrusted_patterns: list[str] = Field(default_factory=list)
 
 
 class TableRow(BaseModel):
@@ -75,6 +84,12 @@ class TableStructure(BaseModel):
     source_model: str | None = Field(default=None, min_length=1, max_length=128)
     source_region_ids: list[str] = Field(default_factory=list)
     fallback: dict[str, Any] | None = None
+    trust_level: Literal["untrusted_document_data"] = "untrusted_document_data"
+    instruction_authority: Literal["none"] = "none"
+    approval_authority: Literal["none"] = "none"
+    can_trigger_tool: bool = False
+    can_change_tool_risk: bool = False
+    can_approve: bool = False
 
 
 def build_simple_table(
@@ -101,6 +116,12 @@ def build_simple_table(
     for row_index, row in enumerate(rows):
         for column_index, text in enumerate(row):
             values = geometry.get((row_index, column_index)) or {}
+            security = assess_visual_document_data(
+                str(text),
+                source_type="table_ocr",
+                confidence=values.get("confidence"),
+                review_required=values.get("status") != "reliable",
+            )
             cells.append(
                 TableCell(
                     cell_id=_stable_id(table_id, "cell", row_index, column_index),
@@ -119,6 +140,7 @@ def build_simple_table(
                     source_model=values.get("source_model", source_model),
                     status=values.get("status", "reliable"),
                     safe_for_calculation=bool(values.get("safe_for_calculation", True)),
+                    detected_untrusted_patterns=security["detected_patterns"],
                 )
             )
     row_models = [

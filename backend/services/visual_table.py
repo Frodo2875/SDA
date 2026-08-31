@@ -178,6 +178,13 @@ def calculate_visual_table(
             value_summary=cell.cell_text,
             text_excerpt=cell.cell_text,
             review_required=False,
+            trust_level="untrusted_document_data",
+            instruction_authority="none",
+            approval_authority="none",
+            can_trigger_tool=False,
+            can_change_tool_risk=False,
+            can_approve=False,
+            detected_untrusted_patterns=list(cell.detected_untrusted_patterns),
         )
         # Retain the V4.5 response aliases while the persisted locator uses the
         # canonical Evidence table/cell fields.

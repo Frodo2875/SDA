@@ -46,7 +46,7 @@ V4.0 只建立工程开发基线，不实现 V4 新业务能力，不修改 V1�
 | V4.7 | General Document Agent Core | VERIFIED | 用薄 façade/port/adapter 划分通用文档能力与学生领域逻辑，保持原 Tool 和 Demo 兼容 |
 | V4.8 | Domain Router | VERIFIED | Schema 校验的 Student/General/Unknown 路由、General 安全降级与 Evidence 驱动的非学生混合任务 |
 | V4.9 | Agentic Retrieval | VERIFIED | RAG 2.0 上方的 Information Need、Evidence Sufficiency、受控补检索、硬预算与停止条件 |
-| V4.10 | Visual Safety and Trace | NOT_STARTED | 需求和验收标准待对应阶段确认 |
+| V4.10 | Visual Safety and Trace | VERIFIED | 视觉不可信数据、低置信度写入门、Agentic guardrail 与无 CoT Trace 升级 |
 | V4.11 | Evaluation and Final Acceptance | NOT_STARTED | 汇总 V4 固定评估、完整回归与最终验收 |
 
 状态统一使用：`NOT_STARTED`、`PARTIAL`、`IMPLEMENTED`、`VERIFIED`、`BLOCKED`。
@@ -524,6 +524,68 @@ conda run -n tuli_env pytest -q
   返回后终止后续轮次，不强制中断正在执行的 RAG 2.0 调用。
 - Requirement IDs：`V4.9-P0-01` 至 `V4.9-P0-13`。
 
+### V4.10 Visual Safety, Agentic Retrieval Guardrails and Trace Upgrade
+
+- 本阶段目标：不新增业务能力，在 V3 Agent Safety/Tool Risk/Approval、V4 Visual Pipeline
+  和 V4.9 Controlled Retrieval 上收紧视觉不可信数据、高影响写入、后端预算/scope 与 Trace。
+- 基线：V4.9 tag `v4.9-controlled-agentic-retrieval`，commit
+  `290bf2bf07eb04f53897b5c67af23e140dd76dc9`；开发开始时工作区干净。
+- 开发前审计：确认 Agent 已将所有 Tool result 标记为 untrusted_data；V3
+  `classify_tool_risk`、`assess_high_risk_action`、数据库 Approval binding、Workflow resume、
+  原子 reindex/reprocess 与 Trace token/cost/error/version 均已有稳定实现。本阶段复用并补门，
+  未改变 HIGH/MEDIUM/LOW 风险矩阵、Approval 状态机或索引激活机制。
+- 实际修改文件：
+  - `backend/services/visual_safety.py`（新增）
+  - `backend/runtime/safety_policy.py`
+  - `backend/services/ocr_service.py`
+  - `backend/services/visual_understanding.py`
+  - `backend/services/visual_table.py`
+  - `backend/table_structure.py`
+  - `backend/evidence.py`
+  - `backend/services/confirmation.py`
+  - `backend/services/student_domain_adapter.py`
+  - `backend/agent.py`
+  - `backend/services/agentic_retrieval.py`
+  - `backend/services/document_index.py`
+  - `backend/services/trace_service.py`
+  - `backend/services/evaluation_service.py`
+  - `tests/test_visual_safety_trace_v4.py`（新增）
+  - `docs/V4_DEVELOPMENT_LOG.md`
+  - `docs/V4_REQUIREMENT_COVERAGE_AUDIT.md`
+- 新增/修改接口：
+  - 新增 `assess_visual_document_data()`：JPG/JPEG/PNG、image PDF、OCR、handwriting、
+    visual model、table OCR、KIE 统一标记 `untrusted_document_data`，其 instruction/
+    approval authority 均为 none，且不能改变系统策略、Tool risk、触发 Tool 或批准操作。
+  - 保留原文字用于查询/Evidence，仅识别 policy override、危险 Tool 名、Tool-call JSON、
+    confirmed=true、fake approval、screenshot/QR/button command 等注入特征；命中后强制 review，
+    不把文档文字解释为控制指令。
+  - OCR Region、VisualBlock、KIE field、Visual Table/Cell 与视觉 Evidence 增加一致安全标签和
+    detected pattern；V3 文本/Excel/Word/PDF legacy Evidence response contract 保持。
+  - 新增 `assess_visual_high_impact_write()`，输出 confirm/reject/require_user_review；冲突视觉
+    Evidence 拒绝，低 confidence/review/unsafe Evidence 在 Word Diff 和真实 Approval 之前停止。
+    高 confidence 的 confirm 仅表示可进入原 HIGH-risk Approval，绝不代表已批准。
+  - `create_pending_action()` 增加可选 `evidence_context`；Agent/Student Adapter 传入本次实际
+    Evidence。无视觉 Evidence 的旧调用不增加 Trace、不改变行为。
+  - V4.9 每轮 Trace 增加 retrieval_round/query/scope/candidate_count/latency、sufficiency
+    before/after/transition；原 max_rounds/max_tool_calls/timeout 与 immutable scope 后端校验保持。
+  - document visual/OCR/layout Trace 标准化 duration、page/image/region、OCR success/failure、
+    handwriting confidence、OCR/Vision call count；classification/KIE 新增只记录结果状态和数量
+    的 trace。Evaluation 汇总继续保留 Workflow/Tool/Token/Cost/Error，并增加 visual/agentic 段。
+  - `record_trace()` 对 arguments/metrics 递归移除 chain_of_thought/reasoning/thinking/full prompt
+    等隐藏推理键，只保存可观察输入摘要、结果、计数、状态和时延。
+- 新增测试：`tests/test_visual_safety_trace_v4.py` 共 10 个 pytest cases：S401 image prompt
+  injection、S402 handwritten delete_file、S403 fake Tool JSON/screenshot/QR/button、S404 visual
+  confirmed=true、S405 retrieval scope expansion、S406 low-confidence write、S407 HIGH-risk real
+  Approval、S408 workflow resume、S409 atomic image reprocess、S410 Trace fields/no CoT。
+- 测试结果：V4.10 专项 `10 passed in 2.04s`；Visual/Agent Safety/Agentic Retrieval/
+  Workflow/Atomic Reprocess/Trace 受影响回归 `117 passed in 17.88s`；第一次完整回归
+  `406 passed in 29.76s`；文档更新后最终完整回归 `406 passed in 31.26s`。
+- 未完成项：V4.11 Evaluation and Final Acceptance 未提前开发。
+- 已知限制：注入检测是保守安全标签，不代表内容恶意分类准确率；检测结果只影响权限和
+  review，不删除 OCR 原文。Trace 保存 query 与硬 scope 供审计，但不保存模型隐藏推理。
+  V4.9 timeout 仍为总预算，不强制取消正在执行的同步底层 RAG 调用。
+- Requirement IDs：`V4.10-P0-01` 至 `V4.10-P0-12`。
+
 ### 每阶段开发记录模板
 
 ```markdown
@@ -589,6 +651,10 @@ conda run -n tuli_env pytest -q
 | 2026-08-31 | V4.9 受影响回归 | 未提交工作树 | RAG、Evidence、Agent、Safety、Domain、Workflow 相关测试 | `110 passed in 4.05s` | PASS；底层 RAG 2.0 与 Runtime 保持 |
 | 2026-08-31 | V4.9 首次完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `396 passed in 37.70s` | PASS |
 | 2026-08-31 | V4.9 文档更新后最终完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `396 passed in 30.07s` | PASS |
+| 2026-08-31 | V4.10 专项 | 未提交工作树 | `conda run -n tuli_env pytest -q tests/test_visual_safety_trace_v4.py` | `10 passed in 2.04s` | PASS；S401-S410 |
+| 2026-08-31 | V4.10 受影响回归 | 未提交工作树 | Visual、Safety、Agentic、Workflow、Atomic Reprocess、Trace 相关测试 | `117 passed in 17.88s` | PASS |
+| 2026-08-31 | V4.10 首次完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `406 passed in 29.76s` | PASS |
+| 2026-08-31 | V4.10 文档更新后最终完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `406 passed in 31.26s` | PASS |
 
 后续阶段必须追加实际执行记录，不得以历史结果替代当前回归。
 

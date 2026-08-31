@@ -55,6 +55,13 @@ class Evidence(BaseModel):
     safe_for_identity_match: bool | None = None
     conflict_sources: list[dict[str, Any]] = Field(default_factory=list)
     evidence_status: Literal["supported", "review_required", "conflict"] = "supported"
+    trust_level: Literal["untrusted_document_data"] | None = None
+    instruction_authority: Literal["none"] | None = None
+    approval_authority: Literal["none"] | None = None
+    can_trigger_tool: bool | None = None
+    can_change_tool_risk: bool | None = None
+    can_approve: bool | None = None
+    detected_untrusted_patterns: list[str] = Field(default_factory=list)
 
 
 def make_evidence_id(**parts: Any) -> str:

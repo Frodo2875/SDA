@@ -89,6 +89,16 @@ def _summary(
         bool(_metrics(item).get("pricing_configured")) for item in llm_traces
     )
     stage_metrics = _stage_summary(traces)
+    observable_metrics = [_metrics(item) for item in traces]
+    agentic_rounds = [
+        item for item in observable_metrics if item.get("retrieval_round") is not None
+    ]
+    visual_metrics = [
+        item for item in observable_metrics
+        if item.get("visual_processing_duration_ms") is not None
+        or item.get("classification_status") is not None
+        or item.get("kie_status") is not None
+    ]
     errors = [item for item in traces if item.get("error_code")]
     summary = {
         "tool": {
@@ -151,6 +161,9 @@ def _summary(
         "counts": {
             "tool_calls": len(tool_traces),
             "llm_calls": len(llm_traces),
+            "ocr_calls": sum(int(item.get("ocr_call_count") or 0) for item in observable_metrics),
+            "vision_calls": sum(int(item.get("vision_call_count") or 0) for item in observable_metrics),
+            "retrieval_rounds": len(agentic_rounds),
             "trace_events": len(traces),
         },
         "latency": {
@@ -163,6 +176,52 @@ def _summary(
             "max_duration_ms": max(all_durations) if all_durations else None,
         },
         "stages": stage_metrics,
+        "visual": {
+            "processing_duration_ms": sum(
+                int(item.get("visual_processing_duration_ms") or 0)
+                for item in visual_metrics
+            ),
+            "page_count": sum(int(item.get("page_count") or 0) for item in visual_metrics),
+            "image_count": sum(int(item.get("image_count") or 0) for item in visual_metrics),
+            "region_count": sum(int(item.get("region_count") or 0) for item in visual_metrics),
+            "ocr_success_count": sum(
+                int(item.get("ocr_success_count") or 0) for item in visual_metrics
+            ),
+            "ocr_failure_count": sum(
+                int(item.get("ocr_failure_count") or 0) for item in visual_metrics
+            ),
+            "handwriting_confidence": [
+                float(item["handwriting_confidence"])
+                for item in visual_metrics
+                if isinstance(item.get("handwriting_confidence"), (int, float))
+            ],
+            "classification_status": [
+                item["classification_status"]
+                for item in visual_metrics if item.get("classification_status") is not None
+            ],
+            "kie_status": [
+                item["kie_status"]
+                for item in visual_metrics if item.get("kie_status") is not None
+            ],
+        },
+        "agentic_retrieval": {
+            "rounds": len(agentic_rounds),
+            "candidate_count": sum(
+                int(item.get("candidate_count") or 0) for item in agentic_rounds
+            ),
+            "new_evidence_count": sum(
+                int(item.get("new_evidence_count") or 0) for item in agentic_rounds
+            ),
+            "sufficiency_transitions": [
+                item["sufficiency_transition"]
+                for item in agentic_rounds
+                if item.get("sufficiency_transition")
+            ],
+            "stop_reasons": [
+                item["stop_reason"]
+                for item in observable_metrics if item.get("stop_reason")
+            ],
+        },
         "errors": {
             "count": len(errors),
             "codes": dict(sorted(Counter(str(item["error_code"]) for item in errors).items())),

@@ -6,6 +6,7 @@ from typing import Any
 
 from backend import database
 from backend.services.trace_service import record_trace
+from backend.services.visual_safety import VISUAL_UNTRUSTED_SOURCES
 
 
 class FileTrust(str, Enum):
@@ -64,7 +65,7 @@ UNTRUSTED_DOCUMENT_SOURCES = frozenset(
         "ppt_text",
         "document_block",
     }
-)
+) | VISUAL_UNTRUSTED_SOURCES
 
 
 @dataclass(frozen=True)
