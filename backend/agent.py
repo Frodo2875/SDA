@@ -26,6 +26,11 @@ from backend.runtime.safety_policy import (
     record_safety_trace,
 )
 from backend.runtime.context_manager import resolve_message, update_after_run
+from backend.services.domain_router import (
+    allowed_tool_names,
+    record_domain_route_trace,
+    route_domain,
+)
 from backend.services.redaction import redacted_json, redact_value
 from backend.services.student_domain_adapter import STUDENT_DOMAIN_ADAPTER
 from backend.services.trace_service import llm_usage_metrics, record_trace
@@ -61,6 +66,11 @@ SYSTEM_PROMPT = """你是学生材料智能文档助手。
 21. 最终回答只能引用本次答案实际使用的工具 Evidence；Memory、历史回答和未使用的检索候选不能作为事实 Evidence。OCR/KIE 冲突 Evidence 只能提示核对，不能静默选边。
 请用简洁中文整合工具结果并回答。"""
 
+GENERAL_DOMAIN_PROMPT = """当前请求按 General Document Core 处理。
+只能使用通用文件、Schema、query_table、aggregate_table、retrieve_document、Evidence 和通用校验能力。
+不得要求、补造或推断 student_id、学生身份或学生专属字段；未知领域也按本规则安全降级。
+所有数值筛选和聚合必须由 Python Tool 完成，规则判断必须引用实际规则 Evidence。"""
+
 
 TOOL_DEFINITIONS: list[dict[str, Any]] = TOOL_REGISTRY.definitions()
 TOOL_FUNCTIONS = TOOL_REGISTRY.handlers()
@@ -93,6 +103,7 @@ def _execute_tool(
     raw_arguments: Any,
     executed_calls: list[dict[str, Any]] | None = None,
     policy_context: dict[str, Any] | None = None,
+    permitted_tool_names: frozenset[str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Validate model-generated arguments and execute an allow-listed tool."""
     spec = TOOL_REGISTRY.get(name)
@@ -112,6 +123,11 @@ def _execute_tool(
             "INVALID_TOOL_ARGUMENTS", f"工具 {name} 的参数未通过 Schema 校验"
         )
     arguments = validated.model_dump()
+    if permitted_tool_names is not None and name not in permitted_tool_names:
+        return arguments, _invalid_tool_result(
+            "TOOL_NOT_ALLOWED_FOR_DOMAIN",
+            f"当前 Domain 不允许调用工具：{name}",
+        )
     assessment = assess_tool_execution(
         tool_name=name,
         arguments=arguments,
@@ -180,19 +196,21 @@ def _execute_tool_with_retry(
     raw_arguments: Any,
     executed_calls: list[dict[str, Any]] | None = None,
     policy_context: dict[str, Any] | None = None,
+    permitted_tool_names: frozenset[str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], int]:
     """Add bounded retries around the existing validated Tool execution path."""
     spec = TOOL_REGISTRY.get(name)
     if spec is None:
         arguments, result = _execute_tool(
-            name, raw_arguments, executed_calls, policy_context
+            name, raw_arguments, executed_calls, policy_context, permitted_tool_names
         )
         return arguments, result, 0
     return execute_with_retry(
         tool_name=name,
         raw_arguments=raw_arguments,
         execute_once=lambda current_arguments: _execute_tool(
-            name, current_arguments, executed_calls, policy_context
+            name, current_arguments, executed_calls, policy_context,
+            permitted_tool_names,
         ),
         retryable=spec.retryable,
         read_only=spec.read_only,
@@ -556,10 +574,16 @@ async def _run_agent_core(
     max_tool_rounds: int = MAX_TOOL_ROUNDS,
     task_id: str | None = None,
     context_prompt: str | None = None,
+    domain_route: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run the model/tool loop until a final answer or the safety limit is reached."""
     llm_client = client or LLMClient()
     messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    permitted_tools = (
+        allowed_tool_names(domain_route) if domain_route is not None else None
+    )
+    if domain_route is not None and domain_route.get("effective_domain") == "general":
+        messages.append({"role": "system", "content": GENERAL_DOMAIN_PROMPT})
     if context_prompt:
         messages.append({"role": "system", "content": context_prompt})
     messages.append({"role": "user", "content": message})
@@ -601,6 +625,12 @@ async def _run_agent_core(
                 metrics={
                     "pricing_configured": usage["pricing_configured"],
                     "usage_available": usage["usage_available"],
+                    **({
+                        "domain": domain_route["domain"],
+                        "effective_domain": domain_route["effective_domain"],
+                        "task_type": domain_route["task_type"],
+                        "reason_code": domain_route["reason_code"],
+                    } if domain_route is not None else {}),
                 },
             )
         except Exception:
@@ -761,6 +791,7 @@ async def _run_agent_core(
                         "task_id": task_id,
                         "step_id": step_id,
                     },
+                    permitted_tools,
                 )
             duration_ms = max(0, round((time.perf_counter() - started) * 1000))
             executed_calls.append(
@@ -861,7 +892,16 @@ async def run_agent(
     """Run one Agent request and persist both sides of the chat."""
     context_resolution = resolve_message(session_id, message)
     resolved_message = context_resolution["message"]
-    plan = create_plan(resolved_message)
+    # Reuse the existing LLM Trace event for route metadata so V3 Trace
+    # cardinality remains compatible. Standalone routing traces by default.
+    domain_route = route_domain(
+        resolved_message, session_id=session_id, trace=False
+    )
+    plan = (
+        create_plan(resolved_message)
+        if domain_route["effective_domain"] == "student"
+        else None
+    )
     task = (
         start_task(session_id=session_id, user_message=message, plan=plan)
         if plan is not None
@@ -876,11 +916,13 @@ async def run_agent(
         status="received",
     )
     if context_resolution["clarification"]:
+        record_domain_route_trace(domain_route, session_id)
         result = {
             "answer": context_resolution["clarification"],
             "tool_calls": [],
             "status": "clarification_required",
             "evidence": [],
+            "route": domain_route,
         }
         database.save_chat_message(
             session_id=session_id,
@@ -899,6 +941,7 @@ async def run_agent(
             max_tool_rounds=max_tool_rounds,
             task_id=task_id,
             context_prompt=context_resolution["context_prompt"],
+            domain_route=domain_route,
         )
     except Exception:
         if task_id is not None:
@@ -920,6 +963,7 @@ async def run_agent(
         result["task_id"] = task_id
 
     result["evidence"] = _collect_evidence(result.get("tool_calls") or [])
+    result["route"] = domain_route
     update_after_run(session_id=session_id, result=result, task_id=task_id)
 
     database.save_chat_message(

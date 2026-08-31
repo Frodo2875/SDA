@@ -26,7 +26,7 @@
 | V4-P0-006 | Visual Table | P0 | V4.5 Visual Table | VERIFIED | `backend/services/visual_table.py`; `backend/table_structure.py` | `tests/test_visual_table_v4.py` | 专项 `8 passed`；完整回归 `363 passed` | 复用 V3 Table schema；细分证据见第 8 节 |
 | V4-P0-007 | Evidence 3.0 | P0 | V4.6 Evidence 3.0 | VERIFIED | `backend/evidence.py`; `backend/services/evidence_locator.py`; existing `evidence_locations` | `tests/test_evidence_v4.py`; legacy Evidence tests | 专项 `7 passed`；完整回归 `370 passed` | 增量复用 Evidence 2.0 与原定位/Trace；细分证据见第 9 节 |
 | V4-P0-008 | General Document Agent Core | P0 | V4.7 General Document Agent Core | VERIFIED | `document_agent_core.py`; `student_domain_adapter.py` | `tests/test_document_agent_core_v4.py`; legacy Agent/Tool tests | 专项 `4 passed`；完整回归 `374 passed` | 薄 façade/port/adapter，旧 Tool 名称与 handler 保持；细分证据见第 10 节 |
-| V4-P0-009 | Domain Router | P0 | V4.8 Domain Router | NOT_STARTED | TBD | TBD | NOT_RUN | 领域集合、路由契约和 fallback 待确认 |
+| V4-P0-009 | Domain Router and General Document Tasks | P0 | V4.8 Domain Router | VERIFIED | `backend/services/domain_router.py`; `backend/tools/general_tools.py`; `backend/agent.py` | `tests/test_domain_router_v4.py`; legacy Agent/Trace tests | 专项 `9 passed`；完整回归 `383 passed` | 严格 Schema、General fallback、执行级 Tool 隔离和 Evidence 驱动的 Excel+PDF 规则任务；细分证据见第 11 节 |
 | V4-P0-010 | Agentic Retrieval | P0 | V4.9 Agentic Retrieval | NOT_STARTED | TBD | TBD | NOT_RUN | 必须保持 RAG 2.0 兼容；规划、检索与停止条件待确认 |
 | V4-P0-011 | Visual Safety and Trace | P0 | V4.10 Visual Safety and Trace | NOT_STARTED | TBD | TBD | NOT_RUN | 必须复用 Agent Safety 与 Trace；视觉输入威胁模型待确认 |
 | V4-P0-012 | V4 Evaluation and Final Acceptance | P0 | V4.11 Evaluation and Final Acceptance | NOT_STARTED | TBD | TBD | NOT_RUN | 只登记真实固定数据集、测试结果和指标，不预设或编造数值 |
@@ -230,7 +230,34 @@
 - `StudentDomainAdapter` 已提供 Core port 与学生业务委托边界，但不会把通用文档强制映射成
   学生实体，也不会绕过 Confirmation/Safety/Version 执行写入。
 
-## 11. 后续阶段审计规则
+## 11. V4.8 P0 Requirements Coverage Matrix
+
+| Requirement ID | Requirement | Priority | Target V4 Stage | Implementation Status | Code Location | Test Location | Verification Result | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| V4.8-P0-01 | 输出 student/general/unknown、六类 task_type 与 reason_code 的严格结构 | P0 | V4.8 | VERIFIED | `DomainRoute`; `route_domain` | student/general/unknown/ambiguous tests | PASS | 额外输出 effective_domain，unknown 必为 general |
+| V4.8-P0-02 | Router 不仅依赖关键词 if/else | P0 | V4.8 | VERIFIED | `_deterministic_route`; `DomainRouterContext` | general schema/context test；ambiguous test | PASS | 加权融合消息结构、Schema、file type、Tool family 与任务信号 |
+| V4.8-P0-03 | 辅助 classifier 输出必须 Schema Validate | P0 | V4.8 | VERIFIED | `DomainClassifier`; `DomainRoute.model_validate` | `test_invalid_router_schema_and_classifier_failure_use_validated_fallback` | PASS | 支持 dict/JSON；extra 字段和非法 enum 均拒绝 |
+| V4.8-P0-04 | Router failure/invalid/unknown 安全降级 General | P0 | V4.8 | VERIFIED | `_fallback_route`; route exception handling | invalid schema、classifier failure、unknown tests | PASS | reason_code 区分失败原因，不拒绝文件 |
+| V4.8-P0-05 | Student route 允许 General Core + Student Adapter | P0 | V4.8 | VERIFIED | `allowed_tool_names`; V4.7 capability sets | `test_student_route_allows_core_and_student_adapter_tools`; legacy Agent tests | PASS | 不改旧 Tool 名称、定义或 handler |
+| V4.8-P0-06 | General/Unknown 默认 Core，不强制 student schema/entity | P0 | V4.8 | VERIFIED | Agent `GENERAL_DOMAIN_PROMPT`; execution allow-list | general Tool guard；non-student Excel query | PASS | Student Tool 的合法参数也在执行前被领域隔离；不生成 student_id |
+| V4.8-P0-07 | Trace 记录 domain + task_type + reason_code | P0 | V4.8 | VERIFIED | `record_domain_route_trace`; Agent LLM Trace metrics | standalone/Agent Trace tests；legacy Trace exact-cardinality test | PASS | Agent 复用现有 event，独立 Router 使用 domain_route event |
+| V4.8-P0-08 | 简单任务不增加不必要复杂流程 | P0 | V4.8 | VERIFIED | `run_agent` domain-aware plan selection | Agent Trace/simple final-answer test；legacy Agent tests | PASS | General 简单查询不创建学生 Planner workflow，仅做路由和原 loop |
+| V4.8-P0-09 | 非学生 Excel 可查询、筛选且无学生实体 | P0 | V4.8 | VERIFIED | V4.7 `DocumentAgentCore.query_table` | `test_non_student_excel_query_does_not_require_or_create_student_entity` | PASS | `项目预算.xlsx` 两条阈值筛选结果由 Python query Tool 产生 |
+| V4.8-P0-10 | Excel + PDF General 混合任务完成规定执行链 | P0 | V4.8 | VERIFIED | `evaluate_project_approval`; Core delegates | `test_excel_pdf_general_mixed_task_uses_python_and_explicit_rule_evidence` | PASS | query/aggregate → retrieve → Python condition → answer + Evidence |
+| V4.8-P0-11 | 规则判断引用实际 Evidence，LLM 不计算预算 | P0 | V4.8 | VERIFIED | `_explicit_rule`; `_compare`; evidence filtering | mixed task assertions | PASS | 只解析检索命中的明确阈值；最终 chain 仅含实际预算 cell 与规则 Evidence |
+| V4.8-P0-12 | Student 与 V1–V4.7 全量回归保持 | P0 | V4.8 | VERIFIED | 原有 modules；兼容 Agent integration | legacy Agent/Trace tests；完整 `tests/` | 首次 `383 passed in 28.08s`；最终 `383 passed in 30.69s` | 无删除、skip 或弱化旧测试；Tool definitions 集合不变 |
+
+### 11.1 V4.8 边界与限制
+
+- 默认 Router 是确定性、可解释的加权信号模型；本阶段没有声明领域分类准确率，也没有
+  新增外部 LLM 调用。注入 classifier 只能在严格 Schema 验证后影响路由。
+- 为保持依赖完整 Tool definitions 的 V1–V3 client/test 兼容，发送给模型的 definitions
+  集合保持不变；General/Unknown 在 prompt 与执行 allow-list 双重约束，Student Tool 不会执行。
+- 项目专项审批任务只执行从真实 PDF Evidence 提取出的明确预算数值阈值；多条件法条、
+  隐含规则、字段单位不确定或非数值预算均不猜测，需后续显式扩展规则 schema。
+- V4.9 Agentic Retrieval、V4.10 Visual Safety/Trace 专项和 V4.11 Evaluation 未提前实现。
+
+## 12. 后续阶段审计规则
 
 每个 V4 阶段开始前，应以正式阶段需求补充或拆分对应 Requirement ID，并填写：
 

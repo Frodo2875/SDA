@@ -44,7 +44,7 @@ V4.0 只建立工程开发基线，不实现 V4 新业务能力，不修改 V1�
 | V4.5 | Visual Table | VERIFIED | 复用 V3 Table/Row/Column/Cell，支持视觉/手写 Cell、可靠计算门槛与安全降级 |
 | V4.6 | Evidence 3.0 | VERIFIED | 增量扩展 Evidence 2.0 envelope，统一视觉 region/Cell 来源并支持图片、PDF bbox 定位 |
 | V4.7 | General Document Agent Core | VERIFIED | 用薄 façade/port/adapter 划分通用文档能力与学生领域逻辑，保持原 Tool 和 Demo 兼容 |
-| V4.8 | Domain Router | NOT_STARTED | 需求和验收标准待对应阶段确认 |
+| V4.8 | Domain Router | VERIFIED | Schema 校验的 Student/General/Unknown 路由、General 安全降级与 Evidence 驱动的非学生混合任务 |
 | V4.9 | Agentic Retrieval | NOT_STARTED | 需求和验收标准待对应阶段确认 |
 | V4.10 | Visual Safety and Trace | NOT_STARTED | 需求和验收标准待对应阶段确认 |
 | V4.11 | Evaluation and Final Acceptance | NOT_STARTED | 汇总 V4 固定评估、完整回归与最终验收 |
@@ -425,6 +425,54 @@ conda run -n tuli_env pytest -q
   仍由现有 Agent/Batch 流程生成，Adapter 只承接学生来源和既有 HITL 写入边界。
 - Requirement IDs：`V4.7-P0-01` 至 `V4.7-P0-12`。
 
+### V4.8 Domain Router and General Document Tasks
+
+- 本阶段目标：在 V4.7 Core + Student Adapter 边界上增加严格 Schema Domain Router；
+  Student 可使用 Core 与 Adapter，General/Unknown 默认只执行 General Core，并建立一个
+  非学生 Excel + PDF 规则任务的确定性执行链。
+- 基线：V4.7 tag `v4.7-general-document-core`，commit
+  `e7fab0a8130b90bd2ade94bfe966c6c81cd3d77e`。
+- 开发前审计：复核了 `agent.py` 的既有 Tool loop/Planner/Trace、V4.7
+  `DocumentAgentCore` 与 `StudentDomainAdapter`、原 `ToolRegistry` 参数校验、Excel
+  `query_table`/`aggregate_table`、PDF Retrieval 和 Evidence chain。实现继续复用这些能力，
+  未新增文件管理、检索、Evidence、Workflow 或 Tool executor 系统。
+- 实际修改文件：
+  - `backend/agent.py`
+  - `backend/tool_models.py`
+  - `backend/services/domain_router.py`（新增）
+  - `backend/tools/general_tools.py`（新增）
+  - `tests/test_domain_router_v4.py`（新增）
+  - `docs/V4_DEVELOPMENT_LOG.md`
+  - `docs/V4_REQUIREMENT_COVERAGE_AUDIT.md`
+- 新增/修改接口：
+  - 新增严格 `DomainRoute` / `DomainRouterContext`、`route_domain()`、
+    `allowed_tool_names()` 和 `record_domain_route_trace()`；输出包含 domain、task_type、
+    reason_code 与明确的 effective fallback domain。
+  - 默认分类器使用消息结构、Schema、文件类型、请求 Tool family 和加权任务信号，不是
+    单一关键词分支；可注入辅助 classifier，但其 dict/JSON 输出必须通过 Pydantic Schema。
+  - classifier 异常、非法 Schema、非法 context 与无/歧义信号均形成可解释 reason_code，
+    并安全降级到 General Core，不因领域识别失败拒绝文档。
+  - Agent 在 General/Unknown route 加入最小 General prompt 和执行级 Tool allow-list；
+    参数仍先走原 Tool Schema 校验，旧 Tool definitions、名称和 handler 保持不变。
+  - Domain 字段写入既有 LLM Trace metrics；无 LLM 的 clarification 路径及独立 Router 调用
+    使用 `domain_route` 事件，保持 V3 Agent Trace 事件数量兼容。
+  - 新增 `evaluate_project_approval()` 通用任务服务：复用 Core 的 query/aggregate/retrieve，
+    仅从实际 PDF Evidence 解析显式阈值，再由 Python 完成预算条件判断并返回实际使用的
+    Excel cell 与规则 Evidence；不注册新的学生 Tool，也不让 LLM 计算或猜测预算。
+- 新增测试：`tests/test_domain_router_v4.py` 共 9 个 pytest cases，覆盖 student/general/
+  unknown/ambiguous route、非法 Router Schema、classifier failure fallback、General 禁止执行
+  Student Tool、Trace domain/reason、非学生 Excel 查询，以及“项目预算.xlsx + 项目管理办法.pdf”
+  的 query/aggregate → retrieve rule → Python condition → answer + Evidence 完整链路。
+- 测试结果：V4.8 专项 `9 passed in 0.73s`；Domain/Agent/Trace 定向兼容回归
+  `29 passed in 1.42s`；第一次完整回归 `383 passed in 28.08s`；文档更新后最终完整回归
+  `383 passed in 30.69s`。
+- 未完成项：V4.9 Agentic Retrieval、V4.10 Visual Safety and Trace 专项扩展、V4.11
+  Evaluation/最终验收未提前开发。
+- 已知限制：默认 Router 是可解释的加权信号分类器，不声明领域分类准确率；辅助 LLM
+  classifier 仅预留严格接口，本阶段不新增模型调用。专项审批执行器只接受明确、单一的
+  预算阈值规则和调用方确认的字段/单位；规则缺失或预算非数值时安全失败，不推断复杂法条。
+- Requirement IDs：`V4.8-P0-01` 至 `V4.8-P0-12`。
+
 ### 每阶段开发记录模板
 
 ```markdown
@@ -482,6 +530,10 @@ conda run -n tuli_env pytest -q
 | 2026-08-31 | V4.7 首次完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `374 passed in 28.72s` | PASS |
 | 2026-08-31 | V4.7 扩展受影响回归 | 未提交工作树 | Core、Agent、Confirmation、Table、Data Quality 相关测试 | `71 passed in 3.89s` | PASS；cross-file 学生语义保持在 Adapter |
 | 2026-08-31 | V4.7 最终完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `374 passed in 29.76s` | PASS |
+| 2026-08-31 | V4.8 专项 | 未提交工作树 | `conda run -n tuli_env pytest -q tests/test_domain_router_v4.py` | `9 passed in 0.73s` | PASS |
+| 2026-08-31 | V4.8 Domain/Agent/Trace 定向回归 | 未提交工作树 | Domain Router、Agent、Trace Context | `29 passed in 1.42s` | PASS；Domain metrics 复用既有 LLM Trace |
+| 2026-08-31 | V4.8 首次完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `383 passed in 28.08s` | PASS |
+| 2026-08-31 | V4.8 文档更新后最终完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `383 passed in 30.69s` | PASS |
 
 后续阶段必须追加实际执行记录，不得以历史结果替代当前回归。
 

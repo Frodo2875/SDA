@@ -107,6 +107,17 @@ class ScholarshipEvaluationArguments(ToolArguments):
     award_name: str = Field(default="一等奖学金", min_length=1, max_length=100)
 
 
+class ProjectApprovalArguments(ToolArguments):
+    budget_file_id: str = Field(pattern=r"^[0-9a-fA-F]{32}$")
+    policy_file_id: str = Field(pattern=r"^[0-9a-fA-F]{32}$")
+    sheet: str = Field(min_length=1, max_length=128)
+    project_field: str = Field(min_length=1, max_length=128)
+    budget_field: str = Field(min_length=1, max_length=128)
+    budget_threshold: float = Field(ge=0)
+    budget_unit: Literal["yuan", "ten_thousand_yuan"] = "yuan"
+    rule_query: str = Field(default="专项审批", min_length=1, max_length=200)
+
+
 class TableSchemaArguments(FileIdArguments):
     sheet_name: str | None = Field(default=None, min_length=1)
 
