@@ -26,8 +26,8 @@ from backend.runtime.safety_policy import (
     record_safety_trace,
 )
 from backend.runtime.context_manager import resolve_message, update_after_run
-from backend.services.confirmation import create_pending_action
 from backend.services.redaction import redacted_json, redact_value
+from backend.services.student_domain_adapter import STUDENT_DOMAIN_ADAPTER
 from backend.services.trace_service import llm_usage_metrics, record_trace
 from backend.tool_registry import TOOL_REGISTRY
 
@@ -671,7 +671,7 @@ async def _run_agent_core(
                             "tool_calls": executed_calls,
                             "status": "workflow_plan_mismatch",
                         }
-                action_result = create_pending_action(
+                action_result = STUDENT_DOMAIN_ADAPTER.prepare_report_write(
                     session_id=session_id,
                     target_file=target_file,
                     student_id=identity["student_id"],

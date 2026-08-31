@@ -25,7 +25,7 @@
 | V4-P0-005 | Visual Understanding and KIE | P0 | V4.4 Visual Understanding and KIE | VERIFIED | `backend/services/visual_understanding.py`; `backend/document_blocks.py` | `tests/test_visual_understanding_v4.py` | 专项 `9 passed`；完整回归 `355 passed` | 只读派生 VisualBlock/分类/KIE；细分证据见第 7 节 |
 | V4-P0-006 | Visual Table | P0 | V4.5 Visual Table | VERIFIED | `backend/services/visual_table.py`; `backend/table_structure.py` | `tests/test_visual_table_v4.py` | 专项 `8 passed`；完整回归 `363 passed` | 复用 V3 Table schema；细分证据见第 8 节 |
 | V4-P0-007 | Evidence 3.0 | P0 | V4.6 Evidence 3.0 | VERIFIED | `backend/evidence.py`; `backend/services/evidence_locator.py`; existing `evidence_locations` | `tests/test_evidence_v4.py`; legacy Evidence tests | 专项 `7 passed`；完整回归 `370 passed` | 增量复用 Evidence 2.0 与原定位/Trace；细分证据见第 9 节 |
-| V4-P0-008 | General Document Agent Core | P0 | V4.7 General Document Agent Core | NOT_STARTED | TBD | TBD | NOT_RUN | 核心 Agent 边界、Tool 与 Runtime 复用方案待确认 |
+| V4-P0-008 | General Document Agent Core | P0 | V4.7 General Document Agent Core | VERIFIED | `document_agent_core.py`; `student_domain_adapter.py` | `tests/test_document_agent_core_v4.py`; legacy Agent/Tool tests | 专项 `4 passed`；完整回归 `374 passed` | 薄 façade/port/adapter，旧 Tool 名称与 handler 保持；细分证据见第 10 节 |
 | V4-P0-009 | Domain Router | P0 | V4.8 Domain Router | NOT_STARTED | TBD | TBD | NOT_RUN | 领域集合、路由契约和 fallback 待确认 |
 | V4-P0-010 | Agentic Retrieval | P0 | V4.9 Agentic Retrieval | NOT_STARTED | TBD | TBD | NOT_RUN | 必须保持 RAG 2.0 兼容；规划、检索与停止条件待确认 |
 | V4-P0-011 | Visual Safety and Trace | P0 | V4.10 Visual Safety and Trace | NOT_STARTED | TBD | TBD | NOT_RUN | 必须复用 Agent Safety 与 Trace；视觉输入威胁模型待确认 |
@@ -204,7 +204,33 @@
   答案事实内容做任何修改。
 - 未实现跨页组合 Evidence、复杂 merged-cell 定位或定位缓存，也未提前开发 V4.7。
 
-## 10. 后续阶段审计规则
+## 10. V4.7 P0 Requirements Coverage Matrix
+
+| Requirement ID | Requirement | Priority | Target V4 Stage | Implementation Status | Code Location | Test Location | Verification Result | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| V4.7-P0-01 | 开发前审计 student-specific 与 generic document 边界 | P0 | V4.7 | VERIFIED | `CORE_CAPABILITY_MODULES`; stage audit log | `test_core_is_a_thin_facade_and_keeps_legacy_tool_handlers` | PASS | 审计覆盖 query/aggregate/retrieval/evidence/workflow/safety/write-version/validation/comparison |
+| V4.7-P0-02 | 建立 Document Agent Core 薄接口，不复制稳定实现 | P0 | V4.7 | VERIFIED | `backend/services/document_agent_core.py` | Core capability test；完整回归 | PASS | façade 全部委托原模块，无新数据库、executor、parser 或 Evidence 系统 |
+| V4.7-P0-03 | Core 覆盖 File/Schema/Parser 与 OCR/Vision 所有权 | P0 | V4.7 | VERIFIED | `DocumentAgentCore`; `CORE_CAPABILITY_MODULES` | capability catalog assertion；既有 Schema/OCR/Visual tests | PASS | 稳定模块保持原路径，不移动或重命名 |
+| V4.7-P0-04 | Core 覆盖 query_table/aggregate_table 与 Retrieval/Rerank/Evidence | P0 | V4.7 | VERIFIED | Core table/retrieval/evidence delegates | unknown Excel test；legacy table/RAG/Evidence tests | PASS | 直接复用旧函数和 Evidence chain |
+| V4.7-P0-05 | Core 覆盖 Workflow/Async、Safety、Diff/Version/Rollback、Trace/Evaluation | P0 | V4.7 | VERIFIED | Core runtime/safety/version/evaluation delegates；capability map | capability assertion；legacy Runtime/Safety/Version/Evaluation tests | PASS | 只提供边界，状态仍归原服务所有 |
+| V4.7-P0-06 | 非学生未知 Excel 完成字段查询、筛选与 aggregate | P0 | V4.7 | VERIFIED | `DocumentAgentCore.inspect_excel/query_table/aggregate_table` | `test_general_core_unknown_excel_field_filter_and_aggregate` | PASS | 仓库物料样本；上海库存 sum=155，由 Python 计算 |
+| V4.7-P0-07 | General Core 不要求 student_id，不伪造学生实体 | P0 | V4.7 | VERIFIED | Core query signature；existing generic schema semantics | unknown Excel test | PASS | 物料字段保持原名，未映射 student_id；Core/Student tool sets 隔离 |
+| V4.7-P0-08 | Student Domain Adapter 包含身份、查询、比较、validation、奖学金与报告边界 | P0 | V4.7 | VERIFIED | `backend/services/student_domain_adapter.py` | adapter identity compatibility；legacy student/hybrid/report tests | PASS | 包含当前学生语义的 cross-file conflict；不重写算法，全部 delegate |
+| V4.7-P0-09 | Student Adapter 可以调用通用 Core | P0 | V4.7 | VERIFIED | `DocumentCorePort`; `query_domain_table`; `retrieve_domain_document` | `test_student_adapter_can_consume_general_core_without_a_domain_router` | PASS | 显式依赖注入，不做自动 domain selection |
+| V4.7-P0-10 | 原学生 Demo 与 Tool 名称/handler 兼容 | P0 | V4.7 | VERIFIED | existing `ToolRegistry`; Agent report adapter call | handler identity test；Agent/Confirmation tests；完整回归 | PASS | Registry 未换 handler；报告仍走原 HITL/Version 流程 |
+| V4.7-P0-11 | 最小重构且不提前实现 V4.8 Domain Router | P0 | V4.7 | VERIFIED | 两个新增 service modules；无 router | code audit；capability separation test | PASS | 无文件搬迁、模块改名、动态 prompt/Tool 路由 |
+| V4.7-P0-12 | V1–V3 与 V4.1–V4.6 全量回归保持 | P0 | V4.7 | VERIFIED | 原有 modules | 完整 `tests/` | 首次 `374 passed in 28.72s`；最终 `374 passed in 29.76s` | 无删除、skip 或弱化旧测试 |
+
+### 10.1 V4.7 边界与限制
+
+- `DocumentAgentCore` 是稳定模块的 façade，不是新的 Agent loop、Tool executor、数据库或
+  文件管理系统；外部 Tool 仍由原 `ToolRegistry` 注册。
+- 当前 Agent 保持 Student Demo 的 prompt 和确定性流程校验；General/Student 自动选择属于
+  V4.8，未在本阶段实现。
+- `StudentDomainAdapter` 已提供 Core port 与学生业务委托边界，但不会把通用文档强制映射成
+  学生实体，也不会绕过 Confirmation/Safety/Version 执行写入。
+
+## 11. 后续阶段审计规则
 
 每个 V4 阶段开始前，应以正式阶段需求补充或拆分对应 Requirement ID，并填写：
 

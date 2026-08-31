@@ -43,7 +43,7 @@ V4.0 只建立工程开发基线，不实现 V4 新业务能力，不修改 V1�
 | V4.4 | Visual Understanding and KIE | VERIFIED | 基于 DocumentBlock/OCR region 派生 VisualBlock、保守分类与带来源的基础 KIE |
 | V4.5 | Visual Table | VERIFIED | 复用 V3 Table/Row/Column/Cell，支持视觉/手写 Cell、可靠计算门槛与安全降级 |
 | V4.6 | Evidence 3.0 | VERIFIED | 增量扩展 Evidence 2.0 envelope，统一视觉 region/Cell 来源并支持图片、PDF bbox 定位 |
-| V4.7 | General Document Agent Core | NOT_STARTED | 需求和验收标准待对应阶段确认 |
+| V4.7 | General Document Agent Core | VERIFIED | 用薄 façade/port/adapter 划分通用文档能力与学生领域逻辑，保持原 Tool 和 Demo 兼容 |
 | V4.8 | Domain Router | NOT_STARTED | 需求和验收标准待对应阶段确认 |
 | V4.9 | Agentic Retrieval | NOT_STARTED | 需求和验收标准待对应阶段确认 |
 | V4.10 | Visual Safety and Trace | NOT_STARTED | 需求和验收标准待对应阶段确认 |
@@ -376,6 +376,55 @@ conda run -n tuli_env pytest -q
   Trace。冲突来源保留而不选边，低置信度手写只能作为需核对 Evidence。
 - Requirement IDs：`V4.6-P0-01` 至 `V4.6-P0-13`。
 
+### V4.7 General Document Agent Core + Student Domain Adapter
+
+- 本阶段目标：审计 V1–V4 稳定实现，在不重写 Tool、不移动稳定模块、不提前实现 Domain
+  Router 的前提下，用最小 façade/interface/adapter 明确通用 Document Core 与学生领域边界。
+- 基线：V4.6 tag `v4.6-evidence-3.0`，commit
+  `f010656`。
+- 代码审计结论：
+  - 通用 Core 已存在于稳定模块：File/Schema/Parser 位于 `file_tools`、`schema_tools`、
+    `document_index`；OCR/Vision 位于 `ocr_service`、visual understanding/table；表格查询与
+    聚合位于 `table_tools`；Retrieval/Rerank 位于 `document_index`、`hybrid_retrieval`；
+    Evidence、Workflow/Async、Safety、Diff/Version/Rollback、Trace/Evaluation 和通用
+    validation 均已有独立稳定模块。
+  - 学生专属逻辑集中在 `student_tools`、`analysis_tools.compare_students`、
+    `validate_student_data`、当前仍基于学生语义的 `find_cross_file_conflicts`、
+    `hybrid_tools.evaluate_scholarship_eligibility`，以及 Agent/Planner 的身份、综合分析、
+    比较、奖学金和综合评价流程约束。
+  - `query_table`、`aggregate_table`、`retrieve_document`、Evidence 和 Safety 本身不要求
+    `student_id`；Retrieval scope 中的 `student_id` 只是可选 metadata filter。
+- 实际修改文件：
+  - `backend/services/document_agent_core.py`（新增）
+  - `backend/services/student_domain_adapter.py`（新增）
+  - `backend/agent.py`
+  - `tests/test_document_agent_core_v4.py`（新增）
+  - `docs/V4_DEVELOPMENT_LOG.md`
+  - `docs/V4_REQUIREMENT_COVERAGE_AUDIT.md`
+- 新增/修改接口：
+  - 新增 `DocumentAgentCore` / `DOCUMENT_AGENT_CORE`，只委托既有通用实现；
+    `CORE_CAPABILITY_MODULES` 记录各能力的真实所有模块，避免 façade 被误解为第二套系统。
+  - 新增 `DocumentCorePort` 与 `StudentDomainAdapter` / `STUDENT_DOMAIN_ADAPTER`；学生身份、
+    info/scores/research、comparison、validation、scholarship 和报告写入均调用旧实现。
+  - Student Adapter 可通过 port 调用 Core 的 query/aggregate/retrieval；Core 的 table API
+    不含必需 `student_id`，General Excel 不生成学生实体。
+  - Agent 的综合评价待确认入口改为调用 Student Adapter；Adapter 继续委托原
+    `create_pending_action`、Safety、Diff、Version 和 Confirmation 流程。
+  - 原 `ToolRegistry`、Tool 名称、Pydantic 参数模型和 handler 对象身份均未改变。
+- 新增测试：`tests/test_document_agent_core_v4.py` 共 4 个 pytest cases，覆盖非学生未知
+  Excel 的 Schema/字段查询、业务字段筛选和 Python aggregate；Core/Student capability
+  隔离；旧 Tool handler 身份；学生 identity 结果兼容；Student Adapter 调用 Core port。
+- 测试结果：V4.7 专项 `4 passed in 0.70s`；Core、Agent、Confirmation、Table 受影响回归
+  `64 passed in 2.70s`；学生 cross-file 边界复核后的扩展受影响回归
+  `71 passed in 3.89s`；首次完整回归 `374 passed in 28.72s`；最终完整回归
+  `374 passed in 29.76s`。
+- 未完成项：V4.8 Domain Router、自动领域选择、通用/学生 prompt 动态选择均未实现；当前
+  对外 Agent 仍保持原学生 Demo 行为，General Core 通过明确接口供后续 Router 使用。
+- 已知限制：本阶段 façade 是同步 Python 边界，不复制 Runtime 状态，也不引入新的 Tool
+  executor；Async、Safety、Version、Trace 等继续由原模块拥有。学生 report 的自然语言正文
+  仍由现有 Agent/Batch 流程生成，Adapter 只承接学生来源和既有 HITL 写入边界。
+- Requirement IDs：`V4.7-P0-01` 至 `V4.7-P0-12`。
+
 ### 每阶段开发记录模板
 
 ```markdown
@@ -428,6 +477,11 @@ conda run -n tuli_env pytest -q
 | 2026-08-31 | V4.6 修复后受影响回归 | 未提交工作树 | OCR、Evidence、RAG、Hybrid 相关测试 | `24 passed in 1.88s` | PASS；Evidence 生成时只读 OCR ledger |
 | 2026-08-31 | V4.6 修复后完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `370 passed in 27.50s` | PASS |
 | 2026-08-31 | V4.6 最终完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `370 passed in 35.45s` | PASS；Evidence 2 响应注解兼容复核后执行 |
+| 2026-08-31 | V4.7 专项 | 未提交工作树 | `conda run -n tuli_env pytest -q tests/test_document_agent_core_v4.py` | `4 passed in 0.70s` | PASS |
+| 2026-08-31 | V4.7 受影响回归 | 未提交工作树 | Core、Agent、Confirmation、Table 相关测试 | `64 passed in 2.70s` | PASS |
+| 2026-08-31 | V4.7 首次完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `374 passed in 28.72s` | PASS |
+| 2026-08-31 | V4.7 扩展受影响回归 | 未提交工作树 | Core、Agent、Confirmation、Table、Data Quality 相关测试 | `71 passed in 3.89s` | PASS；cross-file 学生语义保持在 Adapter |
+| 2026-08-31 | V4.7 最终完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `374 passed in 29.76s` | PASS |
 
 后续阶段必须追加实际执行记录，不得以历史结果替代当前回归。
 
