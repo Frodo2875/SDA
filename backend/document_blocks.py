@@ -8,7 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 BlockType = Literal[
-    "title", "paragraph", "table", "cell", "image", "header", "footer"
+    "title", "paragraph", "table", "cell", "image", "header", "footer",
+    "signature", "stamp", "unknown",
 ]
 
 

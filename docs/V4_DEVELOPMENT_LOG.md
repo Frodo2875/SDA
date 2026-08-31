@@ -40,7 +40,7 @@ V4.0 只建立工程开发基线，不实现 V4 新业务能力，不修改 V1�
 | V4.1 | Visual Document Router | VERIFIED | 图片正式进入既有 Document、生命周期、Workspace、Preview、Task 与原子重处理链路 |
 | V4.2 | Visual OCR and Image PDF | VERIFIED | 复用 V3 PDF OCR，统一图片、扫描/图片型 PDF 与 mixed PDF 的 page-level Visual OCR |
 | V4.3 | Handwriting Recognition | VERIFIED | 在统一 Visual OCR region 管线中支持手写类型、低置信度安全、冲突核对与 region retry |
-| V4.4 | Visual Understanding and KIE | NOT_STARTED | 需求和验收标准待对应阶段确认 |
+| V4.4 | Visual Understanding and KIE | VERIFIED | 基于 DocumentBlock/OCR region 派生 VisualBlock、保守分类与带来源的基础 KIE |
 | V4.5 | Visual Table | NOT_STARTED | 需求和验收标准待对应阶段确认 |
 | V4.6 | Evidence 3.0 | NOT_STARTED | 需求和验收标准待对应阶段确认 |
 | V4.7 | General Document Agent Core | NOT_STARTED | 需求和验收标准待对应阶段确认 |
@@ -243,6 +243,50 @@ conda run -n tuli_env pytest -q
   人工评估，本阶段不声明准确率或性能数据。
 - Requirement IDs：`V4.3-P0-01` 至 `V4.3-P0-12`。
 
+### V4.4 Visual Document Understanding
+
+- 本阶段目标：在 V3 `DocumentBlock` 和 V4 OCR region 上建立统一 `VisualBlock`，提供
+  基础文档分类与带 source region 的 KIE 候选；不开发通用图片问答、自然图像识别、
+  人脸识别或复杂图表推理。
+- 基线：V4.3 tag `v4.3-handwriting-recognition`，commit
+  `5822f657c271fecb20ecd9c3b4d79455caf06610`。
+- 实际修改文件：
+  - `backend/document_blocks.py`
+  - `backend/services/ocr_service.py`
+  - `backend/services/visual_understanding.py`
+  - `backend/tools/document_tools.py`
+  - `tests/test_visual_understanding_v4.py`
+  - `docs/V4_DEVELOPMENT_LOG.md`
+  - `docs/V4_REQUIREMENT_COVERAGE_AUDIT.md`
+- 新增/修改接口：
+  - V3 `BlockType` 增量增加 `signature`、`stamp`、`unknown`；新增继承
+    `DocumentBlock` 的 `VisualBlock`，对外等价暴露 `document_id`、`image_no`、`text`、
+    `recognition_type`、`source_model` 和 `source_region_ids`。
+  - OCR region 增加可选 `visual_block_type`，允许 layout backend 在同一 ledger 中提供
+    保守布局提示。
+  - 新增 `extract_visual_blocks()`、`classify_document()`、`extract_key_fields()`，并从
+    `backend.tools.document_tools` 导出。
+  - `classify_document()` 支持 form/certificate/notice/table/letter/report/unknown；匹配失败
+    或分类异常均返回 `unknown`、`general_query_allowed=true`，不阻断既有检索。
+  - `extract_key_fields()` 支持 `general` 与 `student` domain；General 保留原 label/value，
+    Student 才使用默认或调用方提供的受控 schema hint。
+- 数据与安全策略：VisualBlock、分类和 KIE 均从 active OCR region 只读派生，不新增表，
+  不覆盖原始 OCR。每个 KIE field 绑定 `block_id`、`region_id`、bbox、confidence、parser、
+  model 和稳定 evidence ID；所有字段都是候选，`is_confirmed_fact=false`。低 confidence、
+  手写 review 或 unsafe region 只能输出 `review_required`，不得用于高影响事实。
+- 新增测试：`tests/test_visual_understanding_v4.py` 共 9 个 pytest cases，覆盖 certificate、
+  form、notice；title/paragraph/table/image/signature/stamp/unknown；KIE field+bbox+region
+  evidence；低置信度 KIE；unknown 通用检索；分类异常 fallback；Student/General schema 隔离。
+- 测试结果：V4.4 专项 `9 passed in 0.64s`；Document Block/OCR/Evidence/Async 受影响回归
+  `87 passed in 5.81s`；首次完整回归 `355 passed in 28.92s`；文档更新后最终完整回归
+  `355 passed in 29.65s`；中断恢复后重新核验 `355 passed in 31.98s`。
+- 未完成项：复杂视觉表格结构属于 V4.5；Evidence 3.0、Domain Router、Agentic Retrieval
+  及真实分类/KIE Evaluation 未在本阶段开发。
+- 已知限制：分类为保守、确定性的基础规则，不代表真实分类准确率；KIE 只解析明确的
+  `label: value` 文本，不推断缺失字段、不合并跨 region 内容，也不将通用字段强制映射为
+  学生字段。VisualBlock 是可重复派生视图，原子事实源仍为 OCR page/region ledger。
+- Requirement IDs：`V4.4-P0-01` 至 `V4.4-P0-12`。
+
 ### 每阶段开发记录模板
 
 ```markdown
@@ -281,6 +325,11 @@ conda run -n tuli_env pytest -q
 | 2026-08-28 | V4.3 首次完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `345 passed, 1 failed in 29.13s` | 发现 V4.1 空白图片普通 reindex 状态兼容问题，已修复 |
 | 2026-08-28 | V4.3 修复后完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `346 passed in 30.09s` | PASS |
 | 2026-08-28 | V4.3 文档更新后最终回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `346 passed in 30.19s` | PASS |
+| 2026-08-28 | V4.4 专项 | 未提交工作树 | `conda run -n tuli_env pytest -q tests/test_visual_understanding_v4.py` | `9 passed in 0.64s` | PASS |
+| 2026-08-28 | V4.4 受影响回归 | 未提交工作树 | Document Block、OCR、Evidence、Async 相关测试 | `87 passed in 5.81s` | PASS |
+| 2026-08-28 | V4.4 首次完整回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `355 passed in 28.92s` | PASS |
+| 2026-08-28 | V4.4 文档更新后最终回归 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `355 passed in 29.65s` | PASS |
+| 2026-08-31 | V4.4 中断恢复后复核 | 未提交工作树 | `conda run -n tuli_env pytest -q` | `355 passed in 31.98s` | PASS；使用重新执行的可确认结果 |
 
 后续阶段必须追加实际执行记录，不得以历史结果替代当前回归。
 

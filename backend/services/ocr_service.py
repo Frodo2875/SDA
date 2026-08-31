@@ -87,6 +87,9 @@ class OCRRegionResult(BaseModel):
     safe_for_high_impact: bool = True
     safe_for_identity_match: bool = True
     conflict_sources: list[dict[str, Any]] = Field(default_factory=list)
+    visual_block_type: Literal[
+        "title", "paragraph", "table", "image", "signature", "stamp", "unknown"
+    ] | None = None
 
 
 def detect_pdf_text(path: Path) -> dict[str, Any]:
@@ -500,6 +503,7 @@ def _normalize_block(
         status=str(parsed.get("status") or ("success" if text else "empty")),
         error=parsed.get("error") if text or conflict_sources else "OCR_EMPTY_REGION",
         conflict_sources=conflict_sources if len(distinct) > 1 else [],
+        visual_block_type=parsed.get("visual_block_type") or parsed.get("block_type"),
     )
     return _apply_handwriting_safety(region).model_dump()
 
@@ -565,6 +569,7 @@ def normalize_region_record(
         safe_for_high_impact=bool(region.get("safe_for_high_impact", True)),
         safe_for_identity_match=bool(region.get("safe_for_identity_match", True)),
         conflict_sources=list(region.get("conflict_sources") or []),
+        visual_block_type=region.get("visual_block_type") or region.get("block_type"),
     )
     return _apply_handwriting_safety(normalized).model_dump()
 

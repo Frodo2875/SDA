@@ -22,7 +22,7 @@
 | V4-P0-002 | Visual Document Router 顶层能力 | P0 | V4.1 Visual Document Router | VERIFIED | `backend/services/input_router.py`; `backend/services/document_index.py` | `tests/test_visual_document_router_v4.py` | 专项 `13 passed`；完整回归 `326 passed` | 细分证据见第 4 节；未包含 V4.2 OCR |
 | V4-P0-003 | Visual OCR and Image PDF | P0 | V4.2 Visual OCR and Image PDF | VERIFIED | `backend/services/ocr_service.py`; `backend/services/document_index.py` | `tests/test_visual_ocr_pipeline_v4.py`; `tests/test_ocr_pipeline.py` | 专项 `8 passed`；完整回归 `334 passed` | 复用 V3 OCR page ledger、mixed routing、Async Task 与原子索引；细分证据见第 5 节 |
 | V4-P0-004 | Handwriting Recognition | P0 | V4.3 Handwriting Recognition | VERIFIED | `backend/services/ocr_service.py`; `backend/services/document_index.py` | `tests/test_handwriting_recognition_v4.py`; `tests/fixtures/v4_handwriting_cases.json` | 专项 `12 passed`；完整回归 `346 passed` | 验证管线和安全契约，不将固定样本结果表述为准确率；细分证据见第 6 节 |
-| V4-P0-005 | Visual Understanding and KIE | P0 | V4.4 Visual Understanding and KIE | NOT_STARTED | TBD | TBD | NOT_RUN | KIE 字段、Schema、证据与失败语义待确认 |
+| V4-P0-005 | Visual Understanding and KIE | P0 | V4.4 Visual Understanding and KIE | VERIFIED | `backend/services/visual_understanding.py`; `backend/document_blocks.py` | `tests/test_visual_understanding_v4.py` | 专项 `9 passed`；完整回归 `355 passed` | 只读派生 VisualBlock/分类/KIE；细分证据见第 7 节 |
 | V4-P0-006 | Visual Table | P0 | V4.5 Visual Table | NOT_STARTED | TBD | TBD | NOT_RUN | 表结构、单元格定位和兼容策略待确认 |
 | V4-P0-007 | Evidence 3.0 | P0 | V4.6 Evidence 3.0 | NOT_STARTED | TBD | TBD | NOT_RUN | 必须增量复用 Evidence 2.0；新增契约待确认 |
 | V4-P0-008 | General Document Agent Core | P0 | V4.7 General Document Agent Core | NOT_STARTED | TBD | TBD | NOT_RUN | 核心 Agent 边界、Tool 与 Runtime 复用方案待确认 |
@@ -125,7 +125,32 @@
   契约后接入，不改变索引、Async Task 或持久化系统。
 - 关键字段识别只用于风险标记，不构成 V4.4 KIE 实现。
 
-## 7. 后续阶段审计规则
+## 7. V4.4 P0 Requirements Coverage Matrix
+
+| Requirement ID | Requirement | Priority | Target V4 Stage | Implementation Status | Code Location | Test Location | Verification Result | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| V4.4-P0-01 | 在 V3 Block 与 V4 region 上扩展统一 VisualBlock | P0 | V4.4 | VERIFIED | `backend/services/visual_understanding.py::VisualBlock`; `backend/document_blocks.py` | `test_visual_blocks_cover_required_types_and_parent_provenance` | PASS | VisualBlock 继承 DocumentBlock；无第二套持久化 |
+| V4.4-P0-02 | VisualBlock 保留文档、页/图、文本、位置、置信度、识别与来源字段 | P0 | V4.4 | VERIFIED | `VisualBlock.visual_dump`; `extract_visual_blocks` | required-field assertion | PASS | source_region_ids 额外保留 OCR 来源 |
+| V4.4-P0-03 | title/paragraph/table/image/signature/stamp/unknown | P0 | V4.4 | VERIFIED | `_infer_block_type`; OCR `visual_block_type` | `test_visual_blocks_cover_required_types_and_parent_provenance` | PASS | 不包含复杂自然图像语义 |
+| V4.4-P0-04 | extract_visual_blocks | P0 | V4.4 | VERIFIED | `backend/services/visual_understanding.py` | VisualBlock tests | PASS | active OCR ledger 的确定性只读派生 |
+| V4.4-P0-05 | classify_document 基础分类 | P0 | V4.4 | VERIFIED | `classify_document`; `_classify_from_blocks` | certificate/form/notice 参数测试 | 3 cases PASS | 还支持 table/letter/report/unknown；不声明准确率 |
+| V4.4-P0-06 | 分类失败 unknown 且保留通用查询 | P0 | V4.4 | VERIFIED | `classify_document` exception fallback | unknown query；classification exception tests | PASS | envelope 保持成功，分类 status=failed，通用 RAG 不受影响 |
+| V4.4-P0-07 | basic KIE / extract_key_fields | P0 | V4.4 | VERIFIED | `extract_key_fields` | field+bbox test | PASS | 只解析明确 label:value，不推断缺失内容 |
+| V4.4-P0-08 | KIE field 绑定 evidence/source region | P0 | V4.4 | VERIFIED | `VisualKeyField`; KIE evidence builder | `test_basic_kie_field_keeps_bbox_and_source_region_without_mutating_ocr` | PASS | 绑定 block_id、region_id、bbox、confidence、parser/model |
+| V4.4-P0-09 | 低 confidence 字段不得升级为确定事实 | P0 | V4.4 | VERIFIED | `_kie_confidence_threshold`; `extract_key_fields` | `test_low_confidence_kie_stays_review_candidate` | PASS | status=review_required；is_confirmed_fact=false |
+| V4.4-P0-10 | KIE 不替代原始 OCR | P0 | V4.4 | VERIFIED | visual understanding service is read-only | OCR before/after equality assertion | PASS | 无数据库迁移或 OCR 写入 |
+| V4.4-P0-11 | Student hint 与 General field/value schema 隔离 | P0 | V4.4 | VERIFIED | `_validated_schema_hints`; `STUDENT_SCHEMA_HINTS` | `test_student_and_general_kie_schema_are_strictly_separated` | PASS | General 拒绝 student schema hint，不强映射 student_id/score |
+| V4.4-P0-12 | V1–V3 与 V4.1–V4.3 回归保持 | P0 | V4.4 | VERIFIED | 原有 modules | 完整 `tests/` | 首次 `355 passed in 28.92s`；中断恢复复核 `355 passed in 31.98s` | 无删除或 skip 旧测试 |
+
+### 7.1 V4.4 边界与限制
+
+- 分类是基础规则结果，不是自然图像理解模型输出，也不代表准确率。
+- KIE 仅处理明确的单 region `label: value`，不执行跨 region 推理、复杂表格推理或隐式字段补全。
+- VisualBlock/分类/KIE 是 OCR ledger 的可重复派生视图；KIE evidence 直接绑定 source region，
+  原始 OCR 保持事实源。
+- Student schema hint 只在显式 `domain=student` 时启用；General 始终保持通用 field/value。
+
+## 8. 后续阶段审计规则
 
 每个 V4 阶段开始前，应以正式阶段需求补充或拆分对应 Requirement ID，并填写：
 
