@@ -3,6 +3,7 @@
 import json
 import re
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
 PHONE_PATTERN = re.compile(r"(?<!\d)(1[3-9]\d)(\d{4})(\d{4})(?!\d)")
@@ -18,6 +19,11 @@ SENSITIVE_KEYS = {
     "phone", "mobile", "telephone", "email", "id_card", "identity_card",
     "address", "手机号", "联系电话", "移动电话", "邮箱", "身份证号", "身份证", "住址", "地址",
 }
+SENSITIVE_URL_QUERY_KEYS = frozenset({
+    "access_token", "api_key", "apikey", "auth", "authorization", "code",
+    "credential", "key", "password", "secret", "session", "session_id",
+    "signature", "sig", "token",
+})
 
 
 def redact_text(value: str) -> str:
@@ -33,6 +39,8 @@ def redact_text(value: str) -> str:
 def redact_value(value: Any, *, key: str | None = None) -> Any:
     """Recursively redact JSON-compatible structures without mutating input."""
     normalized_key = str(key or "").strip().casefold()
+    if normalized_key in {"url", "canonical_url"} and isinstance(value, str):
+        return redact_url(value)
     if normalized_key in {item.casefold() for item in SENSITIVE_KEYS}:
         return _mask_sensitive_value(value, normalized_key)
     if isinstance(value, dict):
@@ -44,6 +52,21 @@ def redact_value(value: Any, *, key: str | None = None) -> Any:
     if isinstance(value, str):
         return redact_text(value)
     return value
+
+
+def redact_url(value: str) -> str:
+    """Mask credentials in URL query values while retaining trace provenance."""
+    text = str(value or "")
+    try:
+        parts = urlsplit(text)
+        query = parse_qsl(parts.query, keep_blank_values=True)
+    except ValueError:
+        return redact_text(text)
+    safe_query = urlencode([
+        (key, "***" if key.casefold() in SENSITIVE_URL_QUERY_KEYS else redact_text(item))
+        for key, item in query
+    ], doseq=True)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, safe_query, ""))
 
 
 def redacted_json(value: Any, *, max_length: int = 1000) -> str:

@@ -187,6 +187,7 @@ def record_tool_execution(
     retry_count: int,
     step_id: str | None = None,
     duration_ms: int = 0,
+    trace_metrics: dict[str, Any] | None = None,
 ) -> None:
     steps = database.get_task_step_records(task_id)
     step = (
@@ -222,6 +223,7 @@ def record_tool_execution(
             arguments=arguments, result=result, duration_ms=duration_ms,
             retry_count=retry_count,
             error_code=None if ok else result.get("error_code"),
+            trace_metrics=trace_metrics,
         )
     except Exception:
         # Observability must never alter the authoritative Tool outcome.
@@ -865,6 +867,7 @@ def _record_step_trace(
     duration_ms: int = 0,
     retry_count: int = 0,
     error_code: str | None = None,
+    trace_metrics: dict[str, Any] | None = None,
 ) -> None:
     try:
         record_trace(
@@ -878,6 +881,7 @@ def _record_step_trace(
                 "node_id": step.get("node_id") or step.get("step_id"),
                 "node_type": step.get("node_type") or "tool",
                 "step_type": step.get("step_type"),
+                **dict(trace_metrics or {}),
             },
         )
     except Exception:

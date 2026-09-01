@@ -4,6 +4,7 @@ from typing import Any, Protocol
 
 from backend.services.web_models import WebSearchResult, WebSearchScope
 from backend.services.url_fetch import URLFetchError, canonicalize_url
+from backend.services.web_safety import assess_web_content
 
 
 class SearchProviderError(RuntimeError):
@@ -53,7 +54,12 @@ def normalize_search_results(
             canonical_url = canonicalize_url(item.url)
         except URLFetchError as exc:
             raise SearchProviderError("Search Provider 返回了无效 URL") from exc
-        item = item.model_copy(update={"url": canonical_url})
+        security = assess_web_content(item.title, item.snippet, item.metadata)
+        item = item.model_copy(update={
+            "url": canonical_url,
+            "untrusted_content": True,
+            "detected_untrusted_patterns": security["detected_untrusted_patterns"],
+        })
         if item.url in seen:
             continue
         seen.add(item.url)

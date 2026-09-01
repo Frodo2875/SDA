@@ -22,6 +22,8 @@ class UntrustedWebRecord(BaseModel):
     can_trigger_tool: Literal[False] = False
     can_change_tool_risk: Literal[False] = False
     can_approve: Literal[False] = False
+    untrusted_content: Literal[True] = True
+    detected_untrusted_patterns: list[str] = Field(default_factory=list)
 
 
 class WebSearchResult(UntrustedWebRecord):

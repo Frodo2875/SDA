@@ -834,6 +834,15 @@ async def _run_agent_core(
                     source_tool_scope,
                 )
             duration_ms = max(0, round((time.perf_counter() - started) * 1000))
+            web_trace_metrics = (
+                {
+                    "source_strategy": source_route["source_strategy"],
+                    "search_query": arguments.get("query"),
+                    "url": arguments.get("url"),
+                }
+                if name == "retrieve_web" and source_route is not None
+                else None
+            )
             executed_calls.append(
                 {
                     "name": name,
@@ -851,6 +860,7 @@ async def _run_agent_core(
                     retry_count=retry_count,
                     step_id=step_id,
                     duration_ms=duration_ms,
+                    trace_metrics=web_trace_metrics,
                 )
             else:
                 try:
@@ -864,6 +874,7 @@ async def _run_agent_core(
                         retry_count=retry_count,
                         result_status="success" if result.get("ok") is True else "failed",
                         error_code=None if result.get("ok") is True else result.get("error_code"),
+                        metrics=web_trace_metrics,
                     )
                 except Exception:
                     pass

@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from backend.services.web_models import WebDocument
+from backend.services.web_safety import assess_web_content
 
 
 MAX_HTML_CHARACTERS = 2_000_000
@@ -118,6 +119,7 @@ def parse_web_page(
         ), 4000),
         **dict(response_metadata or {}),
     }
+    security = assess_web_content(title, content, publisher, metadata)
     return WebDocument(
         document_id=identity,
         url=fetched_url,
@@ -128,6 +130,8 @@ def parse_web_page(
         publisher=publisher,
         published_at=published_at,
         metadata={key: value for key, value in metadata.items() if value is not None},
+        untrusted_content=True,
+        detected_untrusted_patterns=security["detected_untrusted_patterns"],
     )
 
 

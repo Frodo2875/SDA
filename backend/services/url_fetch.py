@@ -21,6 +21,12 @@ REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 MAX_REDIRECTS = 3
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 DEFAULT_TIMEOUT_SECONDS = 8.0
+BLOCKED_METADATA_HOSTS = frozenset({
+    "metadata.google.internal",
+    "metadata.aws.internal",
+    "instance-data",
+    "instance-data.ec2.internal",
+})
 
 
 class URLFetchError(RuntimeError):
@@ -231,6 +237,8 @@ def validate_public_url(
     parts = urlsplit(canonical)
     hostname = parts.hostname or ""
     port = parts.port or (443 if parts.scheme == "https" else 80)
+    if hostname in BLOCKED_METADATA_HOSTS:
+        raise URLFetchError("WEB_SSRF_BLOCKED", "URL 指向云环境 metadata 服务")
     if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(
         (".localhost", ".local", ".internal")
     ):
@@ -271,6 +279,7 @@ def _content_type(value: str) -> tuple[str, str | None]:
 
 
 __all__ = [
+    "BLOCKED_METADATA_HOSTS",
     "HostResolver",
     "PinnedHTTPTransport",
     "SocketHostResolver",

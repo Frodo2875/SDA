@@ -90,6 +90,11 @@ def _summary(
     )
     stage_metrics = _stage_summary(traces)
     observable_metrics = [_metrics(item) for item in traces]
+    web_metrics = [
+        item for item in observable_metrics
+        if item.get("untrusted_content") is True
+        or item.get("retrieval_source") in {"WEB", "URL"}
+    ]
     agentic_rounds = [
         item for item in observable_metrics if item.get("retrieval_round") is not None
     ]
@@ -221,6 +226,29 @@ def _summary(
                 item["stop_reason"]
                 for item in observable_metrics if item.get("stop_reason")
             ],
+        },
+        "web_safety": {
+            "calls": len(web_metrics),
+            "injection_detected_calls": sum(
+                bool(item.get("detected_untrusted_patterns"))
+                for item in web_metrics
+            ),
+            "detected_patterns": dict(sorted(Counter(
+                str(pattern)
+                for item in web_metrics
+                for pattern in item.get("detected_untrusted_patterns") or []
+            ).items())),
+            "source_strategies": dict(sorted(Counter(
+                str(item["source_strategy"])
+                for item in web_metrics if item.get("source_strategy")
+            ).items())),
+            "ssrf_blocked_calls": sum(
+                item.get("error_code") == "WEB_SSRF_BLOCKED" for item in traces
+            ),
+            "tool_boundary_blocks": sum(
+                item.get("error_code") == "TOOL_NOT_ALLOWED_FOR_SOURCE"
+                for item in traces
+            ),
         },
         "errors": {
             "count": len(errors),

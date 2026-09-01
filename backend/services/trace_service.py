@@ -116,10 +116,23 @@ def _runtime_metrics(tool_name: str | None, result: Any) -> dict[str, Any]:
             if isinstance(data.get("evidence_chain"), list)
             else []
         )
+        detected_patterns = {
+            str(pattern)
+            for item in evidence
+            if isinstance(item, dict)
+            for pattern in item.get("detected_untrusted_patterns") or []
+        }
         return {
             "retrieval_mode": data.get("mode"),
             "retrieval_status": data.get("status"),
             "result_count": len(evidence),
+            "search_query": data.get("query"),
+            "url": data.get("url"),
+            "fetch_status": data.get("status"),
+            "latency_ms": _optional_duration(data.get("latency_ms")),
+            "evidence_count": len(evidence),
+            "untrusted_content": True,
+            "detected_untrusted_patterns": sorted(detected_patterns),
             "evidence_ids": [
                 str(item.get("evidence_id"))
                 for item in evidence

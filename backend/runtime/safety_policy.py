@@ -46,6 +46,10 @@ MEDIUM_RISK_OPERATIONS = {
     "reindex",
     "reindex_document",
 }
+WEB_RISK_OPERATIONS = {
+    "retrieve_web",
+    "url_fetch",
+}
 LOW_RISK_OPERATIONS = {
     "read",
     "list",
@@ -54,7 +58,6 @@ LOW_RISK_OPERATIONS = {
     "query_table",
     "retrieve",
     "retrieve_document",
-    "retrieve_web",
 }
 UNTRUSTED_DOCUMENT_SOURCES = frozenset(
     {
@@ -112,7 +115,7 @@ def classify_tool_risk(
     operation = str(tool_name or "").strip().casefold()
     if requires_confirmation or operation in HIGH_RISK_OPERATIONS:
         return RiskLevel.HIGH
-    if operation in MEDIUM_RISK_OPERATIONS:
+    if operation in MEDIUM_RISK_OPERATIONS or operation in WEB_RISK_OPERATIONS:
         return RiskLevel.MEDIUM
     if read_only is True or operation in LOW_RISK_OPERATIONS:
         return RiskLevel.LOW
@@ -312,6 +315,6 @@ def _primary_file(
 
 def _operation_name(tool_name: str, read_only: bool) -> str:
     normalized = str(tool_name).strip().casefold()
-    if normalized in HIGH_RISK_OPERATIONS:
+    if normalized in HIGH_RISK_OPERATIONS | WEB_RISK_OPERATIONS:
         return normalized
     return "read" if read_only else normalized or "write"

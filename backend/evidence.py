@@ -376,7 +376,9 @@ def _build_canonical_web_evidence(
     evidence_metadata = {
         **metadata,
         "content_truncated": len(content) > len(bounded_content),
+        "untrusted_content": True,
     }
+    detected_patterns = list(values.get("detected_untrusted_patterns") or [])
     if values.get("canonical_url"):
         evidence_metadata["canonical_url"] = values["canonical_url"]
     source_model = _explicit_text(values.get("source"))
@@ -407,6 +409,7 @@ def _build_canonical_web_evidence(
         can_trigger_tool=False,
         can_change_tool_risk=False,
         can_approve=False,
+        detected_untrusted_patterns=detected_patterns,
     )
 
 
