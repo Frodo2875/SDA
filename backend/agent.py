@@ -34,6 +34,11 @@ from backend.services.domain_router import (
 from backend.services.redaction import redacted_json, redact_value
 from backend.services.student_domain_adapter import STUDENT_DOMAIN_ADAPTER
 from backend.services.source_router import route_source
+from backend.services.tool_scope_resolver import (
+    SourceToolScope,
+    resolve_source_tool_scope,
+    source_tool_violation,
+)
 from backend.services.trace_service import llm_usage_metrics, record_trace
 from backend.tool_registry import TOOL_REGISTRY
 
@@ -107,6 +112,7 @@ def _execute_tool(
     executed_calls: list[dict[str, Any]] | None = None,
     policy_context: dict[str, Any] | None = None,
     permitted_tool_names: frozenset[str] | None = None,
+    source_tool_scope: SourceToolScope | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Validate model-generated arguments and execute an allow-listed tool."""
     spec = TOOL_REGISTRY.get(name)
@@ -131,6 +137,12 @@ def _execute_tool(
             "TOOL_NOT_ALLOWED_FOR_DOMAIN",
             f"当前 Domain 不允许调用工具：{name}",
         )
+    if source_tool_scope is not None:
+        violation = source_tool_violation(source_tool_scope, name, arguments)
+        if violation is not None:
+            return arguments, _invalid_tool_result(
+                "TOOL_NOT_ALLOWED_FOR_SOURCE", violation
+            )
     assessment = assess_tool_execution(
         tool_name=name,
         arguments=arguments,
@@ -200,12 +212,14 @@ def _execute_tool_with_retry(
     executed_calls: list[dict[str, Any]] | None = None,
     policy_context: dict[str, Any] | None = None,
     permitted_tool_names: frozenset[str] | None = None,
+    source_tool_scope: SourceToolScope | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], int]:
     """Add bounded retries around the existing validated Tool execution path."""
     spec = TOOL_REGISTRY.get(name)
     if spec is None:
         arguments, result = _execute_tool(
-            name, raw_arguments, executed_calls, policy_context, permitted_tool_names
+            name, raw_arguments, executed_calls, policy_context, permitted_tool_names,
+            source_tool_scope,
         )
         return arguments, result, 0
     return execute_with_retry(
@@ -213,7 +227,7 @@ def _execute_tool_with_retry(
         raw_arguments=raw_arguments,
         execute_once=lambda current_arguments: _execute_tool(
             name, current_arguments, executed_calls, policy_context,
-            permitted_tool_names,
+            permitted_tool_names, source_tool_scope,
         ),
         retryable=spec.retryable,
         read_only=spec.read_only,
@@ -578,6 +592,7 @@ async def _run_agent_core(
     task_id: str | None = None,
     context_prompt: str | None = None,
     domain_route: dict[str, Any] | None = None,
+    source_route: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run the model/tool loop until a final answer or the safety limit is reached."""
     llm_client = client or LLMClient()
@@ -585,6 +600,21 @@ async def _run_agent_core(
     permitted_tools = (
         allowed_tool_names(domain_route) if domain_route is not None else None
     )
+    source_tool_scope = (
+        resolve_source_tool_scope(source_route, frozenset(TOOL_FUNCTIONS))
+        if source_route is not None
+        else None
+    )
+    available_tool_names = (
+        source_tool_scope.allowed_tool_names
+        if source_tool_scope is not None
+        else frozenset(TOOL_FUNCTIONS)
+    )
+    available_tool_definitions = [
+        definition
+        for definition in TOOL_DEFINITIONS
+        if definition["function"]["name"] in available_tool_names
+    ]
     if domain_route is not None and domain_route.get("effective_domain") == "general":
         messages.append({"role": "system", "content": GENERAL_DOMAIN_PROMPT})
     if context_prompt:
@@ -599,7 +629,7 @@ async def _run_agent_core(
             start_generation_step(task_id)
         llm_started = time.perf_counter()
         assistant_message = dict(
-            await llm_client.create_chat_completion(messages, TOOL_DEFINITIONS)
+            await llm_client.create_chat_completion(messages, available_tool_definitions)
         )
         llm_duration_ms = max(
             0, round((time.perf_counter() - llm_started) * 1000)
@@ -615,7 +645,7 @@ async def _run_agent_core(
                 tool_name="llm",
                 arguments={
                     "message_count": len(messages),
-                    "available_tool_count": len(TOOL_DEFINITIONS),
+                    "available_tool_count": len(available_tool_definitions),
                     "model": model_name,
                 },
                 result={"ok": True, "status": "success", "message": "LLM 响应完成"},
@@ -634,6 +664,9 @@ async def _run_agent_core(
                         "task_type": domain_route["task_type"],
                         "reason_code": domain_route["reason_code"],
                     } if domain_route is not None else {}),
+                    **({
+                        "source_strategy": source_route["source_strategy"],
+                    } if source_route is not None else {}),
                 },
             )
         except Exception:
@@ -797,6 +830,7 @@ async def _run_agent_core(
                         "step_id": step_id,
                     },
                     permitted_tools,
+                    source_tool_scope,
                 )
             duration_ms = max(0, round((time.perf_counter() - started) * 1000))
             executed_calls.append(
@@ -949,6 +983,7 @@ async def run_agent(
             task_id=task_id,
             context_prompt=context_resolution["context_prompt"],
             domain_route=domain_route,
+            source_route=source_route,
         )
     except Exception:
         if task_id is not None:

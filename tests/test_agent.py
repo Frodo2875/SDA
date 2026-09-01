@@ -53,7 +53,9 @@ class ScenarioClient:
 
     async def create_chat_completion(self, messages, tools):
         self.requests.append(messages.copy())
-        assert {item["function"]["name"] for item in tools} == EXPECTED_TOOL_NAMES
+        assert {item["function"]["name"] for item in tools} == (
+            EXPECTED_TOOL_NAMES - {"retrieve_web"}
+        )
         assert "write_word" not in {item["function"]["name"] for item in tools}
 
         if messages[-1]["role"] == "user":
