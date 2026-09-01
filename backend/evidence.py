@@ -168,6 +168,86 @@ class UnifiedEvidence(BaseModel):
         return self
 
 
+class UnifiedEvidenceFactory:
+    """Single creation boundary for canonical local, Web and URL Evidence."""
+
+    def local(self, **values: Any) -> UnifiedEvidence:
+        payload = dict(values)
+        legacy_source_type = str(
+            payload.pop("legacy_source_type", payload.pop("source_type", ""))
+        )
+        if legacy_source_type not in {"structured", "unstructured"}:
+            raise ValueError("LOCAL Evidence 缺少 structured/unstructured 来源类型")
+        legacy_version = str(payload.pop("evidence_version", "3.0"))
+        payload.setdefault("locator_type", _infer_locator_type({
+            **payload, "source_type": legacy_source_type
+        }))
+        if payload.get("recognition_type") == "handwritten" and payload.get(
+            "handwriting_confidence"
+        ) is None:
+            payload["handwriting_confidence"] = payload.get("confidence")
+        if payload.get("conflict_sources"):
+            payload["review_required"] = True
+            payload["evidence_status"] = "conflict"
+        elif payload.get("review_required"):
+            payload["evidence_status"] = "review_required"
+        content = str(
+            payload.pop("content", None)
+            or payload.get("text_excerpt")
+            or payload.get("value_summary")
+            or ""
+        ).strip()
+        if not content:
+            raise ValueError("LOCAL Evidence 缺少真实内容")
+        allowed = {
+            key: value
+            for key, value in payload.items()
+            if key in UnifiedEvidence.model_fields
+            and key not in {
+                "evidence_version", "source_type", "legacy_source_type",
+                "authority", "freshness", "metadata", "trust_level",
+                "instruction_authority", "approval_authority",
+                "can_trigger_tool", "can_change_tool_risk", "can_approve",
+            }
+        }
+        canonical = UnifiedEvidence(
+            **allowed,
+            source_type="LOCAL",
+            legacy_source_type=legacy_source_type,
+            content=content[:50_000],
+            authority="unknown",
+            freshness="not_applicable",
+            metadata={"legacy_evidence_version": legacy_version},
+            trust_level="untrusted_document_data",
+            instruction_authority="none",
+            approval_authority="none",
+            can_trigger_tool=False,
+            can_change_tool_risk=False,
+            can_approve=False,
+        )
+        if not is_evidence_locatable(canonical):
+            raise ValueError("Evidence 缺少可定位的原文引用")
+        return canonical
+
+    def web(
+        self,
+        record: dict[str, Any] | BaseModel,
+        *,
+        source_type: Literal["WEB", "URL"],
+        retrieved_at: str,
+        max_content_chars: int = 12_000,
+    ) -> UnifiedEvidence:
+        return _build_canonical_web_evidence(
+            record,
+            source_type=source_type,
+            retrieved_at=retrieved_at,
+            max_content_chars=max_content_chars,
+        )
+
+
+UNIFIED_EVIDENCE_FACTORY = UnifiedEvidenceFactory()
+
+
 def make_evidence_id(**parts: Any) -> str:
     """Build a stable identifier from normalized provenance, never random content."""
     payload = json.dumps(parts, ensure_ascii=False, sort_keys=True, default=str)
@@ -175,26 +255,43 @@ def make_evidence_id(**parts: Any) -> str:
 
 
 def build_evidence(**values: Any) -> dict[str, Any]:
-    """Validate and persist an Evidence 3 record in the existing V2 store."""
-    values.setdefault("evidence_version", "3.0")
-    values.setdefault("locator_type", _infer_locator_type(values))
-    if values.get("recognition_type") == "handwritten" and values.get(
-        "handwriting_confidence"
-    ) is None:
-        values["handwriting_confidence"] = values.get("confidence")
-    if values.get("conflict_sources"):
-        values["review_required"] = True
-        values["evidence_status"] = "conflict"
-    elif values.get("review_required"):
-        values["evidence_status"] = "review_required"
-    evidence = Evidence(**values).model_dump()
-    if not is_evidence_locatable(evidence):
-        raise ValueError("Evidence 缺少可定位的原文引用")
-    # Import lazily to keep the canonical schema independent from persistence.
-    # The opaque ID must be resolvable by a later frontend HTTP request.
+    """Legacy entry point backed by the canonical Evidence 4.0 Factory."""
+    return serialize_evidence3_compat(UNIFIED_EVIDENCE_FACTORY.local(**values))
+
+
+def serialize_evidence3_compat(evidence: UnifiedEvidence) -> dict[str, Any]:
+    """Serialize canonical LOCAL Evidence for V1-V4 APIs and source location."""
+    if evidence.source_type != "LOCAL" or evidence.legacy_source_type is None:
+        raise ValueError("只有 LOCAL Evidence 可以序列化为 Evidence 3.0")
+    canonical = evidence.model_dump(exclude_none=True)
+    values = {
+        key: value
+        for key, value in canonical.items()
+        if key in Evidence.model_fields
+    }
+    values.update({
+        "evidence_version": str(
+            evidence.metadata.get("legacy_evidence_version") or "3.0"
+        ),
+        "source_type": evidence.legacy_source_type,
+        "value_summary": evidence.value_summary or evidence.content,
+        "text_excerpt": evidence.text_excerpt or evidence.content,
+    })
+    legacy_model = Evidence.model_validate(values)
+    persisted = legacy_model.model_dump()
     from backend import database
 
-    database.save_evidence_location(evidence)
+    database.save_evidence_location(persisted)
+    return _legacy_response(persisted)
+
+
+def serialize_evidence3_chain(
+    evidence: list[UnifiedEvidence],
+) -> list[dict[str, Any]]:
+    return [serialize_evidence3_compat(item) for item in evidence]
+
+
+def _legacy_response(evidence: dict[str, Any]) -> dict[str, Any]:
     if evidence.get("locator_type") in {"excel", "text_pdf", "word", None}:
         # Preserve the byte-for-byte Evidence 2 response contract consumed by
         # V1-V3 tools. The persisted JSON still carries the V3 envelope.
@@ -226,36 +323,8 @@ def upgrade_local_evidence(
 ) -> UnifiedEvidence:
     """Deterministically adapt a real Evidence 2/3 record into Evidence 4.0."""
     legacy = evidence if isinstance(evidence, Evidence) else Evidence.model_validate(evidence)
-    values = legacy.model_dump(exclude_none=True)
-    content = str(legacy.text_excerpt or legacy.value_summary).strip()
-    if not content:
-        raise ValueError("LOCAL Evidence 缺少真实内容")
-    passthrough = {
-        key: value
-        for key, value in values.items()
-        if key in UnifiedEvidence.model_fields
-        and key not in {
-            "evidence_version", "source_type", "legacy_source_type", "content",
-            "authority", "freshness", "metadata", "trust_level",
-            "instruction_authority", "approval_authority", "can_trigger_tool",
-            "can_change_tool_risk", "can_approve",
-        }
-    }
-    return UnifiedEvidence(
-        **passthrough,
-        evidence_version="4.0",
-        source_type="LOCAL",
-        legacy_source_type=legacy.source_type,
-        content=content[:50_000],
-        authority="unknown",
-        freshness="not_applicable",
-        metadata={"legacy_evidence_version": legacy.evidence_version},
-        trust_level=legacy.trust_level or "untrusted_document_data",
-        instruction_authority=legacy.instruction_authority or "none",
-        approval_authority=legacy.approval_authority or "none",
-        can_trigger_tool=False,
-        can_change_tool_risk=False,
-        can_approve=False,
+    return UNIFIED_EVIDENCE_FACTORY.local(
+        **legacy.model_dump(exclude_none=True)
     )
 
 
@@ -266,7 +335,22 @@ def build_web_evidence(
     retrieved_at: str,
     max_content_chars: int = 12_000,
 ) -> UnifiedEvidence:
-    """Create Evidence 4.0 only from provider or fetched-page output."""
+    """Create canonical Web Evidence through the shared Factory."""
+    return UNIFIED_EVIDENCE_FACTORY.web(
+        record,
+        source_type=source_type,
+        retrieved_at=retrieved_at,
+        max_content_chars=max_content_chars,
+    )
+
+
+def _build_canonical_web_evidence(
+    record: dict[str, Any] | BaseModel,
+    *,
+    source_type: Literal["WEB", "URL"],
+    retrieved_at: str,
+    max_content_chars: int,
+) -> UnifiedEvidence:
     values = (
         record.model_dump(mode="json")
         if isinstance(record, BaseModel)
@@ -398,12 +482,21 @@ def deserialize_evidence(payload: str | dict[str, Any]) -> Evidence:
     return Evidence.model_validate(values)
 
 
-def is_evidence_locatable(evidence: dict[str, Any] | Evidence) -> bool:
+def is_evidence_locatable(
+    evidence: dict[str, Any] | Evidence | UnifiedEvidence,
+) -> bool:
     """Accept both Evidence 2.0 locators and the complete legacy locator shape."""
-    data = evidence.model_dump() if isinstance(evidence, Evidence) else evidence
+    data = (
+        evidence.model_dump()
+        if isinstance(evidence, (Evidence, UnifiedEvidence))
+        else evidence
+    )
     if not data.get("file_id"):
         return False
-    if data.get("source_type") == "structured":
+    if data.get("source_type") == "structured" or (
+        data.get("source_type") == "LOCAL"
+        and data.get("legacy_source_type") == "structured"
+    ):
         return bool(
             (data.get("table") and data.get("cell"))
             or (

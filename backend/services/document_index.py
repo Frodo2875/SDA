@@ -16,7 +16,12 @@ from backend.document_blocks import (
     blocks_to_chunks,
     make_document_block,
 )
-from backend.evidence import build_evidence, make_evidence_id
+from backend.evidence import (
+    UNIFIED_EVIDENCE_FACTORY,
+    UnifiedEvidence,
+    make_evidence_id,
+    serialize_evidence3_compat,
+)
 from backend.repositories.file_repository import FileLifecycleStatus
 from backend.table_structure import build_simple_table, degraded_table
 from backend.services import ocr_service
@@ -633,13 +638,17 @@ def retrieve_document(
                     "status": "insufficient_evidence",
                     "query": arguments.query,
                     "evidence": [],
+                    "unified_evidence": [],
                     "failed_page": requested_page,
                     "failed_page_files": failed_page_files,
                     "result_summary": message,
                 },
                 message,
             )
-            result.update({"evidence": [], "warnings": ["OCR_FAILED_PAGE"], "result_summary": message})
+            result.update({
+                "evidence": [], "unified_evidence": [],
+                "warnings": ["OCR_FAILED_PAGE"], "result_summary": message,
+            })
             return result
     metadata_filters = dict(arguments.scope.document_metadata or {})
     requested_year = arguments.scope.year or _explicit_year_constraint(arguments.query)
@@ -655,7 +664,7 @@ def retrieve_document(
         metadata_filters=metadata_filters,
     )
     rows = retrieval["rows"]
-    evidence = []
+    unified_evidence: list[UnifiedEvidence] = []
     for row in rows:
         record = eligible[row["file_id"]]
         metadata = row.get("metadata") or {}
@@ -671,8 +680,14 @@ def retrieve_document(
              if metadata.get("row_no") is not None
              and metadata.get("column_no") is not None else None)
         )
-        evidence.append(
-            build_evidence(
+        score = round(
+            float(row.get("retrieval_score"))
+            if row.get("retrieval_score") is not None
+            else 1.0 / (1.0 + abs(float(row["rank"]))),
+            6,
+        )
+        unified_evidence.append(
+            UNIFIED_EVIDENCE_FACTORY.local(
                 evidence_id=make_evidence_id(
                     chunk_id=row["chunk_id"], block_id=block_id, query=arguments.query
                 ),
@@ -706,24 +721,19 @@ def retrieve_document(
                 text_excerpt=_excerpt(row["chunk_text"], arguments.query),
                 review_required=bool(metadata.get("review_required") or (region or {}).get("review_required")),
                 conflict_sources=list(metadata.get("conflict_sources") or (region or {}).get("conflict_sources") or []),
+                key_field_type=metadata.get("key_field_type"),
+                review_reason=metadata.get("review_reason"),
+                safe_for_high_impact=metadata.get("safe_for_high_impact"),
+                safe_for_identity_match=metadata.get("safe_for_identity_match"),
+                score=score,
             )
         )
-        evidence[-1].update({
-            key: metadata.get(key)
-            for key in (
-                "key_field_type",
-                "review_required", "review_reason", "safe_for_high_impact",
-                "safe_for_identity_match",
-            )
-            if metadata.get(key) is not None
-        })
-        evidence[-1]["score"] = round(
-            float(row.get("retrieval_score"))
-            if row.get("retrieval_score") is not None
-            else 1.0 / (1.0 + abs(float(row["rank"]))),
-            6,
-        )
-        evidence[-1]["text_excerpt"] = evidence[-1]["value_summary"]
+    evidence = []
+    for item in unified_evidence:
+        legacy = serialize_evidence3_compat(item)
+        legacy["score"] = item.score
+        legacy["text_excerpt"] = item.text_excerpt or item.content
+        evidence.append(legacy)
     low_confidence_pages = sorted({
         evidence_item["page_no"]
         for evidence_item in evidence
@@ -737,6 +747,7 @@ def retrieve_document(
                 "status": "not_found",
                 "query": arguments.query,
                 "evidence": [],
+                "unified_evidence": [],
                 "retrieval_mode": retrieval["retrieval_mode"],
                 "fallback_used": retrieval["fallback_used"],
                 "rerank_fallback": retrieval["rerank_fallback"],
@@ -758,6 +769,7 @@ def retrieve_document(
         result.update(
             {
                 "evidence": [],
+                "unified_evidence": [],
                 "warnings": [retrieval["warning"]] if retrieval["warning"] else [],
                 "result_summary": NO_EVIDENCE_MESSAGE,
             }
@@ -768,6 +780,10 @@ def retrieve_document(
             "status": "found",
             "query": arguments.query,
             "evidence": evidence,
+            "unified_evidence": [
+                item.model_dump(mode="json", exclude_none=True)
+                for item in unified_evidence
+            ],
             "retrieval_mode": retrieval["retrieval_mode"],
             "fallback_used": retrieval["fallback_used"],
             "rerank_fallback": retrieval["rerank_fallback"],
@@ -804,6 +820,10 @@ def retrieve_document(
     result.update(
         {
             "evidence": evidence,
+            "unified_evidence": [
+                item.model_dump(mode="json", exclude_none=True)
+                for item in unified_evidence
+            ],
             "warnings": warnings,
             "low_confidence_pages": low_confidence_pages,
             "result_summary": f"找到 {len(evidence)} 条材料依据",

@@ -13,7 +13,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from backend import database
 from backend.document_blocks import BlockType, DocumentBlock
-from backend.evidence import build_evidence, make_evidence_id
+from backend.evidence import (
+    UNIFIED_EVIDENCE_FACTORY,
+    make_evidence_id,
+    serialize_evidence3_compat,
+)
 from backend.services import ocr_service
 from backend.services.trace_service import record_trace
 from backend.tools.excel_utils import failure, success
@@ -248,6 +252,7 @@ def extract_key_fields(
     except (ValidationError, ValueError) as exc:
         return failure("VISUAL_KIE_ARGUMENT_INVALID", str(exc))
     fields: list[VisualKeyField] = []
+    unified_evidence = []
     for block in visual_blocks:
         if block.block_type not in {"paragraph", "table", "unknown"}:
             continue
@@ -271,7 +276,7 @@ def extract_key_fields(
                 or not block.safe_for_high_impact
             )
             region_id = block.source_region_ids[0]
-            evidence = build_evidence(
+            canonical_evidence = UNIFIED_EVIDENCE_FACTORY.local(
                 evidence_id=make_evidence_id(
                     file_id=record["file_id"], block_id=block.block_id,
                     region_id=region_id, field=field_name, value=value,
@@ -305,6 +310,8 @@ def extract_key_fields(
                 can_approve=False,
                 detected_untrusted_patterns=list(block.detected_untrusted_patterns),
             )
+            unified_evidence.append(canonical_evidence)
+            evidence = serialize_evidence3_compat(canonical_evidence)
             field_id = hashlib.sha256(
                 f"{evidence['evidence_id']}:{field_name}".encode("utf-8")
             ).hexdigest()[:32]
@@ -343,6 +350,10 @@ def extract_key_fields(
                 else "success"
             ),
             "fields": [field.model_dump() for field in fields],
+            "unified_evidence": [
+                item.model_dump(mode="json", exclude_none=True)
+                for item in unified_evidence
+            ],
             "source_ocr_preserved": True,
         },
         "视觉关键字段候选提取完成",

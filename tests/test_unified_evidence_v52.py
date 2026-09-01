@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from backend.agent import _collect_evidence
+from backend.agent import _collect_unified_evidence
 from backend.evidence import (
     UnifiedEvidence,
     deserialize_unified_evidence,
@@ -180,8 +180,13 @@ def test_mixed_local_and_web_evidence_share_evidence_4_schema() -> None:
         "source": "fixed",
         "metadata": {},
     }])).retrieve(query="source")
-    mixed = _collect_evidence([
-        {"name": "retrieve_document", "result": {"evidence": [local]}},
+    local_unified = upgrade_local_evidence(local).model_dump(
+        mode="json", exclude_none=True
+    )
+    mixed = _collect_unified_evidence([
+        {"name": "retrieve_document", "result": {
+            "evidence": [local], "unified_evidence": [local_unified]
+        }},
         {"name": "retrieve_web", "result": web_result},
     ])
 

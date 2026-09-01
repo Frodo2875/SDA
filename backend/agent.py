@@ -1007,8 +1007,8 @@ async def run_agent(
         result["task_id"] = task_id
 
     result["evidence"] = _collect_evidence(result.get("tool_calls") or [])
-    result["unified_evidence"] = unify_evidence_chain(
-        result["evidence"], promote_local=True
+    result["unified_evidence"] = _collect_unified_evidence(
+        result.get("tool_calls") or []
     )
     result["route"] = domain_route
     result["source_route"] = source_route
@@ -1064,9 +1064,49 @@ def _collect_evidence(executed_calls: list[dict[str, Any]]) -> list[dict[str, An
             if str(item.get("source_kind") or "").casefold() in {"memory", "history", "chat"}:
                 continue
             collected[str(item["evidence_id"])] = dict(item)
-    evidence = list(collected.values())
-    has_web_evidence = any(
-        str(item.get("source_type") or "") in {"WEB", "URL"}
-        for item in evidence
-    )
-    return unify_evidence_chain(evidence, promote_local=has_web_evidence)
+    return list(collected.values())
+
+
+def _collect_unified_evidence(
+    executed_calls: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Collect canonical Factory output, preserving conclusion Evidence selection."""
+    authoritative_ids: list[str] | None = None
+    for call in executed_calls:
+        data = (call.get("result") or {}).get("data")
+        if not isinstance(data, dict):
+            continue
+        chain = data.get("evidence_chain")
+        if isinstance(chain, list) and isinstance(data.get("used_tools"), list):
+            authoritative_ids = [
+                str(item["evidence_id"])
+                for item in chain
+                if isinstance(item, dict) and item.get("evidence_id")
+            ]
+
+    collected: dict[str, dict[str, Any]] = {}
+    for call in executed_calls:
+        result = call.get("result") or {}
+        data = result.get("data") if isinstance(result.get("data"), dict) else {}
+        candidates = result.get("unified_evidence")
+        if not isinstance(candidates, list):
+            candidates = data.get("unified_evidence")
+        if not isinstance(candidates, list):
+            continue
+        for item in candidates:
+            if not isinstance(item, dict) or not item.get("evidence_id"):
+                continue
+            collected[str(item["evidence_id"])] = dict(item)
+
+    if authoritative_ids is not None:
+        selected = [
+            collected[evidence_id]
+            for evidence_id in authoritative_ids
+            if evidence_id in collected
+        ]
+        if selected or not authoritative_ids:
+            return unify_evidence_chain(selected, promote_local=False)
+    if collected:
+        return unify_evidence_chain(list(collected.values()), promote_local=False)
+
+    return []

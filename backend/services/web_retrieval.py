@@ -68,12 +68,17 @@ class WebRetrievalService:
                     "url": document.url,
                     "evidence": evidence,
                     "evidence_chain": evidence,
+                    "unified_evidence": evidence,
                     "latency_ms": _elapsed_ms(started),
                     "untrusted_data": True,
                 },
                 "网页获取并生成 Evidence" if evidence else "网页没有可引用正文",
             )
-            result.update({"evidence": evidence, "evidence_chain": evidence})
+            result.update({
+                "evidence": evidence,
+                "evidence_chain": evidence,
+                "unified_evidence": evidence,
+            })
             return result
 
         clean_query = str(query or "").strip()
@@ -143,12 +148,17 @@ class WebRetrievalService:
                 "result_count": len(results),
                 "evidence": evidence,
                 "evidence_chain": evidence,
+                "unified_evidence": evidence,
                 "latency_ms": _elapsed_ms(started),
                 "untrusted_data": True,
             },
             "Web Search 完成" if results else "Web Search 未返回结果",
         )
-        result.update({"evidence": evidence, "evidence_chain": evidence})
+        result.update({
+            "evidence": evidence,
+            "evidence_chain": evidence,
+            "unified_evidence": evidence,
+        })
         return result
 
 

@@ -9,7 +9,12 @@ from openpyxl.utils import get_column_letter
 from pydantic import ValidationError
 
 from backend import database
-from backend.evidence import build_evidence, make_evidence_id
+from backend.evidence import (
+    UNIFIED_EVIDENCE_FACTORY,
+    UnifiedEvidence,
+    make_evidence_id,
+    serialize_evidence3_chain,
+)
 from backend.services.file_locator import FileLocatorError, resolve_by_file_id
 from backend.services.multiformat_parser import parse_csv_table
 from backend.tool_models import (
@@ -74,6 +79,9 @@ def query_table(
     warnings = _query_warnings(
         context["fields"], arguments.select, len(matched_rows), len(result_rows)
     )
+    unified_evidence = _structured_evidence(
+        context, returned_rows, arguments.select
+    )
     response = success(
         {
             "status": status,
@@ -95,9 +103,11 @@ def query_table(
             "result_summary": (
                 f"匹配 {len(matched_rows)} 行，返回 {len(result_rows)} 行"
             ),
-            "evidence_chain": _structured_evidence(
-                context, returned_rows, arguments.select
-            ),
+            "evidence_chain": serialize_evidence3_chain(unified_evidence),
+            "unified_evidence": [
+                item.model_dump(mode="json", exclude_none=True)
+                for item in unified_evidence
+            ],
         }
     )
     return response
@@ -299,7 +309,7 @@ def _structured_evidence(
     context: dict[str, Any],
     rows: list[dict[str, Any]],
     selected_fields: list[str],
-) -> list[dict[str, Any]]:
+) -> list[UnifiedEvidence]:
     semantic_id = next(
         (
             field["source_name"]
@@ -322,7 +332,7 @@ def _structured_evidence(
             cell = f"{get_column_letter(source_index)}{row_number}"
             table = context["schema"]["sheet_name"]
             evidence.append(
-                build_evidence(
+                UNIFIED_EVIDENCE_FACTORY.local(
                     evidence_id=make_evidence_id(
                         file_id=context["record"]["file_id"],
                         sheet=context["schema"]["sheet_name"],

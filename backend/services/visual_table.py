@@ -7,7 +7,11 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
 from backend import database
-from backend.evidence import build_evidence, make_evidence_id
+from backend.evidence import (
+    UNIFIED_EVIDENCE_FACTORY,
+    make_evidence_id,
+    serialize_evidence3_compat,
+)
 from backend.services import ocr_service
 from backend.services.visual_understanding import VisualBlock
 from backend.table_structure import TableStructure, build_simple_table, degraded_table
@@ -149,8 +153,9 @@ def calculate_visual_table(
     if record is None:
         return failure("FILE_NOT_FOUND", "视觉表格来源文件已不可用")
     evidence = []
+    unified_evidence = []
     for cell in cells:
-        item = build_evidence(
+        canonical = UNIFIED_EVIDENCE_FACTORY.local(
             evidence_id=make_evidence_id(
                 file_id=table.file_id, table_id=table.table_id,
                 cell_id=cell.cell_id, operation=operation,
@@ -186,6 +191,8 @@ def calculate_visual_table(
             can_approve=False,
             detected_untrusted_patterns=list(cell.detected_untrusted_patterns),
         )
+        unified_evidence.append(canonical)
+        item = serialize_evidence3_compat(canonical)
         # Retain the V4.5 response aliases while the persisted locator uses the
         # canonical Evidence table/cell fields.
         item.update({
@@ -203,6 +210,10 @@ def calculate_visual_table(
             "value": value,
             "evidence": evidence,
             "evidence_chain": evidence,
+            "unified_evidence": [
+                item.model_dump(mode="json", exclude_none=True)
+                for item in unified_evidence
+            ],
         },
         "视觉表格精确计算完成",
     )
