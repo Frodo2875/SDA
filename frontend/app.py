@@ -128,6 +128,9 @@ def submit_message(message: str) -> None:
             task_id=task_id,
             session_id=None if task_id else st.session_state.session_id,
         )
+        displayed_evidence = (
+            response.get("unified_evidence") or response.get("evidence") or []
+        )
         st.session_state.messages.append(
             {
                 "role": "assistant",
@@ -135,12 +138,12 @@ def submit_message(message: str) -> None:
                 "statuses": tool_statuses(response),
                 "comparison_tables": comparison_tables(response),
                 "pending_action": response.get("pending_action"),
-                "evidence": response.get("evidence") or [],
+                "evidence": displayed_evidence,
                 "task": task,
                 "traces": traces,
             }
         )
-        st.session_state.latest_evidence = response.get("evidence") or []
+        st.session_state.latest_evidence = displayed_evidence
     except RuntimeError as exc:
         st.session_state.messages.append(
             {"role": "assistant", "content": f"请求失败：{exc}", "error": True}

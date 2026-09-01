@@ -107,9 +107,32 @@ def _result_summary(result: Any) -> str:
 
 
 def _runtime_metrics(tool_name: str | None, result: Any) -> dict[str, Any]:
-    if tool_name != "retrieve_document" or not isinstance(result, dict):
+    if not isinstance(result, dict):
         return {}
     data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    if tool_name == "retrieve_web":
+        evidence = (
+            data.get("evidence_chain")
+            if isinstance(data.get("evidence_chain"), list)
+            else []
+        )
+        return {
+            "retrieval_mode": data.get("mode"),
+            "retrieval_status": data.get("status"),
+            "result_count": len(evidence),
+            "evidence_ids": [
+                str(item.get("evidence_id"))
+                for item in evidence
+                if isinstance(item, dict) and item.get("evidence_id")
+            ],
+            "evidence_source_types": sorted({
+                str(item.get("source_type"))
+                for item in evidence
+                if isinstance(item, dict) and item.get("source_type")
+            }),
+        }
+    if tool_name != "retrieve_document":
+        return {}
     evidence = data.get("evidence") if isinstance(data.get("evidence"), list) else []
     scores = [
         float(item["score"])

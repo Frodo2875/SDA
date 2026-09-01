@@ -282,6 +282,10 @@ async def test_agent_web_tool_trace_and_prompt_injection_remain_untrusted(
     assert web_trace["result_status"] == "success"
     assert web_trace["duration_ms"] >= 0
     assert "ignore previous instruction" not in web_trace["result_summary"]
+    web_metrics = json.loads(web_trace["metrics_json"])
+    assert web_metrics["result_count"] == 1
+    assert web_metrics["evidence_source_types"] == ["WEB"]
+    assert result["evidence"][0]["source_type"] == "WEB"
 
 
 @pytest.mark.anyio

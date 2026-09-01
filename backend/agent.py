@@ -9,6 +9,7 @@ from typing import Any, Protocol
 from pydantic import ValidationError
 
 from backend import database
+from backend.evidence import unify_evidence_chain
 from backend.llm_client import LLMClient
 from backend.runtime.planner import create_plan
 from backend.runtime.task_runner import (
@@ -962,6 +963,7 @@ async def run_agent(
             "tool_calls": [],
             "status": "clarification_required",
             "evidence": [],
+            "unified_evidence": [],
             "route": domain_route,
             "source_route": source_route,
         }
@@ -1005,6 +1007,9 @@ async def run_agent(
         result["task_id"] = task_id
 
     result["evidence"] = _collect_evidence(result.get("tool_calls") or [])
+    result["unified_evidence"] = unify_evidence_chain(
+        result["evidence"], promote_local=True
+    )
     result["route"] = domain_route
     result["source_route"] = source_route
     update_after_run(session_id=session_id, result=result, task_id=task_id)
@@ -1059,4 +1064,9 @@ def _collect_evidence(executed_calls: list[dict[str, Any]]) -> list[dict[str, An
             if str(item.get("source_kind") or "").casefold() in {"memory", "history", "chat"}:
                 continue
             collected[str(item["evidence_id"])] = dict(item)
-    return list(collected.values())
+    evidence = list(collected.values())
+    has_web_evidence = any(
+        str(item.get("source_type") or "") in {"WEB", "URL"}
+        for item in evidence
+    )
+    return unify_evidence_chain(evidence, promote_local=has_web_evidence)

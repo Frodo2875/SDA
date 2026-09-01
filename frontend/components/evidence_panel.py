@@ -37,7 +37,31 @@ def evidence_location(item: dict[str, Any]) -> list[str]:
         location.append(f"手写置信度：{float(item['handwriting_confidence']):.2f}")
     if item.get("review_required"):
         location.append("需要核对")
+    if item.get("domain"):
+        location.append(f"Domain：{item['domain']}")
+    if item.get("publisher"):
+        location.append(f"Publisher：{item['publisher']}")
+    if item.get("published_at"):
+        location.append(f"Published：{item['published_at']}")
+    if item.get("retrieved_at"):
+        location.append(f"Retrieved：{item['retrieved_at']}")
+    if item.get("authority"):
+        location.append(f"Authority：{item['authority']}")
     return location
+
+
+def _evidence_label(item: dict[str, Any]) -> str:
+    return str(
+        item.get("title")
+        or item.get("file_name")
+        or item.get("domain")
+        or item.get("file_id")
+        or "未知来源"
+    )
+
+
+def _is_web_evidence(item: dict[str, Any]) -> bool:
+    return item.get("source_type") in {"WEB", "URL"}
 
 
 EvidenceHandler = Callable[[dict[str, Any]], None]
@@ -58,12 +82,14 @@ def render_evidence_preview(
     for index, item in enumerate(evidence, start=1):
         with st.container(border=True):
             st.markdown(
-                f"**{index}. {item.get('file_name') or item.get('file_id') or '未知文件'}**"
+                f"**{index}. {_evidence_label(item)}**"
             )
-            st.caption(" · ".join(evidence_location(item)) or "文件级证据")
-            if item.get("value_summary"):
-                st.write(item["value_summary"])
-            if item.get("evidence_id") and st.button(
+            st.caption(" · ".join(evidence_location(item)) or "来源级证据")
+            if item.get("content") or item.get("value_summary"):
+                st.write(item.get("content") or item["value_summary"])
+            if _is_web_evidence(item) and item.get("url"):
+                st.markdown(f"[打开来源网页]({item['url']})")
+            if not _is_web_evidence(item) and item.get("evidence_id") and st.button(
                 "打开原文",
                 key=f"evidence-preview-{item['evidence_id']}-{index}",
                 use_container_width=True,
@@ -86,11 +112,13 @@ def render_evidence(
         return
     with st.expander(f"数据来源（{len(evidence)}）", expanded=False):
         for index, item in enumerate(evidence, start=1):
-            st.markdown(f"**{item.get('file_name') or item.get('file_id') or '未知文件'}**")
-            st.caption(" · ".join(evidence_location(item)) or "文件级证据")
-            if item.get("value_summary"):
-                st.write(item["value_summary"])
-            if item.get("evidence_id") and st.button(
+            st.markdown(f"**{_evidence_label(item)}**")
+            st.caption(" · ".join(evidence_location(item)) or "来源级证据")
+            if item.get("content") or item.get("value_summary"):
+                st.write(item.get("content") or item["value_summary"])
+            if _is_web_evidence(item) and item.get("url"):
+                st.markdown(f"[打开来源网页]({item['url']})")
+            if not _is_web_evidence(item) and item.get("evidence_id") and st.button(
                 "打开原文",
                 key=f"{key_prefix}-{item['evidence_id']}-{index}",
                 disabled=on_locate is None,

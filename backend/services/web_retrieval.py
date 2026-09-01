@@ -3,6 +3,8 @@
 import time
 from typing import Any
 
+from backend import database
+from backend.evidence import build_web_evidence
 from backend.services.search_provider import (
     SearchProvider,
     SearchProviderError,
@@ -50,17 +52,29 @@ class WebRetrievalService:
                         "latency_ms": _elapsed_ms(started),
                     },
                 )
-            return success(
+            retrieved_at = database.utc_now()
+            try:
+                evidence = [build_web_evidence(
+                    document,
+                    source_type="URL",
+                    retrieved_at=retrieved_at,
+                ).model_dump(mode="json", exclude_none=True)]
+            except ValueError:
+                evidence = []
+            result = success(
                 {
-                    "status": "found",
+                    "status": "found" if evidence else "not_found",
                     "mode": "direct_url",
                     "url": document.url,
-                    "document": document.model_dump(mode="json"),
+                    "evidence": evidence,
+                    "evidence_chain": evidence,
                     "latency_ms": _elapsed_ms(started),
                     "untrusted_data": True,
                 },
-                "网页获取并解析完成",
+                "网页获取并生成 Evidence" if evidence else "网页没有可引用正文",
             )
+            result.update({"evidence": evidence, "evidence_chain": evidence})
+            return result
 
         clean_query = str(query or "").strip()
         try:
@@ -107,7 +121,19 @@ class WebRetrievalService:
                 },
             )
         status = "found" if results else "not_found"
-        return success(
+        retrieved_at = database.utc_now()
+        evidence = []
+        for item in results:
+            try:
+                evidence.append(build_web_evidence(
+                    item,
+                    source_type="WEB",
+                    retrieved_at=retrieved_at,
+                ).model_dump(mode="json", exclude_none=True))
+            except ValueError:
+                # A link without a provider snippet is a result candidate, not Evidence.
+                continue
+        result = success(
             {
                 "status": status,
                 "mode": "search",
@@ -115,11 +141,15 @@ class WebRetrievalService:
                 "provider": str(getattr(self.search_provider, "name", "unknown")),
                 "results": [item.model_dump(mode="json") for item in results],
                 "result_count": len(results),
+                "evidence": evidence,
+                "evidence_chain": evidence,
                 "latency_ms": _elapsed_ms(started),
                 "untrusted_data": True,
             },
             "Web Search 完成" if results else "Web Search 未返回结果",
         )
+        result.update({"evidence": evidence, "evidence_chain": evidence})
+        return result
 
 
 WEB_RETRIEVAL_SERVICE = WebRetrievalService()
