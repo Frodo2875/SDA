@@ -24,6 +24,7 @@ from backend.tools import (
     file_tools,
     schema_tools,
     table_tools,
+    web_tools,
 )
 
 
@@ -36,6 +37,7 @@ GENERAL_CORE_TOOL_NAMES = frozenset({
     "validate_document",
     "find_duplicate_records",
     "retrieve_document",
+    "retrieve_web",
 })
 
 # Auditable ownership map for capabilities that remain in their stable modules.
@@ -142,6 +144,23 @@ class DocumentAgentCore:
         self, scope: dict[str, Any], query: str, top_k: int = 5
     ) -> dict[str, Any]:
         return document_tools.retrieve_document(scope, query, top_k)
+
+    def retrieve_web(
+        self,
+        *,
+        query: str | None = None,
+        url: str | None = None,
+        top_k: int = 5,
+        language: str | None = None,
+        region: str | None = None,
+    ) -> dict[str, Any]:
+        return web_tools.retrieve_web(
+            query=query,
+            url=url,
+            top_k=top_k,
+            language=language,
+            region=region,
+        )
 
     def run_controlled_retrieval(
         self,

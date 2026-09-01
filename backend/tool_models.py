@@ -104,6 +104,28 @@ class RetrieveDocumentArguments(ToolArguments):
     top_k: int = Field(default=5, ge=1, le=20)
 
 
+class WebRetrievalArguments(ToolArguments):
+    query: str | None = Field(default=None, min_length=1, max_length=500)
+    url: str | None = Field(default=None, min_length=1, max_length=4096)
+    top_k: int = Field(default=5, ge=1, le=10)
+    language: str | None = Field(default=None, min_length=2, max_length=16)
+    region: str | None = Field(default=None, min_length=2, max_length=16)
+
+    @model_validator(mode="after")
+    def validate_mode(self) -> "WebRetrievalArguments":
+        if (self.query is None) == (self.url is None):
+            raise ValueError("query 与 url 必须且只能提供一个")
+        if self.url is not None:
+            from urllib.parse import urlsplit
+
+            parts = urlsplit(self.url)
+            if parts.scheme.casefold() not in {"http", "https"} or not parts.hostname:
+                raise ValueError("url 必须是有效的 HTTP(S) URL")
+            if parts.username is not None or parts.password is not None:
+                raise ValueError("url 不允许包含用户名或密码")
+        return self
+
+
 class ScholarshipEvaluationArguments(ToolArguments):
     student_id: str = Field(min_length=1, max_length=64)
     award_name: str = Field(default="一等奖学金", min_length=1, max_length=100)

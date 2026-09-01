@@ -54,6 +54,7 @@ LOW_RISK_OPERATIONS = {
     "query_table",
     "retrieve",
     "retrieve_document",
+    "retrieve_web",
 }
 UNTRUSTED_DOCUMENT_SOURCES = frozenset(
     {
@@ -64,6 +65,9 @@ UNTRUSTED_DOCUMENT_SOURCES = frozenset(
         "table_cell",
         "ppt_text",
         "document_block",
+        "web_page",
+        "web_search_result",
+        "untrusted_web_data",
     }
 ) | VISUAL_UNTRUSTED_SOURCES
 

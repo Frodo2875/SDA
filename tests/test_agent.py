@@ -40,6 +40,7 @@ EXPECTED_TOOL_NAMES = {
     "find_duplicate_records",
     "validate_student_data",
     "retrieve_document",
+    "retrieve_web",
     "evaluate_scholarship_eligibility",
 }
 
