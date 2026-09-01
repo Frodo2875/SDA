@@ -52,6 +52,10 @@ class DocumentCorePort(Protocol):
         self, task: str, *, domain: str = "general", **kwargs: Any
     ) -> dict[str, Any]: ...
 
+    def run_cross_source_retrieval(
+        self, task: str, **kwargs: Any
+    ) -> dict[str, Any]: ...
+
 
 @dataclass(frozen=True)
 class StudentDomainAdapter:
@@ -139,6 +143,12 @@ class StudentDomainAdapter:
         return self.core.run_controlled_retrieval(
             task, domain="student", **kwargs
         )
+
+    def run_cross_source_retrieval(
+        self, task: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        """Use the same bounded cross-source coordinator as the general Core."""
+        return self.core.run_cross_source_retrieval(task, **kwargs)
 
     def prepare_report_write(
         self,

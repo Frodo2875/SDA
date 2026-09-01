@@ -174,6 +174,18 @@ class DocumentAgentCore:
 
         return run_controlled_retrieval(task, domain=domain, **kwargs)
 
+    def run_cross_source_retrieval(
+        self,
+        task: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Run the bounded V5.3 coordinator over existing local/Web ports."""
+        from backend.services.cross_source_retrieval import (
+            run_cross_source_retrieval,
+        )
+
+        return run_cross_source_retrieval(task, **kwargs)
+
     def validate_document(self, file_id: str) -> dict[str, Any]:
         return data_quality_tools.validate_document(file_id)
 
