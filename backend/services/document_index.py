@@ -29,6 +29,7 @@ from backend.services.file_lifecycle import (
     transition_file_lifecycle,
 )
 from backend.services.input_router import route_document_input, route_pdf_pages
+from backend.services.multiformat_parser import MultiFormatParseError, parse_local_document
 from backend.services.file_locator import FileLocatorError, resolve_by_file_id
 from backend.services.hybrid_retrieval import hybrid_retrieve
 from backend.services.trace_service import record_trace
@@ -38,7 +39,9 @@ from backend.tools.excel_utils import failure, success
 
 WORD_CHUNK_SIZE = 900
 WORD_CHUNK_OVERLAP = 100
-SUPPORTED_DOCUMENT_TYPES = {"pdf", "word", "image"}
+SUPPORTED_DOCUMENT_TYPES = {
+    "pdf", "word", "image", "presentation", "txt", "json"
+}
 NO_EVIDENCE_MESSAGE = "当前材料中未找到足够依据。"
 OCR_NOT_SUPPORTED_MESSAGE = "当前版本不支持扫描 PDF / OCR。"
 LOW_OCR_CONFIDENCE = 0.8
@@ -273,20 +276,40 @@ def _index_document(file_id: str, *, reprocess: bool) -> dict[str, Any]:
     if operation_error is not None:
         return operation_error
     parse_started = time.perf_counter()
+    parsed_document = None
     try:
         path = resolve_by_file_id(clean_file_id)
-        chunks = _word_chunks(clean_file_id, path)
+        if record["file_type"] == "word":
+            chunks = _word_chunks(clean_file_id, path)
+        else:
+            parsed_document = parse_local_document(
+                path, file_id=clean_file_id, file_name=record["file_name"]
+            )
+            chunks = blocks_to_chunks(
+                parsed_document.blocks,
+                source_type=record["file_type"],
+                metadata_by_block=parsed_document.metadata_by_block,
+            )
     except FileLocatorError as exc:
         _record_document_stage(record, "parse", parse_started, "failed", error_code="FILE_NOT_FOUND")
         return _index_failure(
             record, "FILE_NOT_FOUND", str(exc), failure_stage="parse"
         )
-    except Exception:
-        _record_document_stage(record, "parse", parse_started, "failed", error_code="WORD_PARSE_ERROR")
+    except MultiFormatParseError as exc:
+        _record_document_stage(record, "parse", parse_started, "failed", error_code="DOCUMENT_PARSE_ERROR")
         return _index_failure(
             record,
-            "WORD_PARSE_ERROR",
-            "Word 文件无法正常解析",
+            "DOCUMENT_PARSE_ERROR",
+            str(exc),
+            failure_stage="parse",
+        )
+    except Exception:
+        error_code = "WORD_PARSE_ERROR" if record["file_type"] == "word" else "DOCUMENT_PARSE_ERROR"
+        _record_document_stage(record, "parse", parse_started, "failed", error_code=error_code)
+        return _index_failure(
+            record,
+            error_code,
+            "Word 文件无法正常解析" if record["file_type"] == "word" else "文档无法正常解析",
             failure_stage="parse",
         )
     if not chunks:
@@ -294,7 +317,7 @@ def _index_document(file_id: str, *, reprocess: bool) -> dict[str, Any]:
         return _index_failure(
             record,
             "NO_TEXT_CONTENT",
-            "Word 文档中没有可索引文本",
+            "文档中没有可索引文本",
             failure_stage="parse",
         )
     pending_error = _mark_index_pending(record)
@@ -311,6 +334,10 @@ def _index_document(file_id: str, *, reprocess: bool) -> dict[str, Any]:
         extra_data={
             "block_count": len(blocks),
             "blocks": [block.model_dump() for block in blocks],
+            **(
+                {"document": parsed_document.payload()}
+                if parsed_document is not None else {}
+            ),
         },
     )
 
@@ -663,6 +690,11 @@ def retrieve_document(
                 cell=cell,
                 row_index=metadata.get("row_index", metadata.get("row_no")),
                 column_index=metadata.get("column_index", metadata.get("column_no")),
+                line_number=metadata.get("line_number"),
+                json_path=metadata.get("json_path"),
+                slide_number=metadata.get("slide_number"),
+                row_number=metadata.get("row_number"),
+                column_name=metadata.get("column_name"),
                 bbox=metadata.get("bbox"),
                 confidence=metadata.get("confidence"),
                 recognition_type=metadata.get("recognition_type") or (region or {}).get("recognition_type"),
@@ -1700,7 +1732,7 @@ def _validated_document(
         return arguments.file_id, record, failure("UNSUPPORTED_FILE_TYPE", f"该接口仅支持 {expected_type}")
     if record["file_type"] not in SUPPORTED_DOCUMENT_TYPES:
         return arguments.file_id, record, failure(
-            "UNSUPPORTED_FILE_TYPE", "仅支持 PDF、Word 和图片文档索引"
+            "UNSUPPORTED_FILE_TYPE", "仅支持 PDF、Word、图片、PPT/PPTX、TXT 和 JSON 文档索引"
         )
     return arguments.file_id, record, None
 

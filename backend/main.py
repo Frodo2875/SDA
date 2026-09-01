@@ -128,7 +128,9 @@ async def health() -> HealthResponse:
 @app.get("/api/files", response_model=ToolResponse, tags=["files"])
 async def api_list_files(
     search: str | None = Query(default=None, max_length=255),
-    file_type: Literal["excel", "word", "pdf", "image"] | None = Query(default=None),
+    file_type: Literal[
+        "excel", "word", "pdf", "image", "presentation", "txt", "json", "csv"
+    ] | None = Query(default=None),
     lifecycle_status: Literal[
         "uploaded", "detecting", "parsing", "visual_processing", "ocr_processing",
         "layout_processing", "indexing", "reprocessing", "reindexing", "queryable",

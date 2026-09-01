@@ -11,6 +11,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 from backend import database
 from backend.services.file_locator import FileLocatorError, resolve_by_file_id
 from backend.services.field_semantics import map_field_semantics
+from backend.services.multiformat_parser import parse_csv_table
 from backend.tools.excel_utils import failure, success
 
 
@@ -21,15 +22,15 @@ MIN_HEADER_CONFIDENCE = 0.78
 
 
 def inspect_excel(file_id: str) -> dict[str, Any]:
-    """Discover and persist independent schemas for every Sheet in an Excel file."""
+    """Discover and persist schemas for Excel sheets or one CSV table."""
     clean_file_id, validation_error = _validate_file_id(file_id)
     if validation_error is not None:
         return validation_error
     record = database.get_file_record_by_id(clean_file_id)
     if record is None:
         return failure("FILE_NOT_FOUND", "未找到指定 file_id 的文件")
-    if record["file_type"] != "excel":
-        return failure("UNSUPPORTED_FILE_TYPE", "inspect_excel 仅支持 .xlsx 文件")
+    if record["file_type"] not in {"excel", "csv"}:
+        return failure("UNSUPPORTED_FILE_TYPE", "Schema Discovery 仅支持 XLSX 或 CSV 文件")
     if record["lifecycle_status"] == "deleted":
         return failure("FILE_NOT_FOUND", "文件已经删除")
 
@@ -50,19 +51,22 @@ def inspect_excel(file_id: str) -> dict[str, Any]:
 
     workbook = None
     try:
-        workbook = load_workbook(
-            path,
-            read_only=False,
-            data_only=True,
-            keep_vba=False,
-            keep_links=False,
-        )
-        schemas = [_inspect_worksheet(worksheet) for worksheet in workbook.worksheets]
+        if record["file_type"] == "csv":
+            schemas = [_inspect_csv(path)]
+        else:
+            workbook = load_workbook(
+                path,
+                read_only=False,
+                data_only=True,
+                keep_vba=False,
+                keep_links=False,
+            )
+            schemas = [_inspect_worksheet(worksheet) for worksheet in workbook.worksheets]
     except Exception:
         return _fail_inspection(
             clean_file_id,
-            "EXCEL_PARSE_ERROR",
-            "Excel 文件无法正常解析，文件可能已损坏",
+            "CSV_PARSE_ERROR" if record["file_type"] == "csv" else "EXCEL_PARSE_ERROR",
+            "CSV 文件无法正常解析" if record["file_type"] == "csv" else "Excel 文件无法正常解析，文件可能已损坏",
         )
     finally:
         if workbook is not None:
@@ -113,8 +117,44 @@ def inspect_excel(file_id: str) -> dict[str, Any]:
     stored = database.get_table_schema_records(clean_file_id)
     return success(
         _inspection_payload(record, [_format_schema(schema) for schema in stored]),
-        f"已识别 {len(stored)} 个 Sheet 的表结构",
+        f"已识别 {len(stored)} 个表结构",
     )
+
+
+def _inspect_csv(path: Path) -> dict[str, Any]:
+    table = parse_csv_table(path)
+    fields = []
+    for position, source_name in enumerate(table.headers, start=1):
+        values = [row[position - 1] for row in table.rows]
+        non_null = [value for value in values if not _is_empty(value)]
+        null_count = len(values) - len(non_null)
+        semantic = map_field_semantics(source_name)
+        fields.append({
+            "source_name": source_name,
+            "source_index": position,
+            "inferred_type": _infer_type(non_null),
+            "nullable": null_count > 0,
+            "null_count": null_count,
+            "null_ratio": round(null_count / len(values), 6) if values else 0.0,
+            "unique_count": len({_unique_key(value) for value in non_null}),
+            "semantic_type": semantic["semantic_type"],
+            "confidence": semantic["mapping_confidence"],
+            "sensitive": semantic["sensitive"],
+            "canonical_name": semantic["canonical_name"],
+            "mapping_confidence": semantic["mapping_confidence"],
+            "mapping_source": semantic["mapping_source"],
+        })
+    return {
+        "sheet_name": "CSV",
+        "header_row": 1,
+        "data_start_row": 2,
+        "row_count": len(table.rows),
+        "column_count": len(table.headers),
+        "detection_status": "detected",
+        "confidence": 1.0,
+        "detection_message": f"CSV 表头识别成功（{table.encoding}，分隔符 {table.delimiter!r}）",
+        "fields": fields,
+    }
 
 
 def get_table_schema(

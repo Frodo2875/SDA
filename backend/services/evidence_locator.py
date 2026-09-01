@@ -10,6 +10,7 @@ from openpyxl.utils.cell import coordinate_to_tuple
 from backend import database
 from backend.services.file_locator import FileLocatorError, resolve_by_file_id
 from backend.services.input_router import build_image_preview
+from backend.services.multiformat_parser import parse_csv_table
 from backend.services.trace_service import record_trace
 from backend.tools.excel_utils import failure, success
 
@@ -50,7 +51,9 @@ def locate_evidence(
             location = _locate_visual_table(evidence, record, path)
         elif record["file_type"] == "excel":
             location = _locate_excel(evidence, record, path)
-        elif record["file_type"] in {"pdf", "word"}:
+        elif record["file_type"] == "csv":
+            location = _locate_csv(evidence, record, path)
+        elif record["file_type"] in {"pdf", "word", "presentation", "txt", "json"}:
             location = _locate_document(evidence, record)
         elif record["file_type"] == "image":
             location = _locate_image(evidence, record, path)
@@ -143,6 +146,9 @@ def _locate_document(
             evidence.get("column_index")
             if evidence.get("column_index") is not None else metadata.get("column_index")
         ),
+        "line_number": evidence.get("line_number") or metadata.get("line_number"),
+        "json_path": evidence.get("json_path") or metadata.get("json_path"),
+        "slide_number": evidence.get("slide_number") or metadata.get("slide_number") or page_no,
         "recognition_type": evidence.get("recognition_type") or (region or {}).get("recognition_type"),
         "handwriting_confidence": evidence.get("handwriting_confidence"),
         "review_required": bool(evidence.get("review_required")),
@@ -158,6 +164,12 @@ def _locate_document(
             "page_no": int(page_no),
             "highlight": {"bbox": bbox} if bbox is not None else None,
         }
+    if record["file_type"] == "presentation":
+        return {**base, "location_type": "presentation", "slide_number": base["slide_number"]}
+    if record["file_type"] == "txt":
+        return {**base, "location_type": "txt", "line_number": base["line_number"]}
+    if record["file_type"] == "json":
+        return {**base, "location_type": "json", "json_path": base["json_path"]}
     return {
         **base,
         "location_type": "word",
@@ -316,6 +328,36 @@ def _locate_excel(
         "headers": headers,
         "row_values": row_values,
         "target_value": target_value,
+    }
+
+
+def _locate_csv(
+    evidence: dict[str, Any], record: dict[str, Any], path: Any
+) -> dict[str, Any]:
+    table = parse_csv_table(path)
+    row_number = int(evidence.get("row_number") or 0)
+    column_name = str(evidence.get("column_name") or evidence.get("field") or "")
+    if row_number < 2 or row_number - 2 >= len(table.rows):
+        raise ValueError("CSV Evidence 行已不存在")
+    if column_name not in table.headers:
+        raise ValueError("CSV Evidence 列已不存在")
+    column_number = table.headers.index(column_name) + 1
+    row_values = table.rows[row_number - 2]
+    return {
+        "evidence_id": evidence["evidence_id"],
+        "location_type": "csv",
+        "source_type": evidence["source_type"],
+        "file_id": record["file_id"],
+        "file_name": record["file_name"],
+        "table_id": evidence.get("table") or "CSV",
+        "cell_id": evidence.get("cell"),
+        "row_number": row_number,
+        "column_number": column_number,
+        "column_name": column_name,
+        "record_identifier": evidence.get("record_key"),
+        "headers": list(table.headers),
+        "row_values": row_values,
+        "target_value": row_values[column_number - 1],
     }
 
 

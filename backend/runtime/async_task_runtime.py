@@ -483,8 +483,10 @@ def _validated_payload(arguments: AsyncTaskCreateRequest) -> dict[str, Any]:
             raise ValueError("未找到指定文件")
         if arguments.task_type == "ocr" and record["file_type"] not in {"pdf", "image"}:
             raise ValueError("OCR 任务只支持 PDF 或图片")
-        if arguments.task_type in {"layout", "index", "reindex"} and record["file_type"] not in {"pdf", "word", "image"}:
-            raise ValueError("索引任务只支持 PDF、Word 或图片")
+        if arguments.task_type in {"layout", "index", "reindex"} and record["file_type"] not in {
+            "pdf", "word", "image", "presentation", "txt", "json"
+        }:
+            raise ValueError("索引任务只支持 PDF、Word、图片、PPT/PPTX、TXT 或 JSON")
         if pages is not None:
             if (
                 not isinstance(pages, list)

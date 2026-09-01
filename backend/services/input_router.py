@@ -8,11 +8,17 @@ from typing import Any
 from PIL import Image, UnidentifiedImageError
 
 from backend.services import ocr_service
+from backend.services.multiformat_parser import MultiFormatParseError, validate_local_format
 from backend.tools.excel_utils import failure, success
 
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
-SUPPORTED_SUFFIXES = {".xlsx", ".docx", ".pdf", *IMAGE_SUFFIXES}
+TEXT_SUFFIXES = {".txt", ".json"}
+PRESENTATION_SUFFIXES = {".ppt", ".pptx"}
+SUPPORTED_SUFFIXES = {
+    ".xlsx", ".docx", ".pdf", ".csv", *TEXT_SUFFIXES,
+    *PRESENTATION_SUFFIXES, *IMAGE_SUFFIXES,
+}
 MAX_IMAGE_PIXELS = 40_000_000
 PREVIEW_MAX_EDGE = 1200
 _GENERIC_MIME_TYPES = {"", "application/octet-stream"}
@@ -24,6 +30,11 @@ _EXPECTED_MIME_TYPES = {
     ".jpg": {"image/jpeg"},
     ".jpeg": {"image/jpeg"},
     ".png": {"image/png"},
+    ".ppt": {"application/vnd.ms-powerpoint"},
+    ".pptx": {"application/vnd.openxmlformats-officedocument.presentationml.presentation"},
+    ".txt": {"text/plain"},
+    ".json": {"application/json", "text/json"},
+    ".csv": {"text/csv", "application/csv", "application/vnd.ms-excel"},
 }
 _IMAGE_FORMATS = {".jpg": "JPEG", ".jpeg": "JPEG", ".png": "PNG"}
 _IMAGE_MIME_TYPES = {"JPEG": "image/jpeg", "PNG": "image/png"}
@@ -39,7 +50,7 @@ def route_document_input(
     if suffix not in SUPPORTED_SUFFIXES:
         return failure(
             "UNSUPPORTED_FILE_TYPE",
-            "不支持的文件类型；仅支持 XLSX、DOCX、PDF、JPG、JPEG 和 PNG",
+            "不支持的文件类型；支持 XLSX、DOCX、PDF、PPT、PPTX、TXT、JSON、CSV、JPG、JPEG 和 PNG",
             {"suffix": suffix or None, "route": "SAFE_REJECT"},
         )
     mime_error = validate_declared_mime(suffix, declared_mime_type)
@@ -55,6 +66,33 @@ def route_document_input(
         return success(
             _route_data("word", "TEXT", suffix, _canonical_mime(suffix)),
             "输入已路由到文本文档处理",
+        )
+    if suffix == ".csv":
+        content_error = validate_multiformat_content(path)
+        if content_error is not None:
+            return content_error
+        return success(
+            _route_data("csv", "STRUCTURED", suffix, _canonical_mime(suffix)),
+            "输入已路由到结构化文档处理",
+        )
+    if suffix in TEXT_SUFFIXES:
+        content_error = validate_multiformat_content(path)
+        if content_error is not None:
+            return content_error
+        return success(
+            _route_data(suffix.lstrip("."), "TEXT", suffix, _canonical_mime(suffix)),
+            "输入已路由到文本文档处理",
+        )
+    if suffix in PRESENTATION_SUFFIXES:
+        content_error = validate_multiformat_content(path)
+        if content_error is not None:
+            return content_error
+        return success(
+            {
+                **_route_data("presentation", "TEXT", suffix, _canonical_mime(suffix)),
+                "document_format": suffix.lstrip("."),
+            },
+            "输入已路由到演示文稿处理",
         )
     if suffix == ".pdf":
         detected = ocr_service.detect_pdf_type(path)
@@ -77,6 +115,15 @@ def route_document_input(
         },
         "图片输入已路由到视觉文档处理",
     )
+
+
+def validate_multiformat_content(path: Path) -> dict[str, Any] | None:
+    """Validate one V5 local format without changing lifecycle or persistence."""
+    try:
+        validate_local_format(path)
+    except MultiFormatParseError as exc:
+        return failure("INVALID_FILE_CONTENT", str(exc))
+    return None
 
 
 def route_pdf_pages(pages: list[tuple[int, str]]) -> dict[str, Any]:
@@ -209,7 +256,8 @@ def _route_data(
 
 
 def _canonical_mime(suffix: str) -> str:
-    return next(iter(_EXPECTED_MIME_TYPES[suffix]))
+    canonical = {".json": "application/json", ".csv": "text/csv"}
+    return canonical.get(suffix, next(iter(_EXPECTED_MIME_TYPES[suffix])))
 
 
 def validate_declared_mime(

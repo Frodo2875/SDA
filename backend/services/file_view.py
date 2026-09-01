@@ -10,6 +10,7 @@ from backend import database
 from backend.services import ocr_service
 from backend.services.file_lifecycle import get_file_lifecycle
 from backend.services.input_router import build_image_preview
+from backend.services.multiformat_parser import parse_csv_table
 from backend.services.file_locator import FileLocatorError, resolve_by_file_id
 from backend.tools.excel_utils import failure, success
 from backend.tools.file_tools import list_files
@@ -92,6 +93,12 @@ def get_file_preview(file_id: str) -> dict[str, Any]:
             if not image_preview["ok"]:
                 return image_preview
             preview = image_preview["data"]
+        elif item["file_type"] in {"presentation", "txt", "json"}:
+            preview = _indexed_text_preview(item["file_id"])
+            if preview is None:
+                return failure("FILE_PREVIEW_ERROR", "文档尚无可用索引预览")
+        elif item["file_type"] == "csv":
+            preview = _preview_csv(path)
         else:
             return failure("UNSUPPORTED_FILE_TYPE", "当前文件类型不支持快速预览")
     except FileLocatorError as exc:
@@ -127,7 +134,7 @@ def _enrich(item: dict[str, Any]) -> dict[str, Any]:
     enriched["canonical_status"] = lifecycle_data.get("status")
     enriched["error_summary"] = lifecycle_data.get("error")
     enriched["schema_summary"] = None
-    if item.get("file_type") == "excel" and item.get("file_id"):
+    if item.get("file_type") in {"excel", "csv"} and item.get("file_id"):
         schemas = database.get_table_schema_records(item["file_id"])
         enriched["schema_summary"] = {
             "sheet_count": len(schemas),
@@ -182,6 +189,21 @@ def _preview_excel(path: Path) -> dict[str, Any]:
         }
     finally:
         workbook.close()
+
+
+def _preview_csv(path: Path) -> dict[str, Any]:
+    table = parse_csv_table(path)
+    rows = [table.headers[:PREVIEW_MAX_COLUMNS]]
+    rows.extend(
+        row[:PREVIEW_MAX_COLUMNS]
+        for row in table.rows[: max(0, PREVIEW_MAX_ROWS - 1)]
+    )
+    return {
+        "preview_type": "table",
+        "sheets": [{"sheet_name": "CSV", "rows": rows}],
+        "truncated": len(table.rows) + 1 > PREVIEW_MAX_ROWS
+        or len(table.headers) > PREVIEW_MAX_COLUMNS,
+    }
 
 
 def _preview_word(file_id: str, path: Path) -> dict[str, Any]:

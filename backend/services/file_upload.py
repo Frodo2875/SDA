@@ -13,7 +13,11 @@ from openpyxl import load_workbook
 from backend import database
 from backend.services.file_lifecycle import process_uploaded_file
 from backend.services.document_index import index_document, route_pdf_file, validate_pdf_file
-from backend.services.input_router import route_document_input, validate_declared_mime
+from backend.services.input_router import (
+    route_document_input,
+    validate_declared_mime,
+    validate_multiformat_content,
+)
 from backend.tools import excel_utils
 from backend.tools.excel_utils import failure, success
 
@@ -25,6 +29,11 @@ SUPPORTED_UPLOADS = {
     ".jpg": "image",
     ".jpeg": "image",
     ".png": "image",
+    ".ppt": "presentation",
+    ".pptx": "presentation",
+    ".txt": "txt",
+    ".json": "json",
+    ".csv": "csv",
 }
 
 
@@ -43,7 +52,7 @@ def _safe_file_name(file_name: str) -> tuple[str | None, dict[str, Any] | None]:
     if Path(clean_name).suffix.lower() not in SUPPORTED_UPLOADS:
         return None, failure(
             "UNSUPPORTED_FILE_TYPE",
-            "仅支持 .xlsx、.docx、.pdf、.jpg、.jpeg 和 .png 文件",
+            "支持 .xlsx、.docx、.pdf、.ppt、.pptx、.txt、.json、.csv、.jpg、.jpeg 和 .png 文件",
         )
     return clean_name, None
 
@@ -57,6 +66,8 @@ def _validate_document(path: Path, suffix: str) -> dict[str, Any] | None:
             Document(path)
         elif suffix == ".pdf":
             return validate_pdf_file(path)
+        elif suffix in {".ppt", ".pptx", ".txt", ".json", ".csv"}:
+            return validate_multiformat_content(path)
         else:
             routed = route_document_input(path)
             return None if routed["ok"] else routed
@@ -68,6 +79,11 @@ def _validate_document(path: Path, suffix: str) -> dict[str, Any] | None:
             ".jpg": "JPEG",
             ".jpeg": "JPEG",
             ".png": "PNG",
+            ".ppt": "PPT",
+            ".pptx": "PPTX",
+            ".txt": "TXT",
+            ".json": "JSON",
+            ".csv": "CSV",
         }[suffix]
         return failure(
             "INVALID_FILE_CONTENT",
@@ -194,10 +210,16 @@ def save_uploaded_file(
         if not parse_result["ok"]:
             return parse_result
 
-        if file_type in {"word", "pdf"}:
+        if file_type in {"word", "pdf", "txt", "json", "presentation"}:
             index_result = index_document(file_record["file_id"])
             if not index_result["ok"]:
                 return index_result
+        elif file_type == "csv":
+            from backend.tools.schema_tools import inspect_excel
+
+            schema_result = inspect_excel(file_record["file_id"])
+            if not schema_result["ok"]:
+                return schema_result
 
     file_record = database.get_file_record_by_id(file_record["file_id"])
     return success(

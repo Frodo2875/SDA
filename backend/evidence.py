@@ -24,6 +24,10 @@ class Evidence(BaseModel):
         "visual_table",
         "handwriting",
         "word",
+        "presentation",
+        "txt",
+        "json",
+        "csv",
     ] | None = None
     file_id: str
     file_name: str
@@ -37,6 +41,11 @@ class Evidence(BaseModel):
     cell: str | None = None
     row_index: int | None = Field(default=None, ge=0)
     column_index: int | None = Field(default=None, ge=0)
+    line_number: int | None = Field(default=None, ge=1)
+    json_path: str | None = Field(default=None, min_length=1, max_length=1024)
+    slide_number: int | None = Field(default=None, ge=1)
+    row_number: int | None = Field(default=None, ge=1)
+    column_name: str | None = Field(default=None, min_length=1, max_length=256)
     bbox: list[float] | None = Field(default=None, min_length=4, max_length=4)
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     handwriting_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -110,6 +119,7 @@ def build_evidence(**values: Any) -> dict[str, Any]:
         "handwriting_confidence", "recognition_type", "source_parser",
         "source_model", "text_excerpt", "score", "key_field_type",
         "review_reason", "safe_for_high_impact", "safe_for_identity_match",
+        "line_number", "json_path", "slide_number", "row_number", "column_name",
     ):
         if evidence[key] is None:
             evidence.pop(key)
@@ -166,4 +176,12 @@ def _infer_locator_type(values: dict[str, Any]) -> str | None:
         return "visual_pdf" if values.get("region_id") or values.get("bbox") else "text_pdf"
     if file_name.endswith((".doc", ".docx")):
         return "word"
+    if file_name.endswith((".ppt", ".pptx")):
+        return "presentation"
+    if file_name.endswith(".txt"):
+        return "txt"
+    if file_name.endswith(".json"):
+        return "json"
+    if file_name.endswith(".csv"):
+        return "csv"
     return None

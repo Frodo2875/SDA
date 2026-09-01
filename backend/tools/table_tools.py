@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from backend import database
 from backend.evidence import build_evidence, make_evidence_id
 from backend.services.file_locator import FileLocatorError, resolve_by_file_id
+from backend.services.multiformat_parser import parse_csv_table
 from backend.tool_models import (
     AggregateTableArguments,
     QueryTableArguments,
@@ -219,8 +220,8 @@ def load_table_data(file_id: str, sheet_name: str) -> dict[str, Any]:
     record = database.get_file_record_by_id(file_id)
     if record is None:
         return failure("FILE_NOT_FOUND", "未找到指定 file_id 的文件")
-    if record["file_type"] != "excel":
-        return failure("UNSUPPORTED_FILE_TYPE", "通用表格 Tool 仅支持 Excel")
+    if record["file_type"] not in {"excel", "csv"}:
+        return failure("UNSUPPORTED_FILE_TYPE", "通用表格 Tool 仅支持 Excel 或 CSV")
     if not bool(record["queryable"]):
         return failure("FILE_NOT_QUERYABLE", "文件当前不可查询，请先完成可靠解析")
     schemas = database.get_table_schema_records(file_id, sheet_name)
@@ -238,34 +239,46 @@ def load_table_data(file_id: str, sheet_name: str) -> dict[str, Any]:
     max_column = max(field["source_index"] for field in schema["fields"])
     workbook = None
     try:
-        workbook = load_workbook(
-            path,
-            read_only=True,
-            data_only=True,
-            keep_vba=False,
-            keep_links=False,
-        )
-        if sheet_name not in workbook.sheetnames:
-            return failure("SHEET_NOT_FOUND", f"Excel 中不存在 Sheet：{sheet_name}")
-        worksheet = workbook[sheet_name]
-        rows = []
-        for row_number, values in enumerate(
-            worksheet.iter_rows(
-                min_row=schema["data_start_row"],
-                max_col=max_column,
-                values_only=True,
-            ),
-            start=schema["data_start_row"],
-        ):
-            row = {
-                field["source_name"]: values[field["source_index"] - 1]
-                if field["source_index"] - 1 < len(values)
-                else None
-                for field in schema["fields"]
-            }
-            if any(not _is_null(value) for value in row.values()):
+        if record["file_type"] == "csv":
+            table = parse_csv_table(path)
+            rows = []
+            for row_number, values in enumerate(table.rows, start=2):
+                row = {
+                    field["source_name"]: values[field["source_index"] - 1]
+                    if field["source_index"] - 1 < len(values) else None
+                    for field in schema["fields"]
+                }
                 row["__row_number__"] = row_number
                 rows.append(row)
+        else:
+            workbook = load_workbook(
+                path,
+                read_only=True,
+                data_only=True,
+                keep_vba=False,
+                keep_links=False,
+            )
+            if sheet_name not in workbook.sheetnames:
+                return failure("SHEET_NOT_FOUND", f"Excel 中不存在 Sheet：{sheet_name}")
+            worksheet = workbook[sheet_name]
+            rows = []
+            for row_number, values in enumerate(
+                worksheet.iter_rows(
+                    min_row=schema["data_start_row"],
+                    max_col=max_column,
+                    values_only=True,
+                ),
+                start=schema["data_start_row"],
+            ):
+                row = {
+                    field["source_name"]: values[field["source_index"] - 1]
+                    if field["source_index"] - 1 < len(values)
+                    else None
+                    for field in schema["fields"]
+                }
+                if any(not _is_null(value) for value in row.values()):
+                    row["__row_number__"] = row_number
+                    rows.append(row)
     except Exception:
         return failure("TABLE_READ_ERROR", "读取 Excel 表格失败")
     finally:
@@ -320,6 +333,9 @@ def _structured_evidence(
                         value=value,
                     ),
                     source_type="structured",
+                    locator_type=(
+                        "csv" if context["record"]["file_type"] == "csv" else "excel"
+                    ),
                     file_id=context["record"]["file_id"],
                     file_name=context["record"]["file_name"],
                     sheet=context["schema"]["sheet_name"],
@@ -327,6 +343,13 @@ def _structured_evidence(
                     chunk_id=None,
                     table=table,
                     cell=cell,
+                    row_number=(
+                        int(row_number)
+                        if context["record"]["file_type"] == "csv" else None
+                    ),
+                    column_name=(
+                        field if context["record"]["file_type"] == "csv" else None
+                    ),
                     confidence=float(context["schema"]["confidence"]),
                     field=field,
                     record_key=record_key,

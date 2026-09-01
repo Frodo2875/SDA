@@ -435,7 +435,9 @@ def _legacy_state_fields(
         if index_status in {"pending", "failed"}:
             index_status = (
                 "indexed"
-                if record.get("file_type") in {"word", "pdf", "image"}
+                if record.get("file_type") in {
+                    "word", "pdf", "image", "presentation", "txt", "json"
+                }
                 else "not_required"
             )
         return "ready", "parsed", True, index_status

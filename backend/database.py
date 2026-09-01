@@ -27,6 +27,11 @@ SUPPORTED_FILES = {
     ".xlsx": ("excel", 0),
     ".docx": ("word", 1),
     ".pdf": ("pdf", 0),
+    ".ppt": ("presentation", 0),
+    ".pptx": ("presentation", 0),
+    ".txt": ("txt", 0),
+    ".json": ("json", 0),
+    ".csv": ("csv", 0),
 }
 
 SCHEMA_STATEMENTS = (

@@ -9,7 +9,10 @@ from backend.tools import excel_utils
 from backend.tools.excel_utils import failure, resolve_data_file, success
 
 
-SUPPORTED_SUFFIXES = {".xlsx", ".docx", ".pdf", ".jpg", ".jpeg", ".png"}
+SUPPORTED_SUFFIXES = {
+    ".xlsx", ".docx", ".pdf", ".ppt", ".pptx", ".txt", ".json",
+    ".csv", ".jpg", ".jpeg", ".png",
+}
 FILE_TYPES = {
     ".xlsx": "excel",
     ".docx": "word",
@@ -17,6 +20,11 @@ FILE_TYPES = {
     ".jpg": "image",
     ".jpeg": "image",
     ".png": "image",
+    ".ppt": "presentation",
+    ".pptx": "presentation",
+    ".txt": "txt",
+    ".json": "json",
+    ".csv": "csv",
 }
 
 
