@@ -22,6 +22,7 @@ from backend.services.url_fetch import (
 )
 from backend.services.web_page_parser import parse_web_page
 from backend.services.web_retrieval import WEB_RETRIEVAL_SERVICE, WebRetrievalService
+from backend.services.web_safety import secure_web_evidence
 
 
 class FixedResolver:
@@ -65,10 +66,13 @@ def test_prompt_injection_is_marked_and_original_page_content_is_preserved() -> 
         f"<html><body><main>{malicious}</main></body></html>",
         fetched_url="https://example.com/injection",
     )
-    evidence = build_web_evidence(
+    evidence = secure_web_evidence(
+        build_web_evidence(
+            document,
+            source_type="URL",
+            retrieved_at="2026-09-01T00:00:00+00:00",
+        ),
         document,
-        source_type="URL",
-        retrieved_at="2026-09-01T00:00:00+00:00",
     )
 
     assert document.content == malicious

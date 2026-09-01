@@ -13,6 +13,7 @@ from backend.services.search_provider import (
 )
 from backend.services.url_fetch import URLFetchError, URLFetcher
 from backend.services.web_models import WebSearchScope
+from backend.services.web_safety import secure_web_evidence
 from backend.tools.excel_utils import failure, success
 
 
@@ -54,10 +55,13 @@ class WebRetrievalService:
                 )
             retrieved_at = database.utc_now()
             try:
-                evidence = [build_web_evidence(
+                evidence = [secure_web_evidence(
+                    build_web_evidence(
+                        document,
+                        source_type="URL",
+                        retrieved_at=retrieved_at,
+                    ),
                     document,
-                    source_type="URL",
-                    retrieved_at=retrieved_at,
                 ).model_dump(mode="json", exclude_none=True)]
             except ValueError:
                 evidence = []
@@ -130,10 +134,13 @@ class WebRetrievalService:
         evidence = []
         for item in results:
             try:
-                evidence.append(build_web_evidence(
+                evidence.append(secure_web_evidence(
+                    build_web_evidence(
+                        item,
+                        source_type="WEB",
+                        retrieved_at=retrieved_at,
+                    ),
                     item,
-                    source_type="WEB",
-                    retrieved_at=retrieved_at,
                 ).model_dump(mode="json", exclude_none=True))
             except ValueError:
                 # A link without a provider snippet is a result candidate, not Evidence.

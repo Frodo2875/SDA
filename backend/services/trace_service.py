@@ -32,6 +32,14 @@ def record_trace(
     safe_total = max(safe_input + safe_output, int(total_tokens or 0))
     runtime_metrics = _runtime_metrics(tool_name, result)
     runtime_metrics.update(_strip_hidden_reasoning(metrics or {}))
+    runtime_metrics.update(_web_observability_metrics(
+        tool_name=tool_name,
+        arguments=arguments,
+        result=result,
+        result_status=result_status,
+        duration_ms=duration_ms,
+        current=runtime_metrics,
+    ))
     trace = {
         "trace_id": uuid4().hex,
         "task_id": task_id,
@@ -174,6 +182,41 @@ def _runtime_metrics(tool_name: str | None, result: Any) -> dict[str, Any]:
         ],
         "top_score": max(scores) if scores else None,
     }
+
+
+def _web_observability_metrics(
+    *,
+    tool_name: str | None,
+    arguments: Any,
+    result: Any,
+    result_status: str,
+    duration_ms: int,
+    current: dict[str, Any],
+) -> dict[str, Any]:
+    """Complete Web Trace fields in middleware, outside retrieval modules."""
+    if tool_name != "retrieve_web":
+        return {}
+    args = arguments if isinstance(arguments, dict) else {}
+    data = result.get("data") if isinstance(result, dict) and isinstance(
+        result.get("data"), dict
+    ) else {}
+    observed = dict(current)
+    if observed.get("source_strategy") is None:
+        observed["source_strategy"] = "DIRECT_URL" if args.get("url") else "WEB"
+    if observed.get("search_query") is None:
+        observed["search_query"] = args.get("query")
+    if observed.get("url") is None:
+        observed["url"] = args.get("url")
+    if observed.get("fetch_status") is None:
+        observed["fetch_status"] = data.get("status") or result_status
+    if observed.get("latency_ms") is None:
+        observed["latency_ms"] = max(0, int(duration_ms))
+    if observed.get("evidence_count") is None:
+        observed["evidence_count"] = max(
+            0, int(observed.get("new_evidence_count") or 0)
+        )
+    observed["untrusted_content"] = True
+    return observed
 
 
 _HIDDEN_REASONING_KEYS = frozenset({

@@ -5,6 +5,7 @@ and never gains instruction, Tool, policy, or approval authority.
 """
 
 import re
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -69,6 +70,36 @@ def assess_web_content(*values: object) -> dict[str, object]:
     ).model_dump()
 
 
+def secure_web_evidence(evidence: Any, source_record: Any) -> Any:
+    """Attach Web security labels after the stable Evidence Factory boundary."""
+    from backend.evidence import UnifiedEvidence
+
+    canonical = (
+        evidence
+        if isinstance(evidence, UnifiedEvidence)
+        else UnifiedEvidence.model_validate(evidence)
+    )
+    values = (
+        source_record.model_dump(mode="json")
+        if isinstance(source_record, BaseModel)
+        else dict(source_record or {})
+    )
+    patterns = list(values.get("detected_untrusted_patterns") or [])
+    if not patterns:
+        security = assess_web_content(
+            values.get("title"), values.get("snippet"), values.get("content"),
+            values.get("metadata"),
+        )
+        patterns = list(security["detected_untrusted_patterns"])
+    payload = canonical.model_dump(mode="json")
+    payload["metadata"] = {
+        **dict(canonical.metadata),
+        "untrusted_content": True,
+    }
+    payload["detected_untrusted_patterns"] = patterns
+    return UnifiedEvidence.model_validate(payload)
+
+
 def _bounded_text_values(values: object, limit: int = 100_000) -> list[str]:
     """Flatten bounded external metadata for detection, never for execution."""
     pending = [values]
@@ -95,4 +126,5 @@ __all__ = [
     "WEB_INJECTION_PATTERNS",
     "WebContentAssessment",
     "assess_web_content",
+    "secure_web_evidence",
 ]
