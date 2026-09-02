@@ -2,9 +2,9 @@
 
 ## 项目目标
 
-本项目用于学习 LLM Agent 的工作机制，并逐步构建一个学生材料智能文档助手。未来系统将理解用户的自然语言任务，通过 Python 工具读取和处理 Excel、Word 等材料，并在涉及写入操作时先请求用户确认。
+本项目是一个可信开放型 Document Agent。系统通过 Python 工具处理本地文档、受控网页检索、证据生成、状态管理和安全验证；LLM 只负责理解任务、选择允许的工具并组织结果。
 
-当前第一版 MVP 已提供 FastAPI 后端、Streamlit 骨架、只读学生材料 Tools，以及基于 OpenAI-compatible Chat Completions API 的 Tool Calling。当前不包含文件上传、数据库或文件写入 Agent 能力。
+V5 支持 Excel、Word、PDF、图片、PPT/PPTX、TXT、JSON 和 CSV，支持 Local、Web、Direct URL 与 Local+Web 检索，并统一生成 Evidence 4.0。外部网页一律作为 Untrusted Data，URL Fetch 具有 SSRF 防护，写入操作继续要求人工确认。
 
 ## Python 环境要求
 
@@ -40,6 +40,18 @@ LLM_MODEL=
 LLM_INPUT_COST_PER_1M=0
 LLM_OUTPUT_COST_PER_1M=0
 ```
+
+可选的 Tavily Web Search 配置：
+
+```dotenv
+WEB_SEARCH_PROVIDER=tavily
+TAVILY_API_KEY=
+TAVILY_BASE_URL=https://api.tavily.com
+WEB_SEARCH_TIMEOUT_SECONDS=8
+WEB_SEARCH_DEFAULT_TOP_K=5
+```
+
+API Key 只能保存在本地 `.env` 或部署环境变量中，不得提交到 Git。
 
 聊天接口：
 
@@ -96,17 +108,24 @@ student_document_agent/
 └── README.md
 ```
 
-## 当前阶段
+## 当前能力
 
-当前阶段完成了只读 Python Tools、FastAPI 接口和首次 LLM Tool Calling 循环。LLM 仅负责理解、工具选择和结果整合，学生数据与数值计算均来自 Python Tools。写文件工具未向 LLM 暴露。
+- 多格式 Document 上传、解析、生命周期、索引和检索；
+- OCR、Layout、表格、Cell、BBox 和手写识别；
+- Source Router 与程序级 Tool Boundary；
+- Tavily Search、Direct URL Fetch 和网页正文解析；
+- Local / Web / URL Unified Evidence；
+- 有轮次、工具调用量和超时预算的 Cross-Source Retrieval；
+- Prompt Injection、SSRF、Tool Risk、Trace 和 Evaluation；
+- Workflow、Async Task、Diff、Version、Rollback 和 Human-in-the-loop。
 
 ## 当前版本
 
-V2.99-Final-v2
+V5 Final Stable
 
-V3 development branch:
+Branch：`feature/v5-development`
 
-feature/v3-development
+Tag：`v5-final-stable`
 
 ## V3.10 Trace Evaluation
 

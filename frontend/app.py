@@ -8,7 +8,11 @@ import streamlit as st
 from frontend import api_client
 from frontend.components.chat_panel import comparison_tables, render_messages, tool_statuses
 from frontend.components.evidence_panel import render_evidence_preview
-from frontend.components.file_panel import filter_files_by_lifecycle, render_file_panel
+from frontend.components.file_panel import (
+    FILE_TYPE_FILTERS,
+    filter_files_by_lifecycle,
+    render_file_panel,
+)
 from frontend.components.task_center import render_task_center
 
 
@@ -41,13 +45,6 @@ def initialize_state() -> None:
 
 def refresh_files() -> None:
     try:
-        file_types = {
-            "全部类型": None,
-            "Excel": "excel",
-            "Word": "word",
-            "PDF": "pdf",
-            "图片": "image",
-        }
         sorting = {
             "登记时间（新到旧）": ("created_time", "desc"),
             "登记时间（旧到新）": ("created_time", "asc"),
@@ -57,7 +54,7 @@ def refresh_files() -> None:
         sort_by, sort_order = sorting[st.session_state.workspace_sort]
         files = api_client.list_files(
             search=st.session_state.workspace_search,
-            file_type=file_types[st.session_state.workspace_file_type],
+            file_type=FILE_TYPE_FILTERS[st.session_state.workspace_file_type],
             lifecycle_status=None,
             sort_by=sort_by,
             sort_order=sort_order,
@@ -232,7 +229,10 @@ initialize_state()
 if not st.session_state.files_loaded:
     refresh_files()
 
-st.markdown('<p class="app-kicker">学生材料智能文档助手 · V3 Workspace</p>', unsafe_allow_html=True)
+st.markdown(
+    '<p class="app-kicker">学生材料智能文档助手 · V5 Trusted Open Document Agent</p>',
+    unsafe_allow_html=True,
+)
 st.title("学生材料智能文档助手")
 st.caption("Document Workspace · Agent Chat · Evidence Preview · Task Center")
 

@@ -10,7 +10,31 @@ from frontend import api_client
 
 
 ActionHandler = Callable[[dict[str, Any]], None]
-FILE_TYPES = {"excel": "Excel", "word": "Word", "pdf": "PDF", "image": "图片"}
+FILE_TYPES = {
+    "excel": "Excel",
+    "word": "Word",
+    "pdf": "PDF",
+    "image": "图片",
+    "presentation": "PPT/PPTX",
+    "txt": "TXT",
+    "json": "JSON",
+    "csv": "CSV",
+}
+FILE_TYPE_FILTERS = {
+    "全部类型": None,
+    "Excel": "excel",
+    "Word": "word",
+    "PDF": "pdf",
+    "图片": "image",
+    "PPT/PPTX": "presentation",
+    "TXT": "txt",
+    "JSON": "json",
+    "CSV": "csv",
+}
+SUPPORTED_UPLOAD_EXTENSIONS = [
+    "xlsx", "docx", "pdf", "ppt", "pptx", "txt", "json", "csv",
+    "jpg", "jpeg", "png",
+]
 LIFECYCLE_LABELS = {
     "uploaded": "已上传",
     "detecting": "检测中",
@@ -72,7 +96,9 @@ def file_operation_capabilities(item: dict[str, Any]) -> dict[str, bool]:
     available = bool(item.get("file_id")) and str(
         item.get("lifecycle_status") or ""
     ).casefold() != "deleted"
-    document = item.get("file_type") in {"word", "pdf", "image"}
+    document = item.get("file_type") in {
+        "word", "pdf", "image", "presentation", "txt", "json",
+    }
     return {
         "details": available,
         "preview": available,
@@ -158,9 +184,12 @@ def render_file_panel(
     st.caption("文件、生命周期、解析与索引状态")
     uploaded = st.file_uploader(
         "拖拽或选择多个材料",
-        type=["xlsx", "docx", "pdf", "jpg", "jpeg", "png"],
+        type=SUPPORTED_UPLOAD_EXTENSIONS,
         accept_multiple_files=True,
-        help="支持 Excel、Word、PDF、JPG、JPEG 和 PNG。文件将逐个上传并显示结果。",
+        help=(
+            "支持 Excel、Word、PDF、PPT/PPTX、TXT、JSON、CSV、JPG、JPEG 和 PNG。"
+            "文件将逐个上传并显示结果。"
+        ),
         key=f"material-uploader-{uploader_version}",
     )
     if st.button(
@@ -183,7 +212,7 @@ def render_file_panel(
     filter_columns = st.columns(2)
     filter_columns[0].selectbox(
         "文件类型",
-        ["全部类型", "Excel", "Word", "PDF", "图片"],
+        list(FILE_TYPE_FILTERS),
         key="workspace_file_type",
     )
     filter_columns[1].selectbox(
@@ -293,8 +322,8 @@ def _render_file(
                     operation=api_client.reindex_file,
                     on_refresh=on_refresh,
                 )
-        elif item.get("file_type") == "excel":
-            st.caption("Excel 使用结构化 Schema，不提供文档 Block 重解析/重索引。")
+        elif item.get("file_type") in {"excel", "csv"}:
+            st.caption("结构化表格使用 Schema，不提供文档 Block 重解析/重索引。")
 
         if capabilities["delete"] and st.button(
             "删除文件",

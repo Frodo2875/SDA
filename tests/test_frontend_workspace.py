@@ -4,11 +4,16 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
+import pytest
 from streamlit.testing.v1 import AppTest
 
 from frontend import api_client
 from frontend.components.evidence_panel import evidence_location
 from frontend.components.file_panel import (
+    FILE_TYPE_FILTERS,
+    FILE_TYPES,
+    SUPPORTED_UPLOAD_EXTENSIONS,
     file_card_fields,
     file_detail_sections,
     file_operation_capabilities,
@@ -98,6 +103,33 @@ def test_file_cards_filters_and_type_specific_details() -> None:
     assert word["写入状态"] == "无待执行写入"
 
 
+def test_v5_file_types_are_uploadable_filterable_and_presented() -> None:
+    assert FILE_TYPES == {
+        "excel": "Excel",
+        "word": "Word",
+        "pdf": "PDF",
+        "image": "图片",
+        "presentation": "PPT/PPTX",
+        "txt": "TXT",
+        "json": "JSON",
+        "csv": "CSV",
+    }
+    assert FILE_TYPE_FILTERS["PPT/PPTX"] == "presentation"
+    assert FILE_TYPE_FILTERS["TXT"] == "txt"
+    assert FILE_TYPE_FILTERS["JSON"] == "json"
+    assert FILE_TYPE_FILTERS["CSV"] == "csv"
+    assert {"ppt", "pptx", "txt", "json", "csv"} <= set(
+        SUPPORTED_UPLOAD_EXTENSIONS
+    )
+    for file_type in ("presentation", "txt", "json"):
+        capabilities = file_operation_capabilities(_file(file_type=file_type))
+        assert capabilities["reprocess"] is True
+        assert capabilities["reindex"] is True
+    csv_capabilities = file_operation_capabilities(_file(file_type="csv"))
+    assert csv_capabilities["reprocess"] is False
+    assert csv_capabilities["reindex"] is False
+
+
 def test_api_client_sends_workspace_filters_and_multi_upload_statuses(
     monkeypatch,
 ) -> None:
@@ -150,6 +182,38 @@ def test_api_client_sends_workspace_filters_and_multi_upload_statuses(
         ("失败.docx", "failed"),
     ]
     assert outcomes[1]["message"] == "格式错误"
+
+
+def test_api_client_distinguishes_timeout_and_connection_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = httpx.Request("POST", "http://127.0.0.1:8000/api/chat")
+
+    def raise_timeout(*args, **kwargs):
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    monkeypatch.setattr(api_client.httpx, "request", raise_timeout)
+    with pytest.raises(RuntimeError, match="后端处理超时"):
+        api_client.chat("session", "复杂跨来源任务")
+
+    def raise_connect(*args, **kwargs):
+        raise httpx.ConnectError("refused", request=request)
+
+    monkeypatch.setattr(api_client.httpx, "request", raise_connect)
+    with pytest.raises(RuntimeError, match="无法连接后端服务"):
+        api_client.chat("session", "普通任务")
+
+
+def test_chat_uses_extended_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: dict[str, Any] = {}
+
+    def fake_request(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        observed.update({"method": method, "path": path, **kwargs})
+        return {"answer": "ok"}
+
+    monkeypatch.setattr(api_client, "request", fake_request)
+    assert api_client.chat("session", "message") == {"answer": "ok"}
+    assert observed["timeout"] == 120.0
 
 
 def test_workspace_file_operation_capabilities_and_api_routes(monkeypatch) -> None:

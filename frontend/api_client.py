@@ -8,13 +8,21 @@ import httpx
 
 BASE_URL = os.getenv("BACKEND_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 TIMEOUT = 60.0
+CHAT_TIMEOUT = 120.0
 
 
 def request(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+    timeout = kwargs.pop("timeout", TIMEOUT)
     try:
-        response = httpx.request(method, f"{BASE_URL}{path}", timeout=TIMEOUT, **kwargs)
-    except httpx.RequestError as exc:
+        response = httpx.request(method, f"{BASE_URL}{path}", timeout=timeout, **kwargs)
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(
+            "后端处理超时；服务可能仍在运行，请查看 FastAPI 日志后再决定是否重试。"
+        ) from exc
+    except httpx.ConnectError as exc:
         raise RuntimeError("无法连接后端服务，请确认 FastAPI 已在 8000 端口启动。") from exc
+    except httpx.RequestError as exc:
+        raise RuntimeError("后端通信失败，请检查 FastAPI 日志和网络状态。") from exc
     try:
         payload = response.json()
     except ValueError as exc:
@@ -120,7 +128,12 @@ def upload_files(uploaded_files: list[Any]) -> list[dict[str, Any]]:
 
 
 def chat(session_id: str, message: str) -> dict[str, Any]:
-    return request("POST", "/api/chat", json={"session_id": session_id, "message": message})
+    return request(
+        "POST",
+        "/api/chat",
+        json={"session_id": session_id, "message": message},
+        timeout=CHAT_TIMEOUT,
+    )
 
 
 def decide_action(action_id: str, decision: str) -> dict[str, Any]:
