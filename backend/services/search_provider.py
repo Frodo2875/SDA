@@ -10,6 +10,12 @@ from backend.services.web_safety import assess_web_content, web_security_metadat
 class SearchProviderError(RuntimeError):
     """A provider is unavailable or returned an invalid response."""
 
+    def __init__(
+        self, message: str, *, error_code: str = "WEB_SEARCH_PROVIDER_ERROR"
+    ) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+
 
 class SearchProvider(Protocol):
     name: str
@@ -24,10 +30,13 @@ class UnavailableSearchProvider:
 
     name = "unconfigured"
 
+    def __init__(self, message: str = "Web Search Provider 尚未配置") -> None:
+        self.message = message
+
     def search(
         self, query: str, scope: WebSearchScope
     ) -> list[WebSearchResult | dict[str, Any]]:
-        raise SearchProviderError("Web Search Provider 尚未配置")
+        raise SearchProviderError(self.message)
 
 
 def normalize_search_results(

@@ -8,9 +8,9 @@ from backend.evidence import build_web_evidence
 from backend.services.search_provider import (
     SearchProvider,
     SearchProviderError,
-    UnavailableSearchProvider,
     normalize_search_results,
 )
+from backend.services.search_provider_factory import build_search_provider_from_env
 from backend.services.url_fetch import URLFetchError, URLFetcher
 from backend.services.web_models import WebSearchScope
 from backend.tools.excel_utils import failure, success
@@ -23,7 +23,7 @@ class WebRetrievalService:
         search_provider: SearchProvider | None = None,
         url_fetcher: URLFetcher | None = None,
     ) -> None:
-        self.search_provider = search_provider or UnavailableSearchProvider()
+        self.search_provider = search_provider or build_search_provider_from_env()
         self.url_fetcher = url_fetcher or URLFetcher()
 
     def retrieve(
@@ -94,7 +94,7 @@ class WebRetrievalService:
             )
         except SearchProviderError as exc:
             return failure(
-                "WEB_SEARCH_PROVIDER_ERROR",
+                exc.error_code,
                 str(exc),
                 {
                     "status": "failed",
