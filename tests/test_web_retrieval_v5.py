@@ -9,6 +9,7 @@ from backend import agent, database
 from backend.services.search_provider import SearchProviderError
 from backend.services.source_router import route_source
 from backend.services.url_fetch import (
+    PinnedHTTPTransport,
     TransportResponse,
     URLFetchError,
     URLFetcher,
@@ -79,6 +80,16 @@ def test_source_router_selects_local_web_both_and_direct_url() -> None:
         route["agentic_retrieval_compatible"] is True
         for route in (local, web, both, direct)
     )
+
+
+def test_source_router_covers_online_context_and_current_weather() -> None:
+    local_and_online = route_source(
+        "根据普陀3班学生名单，结合网上的专业分类，按文理科分类"
+    )
+    current_weather = route_source("上海市当前天气")
+
+    assert local_and_online["source_strategy"] == "BOTH"
+    assert current_weather["source_strategy"] == "WEB"
 
 
 def test_replaceable_search_provider_normalizes_results_and_empty_result() -> None:
@@ -165,6 +176,63 @@ def test_direct_url_fetch_failure_and_ssrf_fail_closed_before_transport() -> Non
         ).fetch("http://internal.example/admin")
     assert ssrf_error.value.error_code == "WEB_SSRF_BLOCKED"
     assert private_transport.calls == []
+
+
+def test_pinned_transport_retries_validated_ips_within_one_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts: list[tuple[str, int]] = []
+
+    class FakeSocket:
+        def settimeout(self, timeout: float) -> None:
+            assert timeout > 0
+
+        def sendall(self, request: bytes) -> None:
+            assert request.startswith(b"GET / HTTP/1.1")
+
+        def close(self) -> None:
+            pass
+
+    def create_connection(address, timeout):
+        attempts.append(address)
+        if len(attempts) == 1:
+            raise OSError("first public address unavailable")
+        assert timeout > 0
+        return FakeSocket()
+
+    class FakeHTTPResponse:
+        status = 200
+
+        def __init__(self, connection) -> None:
+            assert isinstance(connection, FakeSocket)
+
+        def begin(self) -> None:
+            pass
+
+        def getheaders(self):
+            return [("Content-Type", "text/plain")]
+
+        def read(self, amount: int) -> bytes:
+            assert amount > 1
+            return b"ok"
+
+    monkeypatch.setattr(
+        "backend.services.url_fetch.socket.create_connection", create_connection
+    )
+    monkeypatch.setattr(
+        "backend.services.url_fetch.http.client.HTTPResponse", FakeHTTPResponse
+    )
+
+    response = PinnedHTTPTransport().get(
+        "http://example.com/",
+        resolved_ips=["93.184.216.34", "93.184.216.35"],
+        timeout_seconds=1,
+        max_bytes=1024,
+    )
+
+    assert attempts == [("93.184.216.34", 80), ("93.184.216.35", 80)]
+    assert response.status_code == 200
+    assert response.body == b"ok"
 
 
 def test_redirect_target_is_revalidated_and_private_redirect_is_blocked() -> None:

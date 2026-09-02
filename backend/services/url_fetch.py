@@ -7,6 +7,7 @@ import http.client
 import ipaddress
 import socket
 import ssl
+import time
 from typing import Protocol
 from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 
@@ -69,7 +70,7 @@ class SocketHostResolver:
 
 
 class PinnedHTTPTransport:
-    """Connect to one validated IP while preserving HTTP Host and TLS SNI."""
+    """Try validated IPs within one deadline while preserving Host and TLS SNI."""
 
     def get(
         self,
@@ -84,48 +85,64 @@ class PinnedHTTPTransport:
         port = parts.port or (443 if parts.scheme == "https" else 80)
         if not resolved_ips:
             raise URLFetchError("WEB_DNS_ERROR", "URL 没有可用的公网地址")
-        connection: socket.socket | ssl.SSLSocket | None = None
-        try:
-            connection = socket.create_connection(
-                (resolved_ips[0], port), timeout=timeout_seconds
-            )
-            connection.settimeout(timeout_seconds)
-            if parts.scheme == "https":
-                connection = ssl.create_default_context().wrap_socket(
-                    connection, server_hostname=hostname
+        deadline = time.monotonic() + timeout_seconds
+        last_error: Exception | None = None
+        for resolved_ip in resolved_ips:
+            connection: socket.socket | ssl.SSLSocket | None = None
+            try:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                connection = socket.create_connection(
+                    (resolved_ip, port), timeout=remaining
                 )
-            target = _request_target(parts.path, parts.query)
-            host_header = f"[{hostname}]" if ":" in hostname else hostname
-            if port not in {80, 443}:
-                host_header = f"{host_header}:{port}"
-            request = (
-                f"GET {target} HTTP/1.1\r\n"
-                f"Host: {host_header}\r\n"
-                "User-Agent: StudentDocumentAgent/5.1\r\n"
-                "Accept: text/html,application/xhtml+xml,text/plain;q=0.8\r\n"
-                "Accept-Encoding: identity\r\n"
-                "Connection: close\r\n\r\n"
-            ).encode("ascii")
-            connection.sendall(request)
-            response = http.client.HTTPResponse(connection)
-            response.begin()
-            headers = {key.casefold(): value for key, value in response.getheaders()}
-            body = response.read(max_bytes + 1)
-            if len(body) > max_bytes:
-                raise URLFetchError("WEB_RESPONSE_TOO_LARGE", "网页响应超过大小上限")
-            return TransportResponse(int(response.status), headers, body)
-        except URLFetchError:
-            raise
-        except (TimeoutError, socket.timeout) as exc:
-            raise URLFetchError("WEB_FETCH_TIMEOUT", "网页访问超时") from exc
-        except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
-            raise URLFetchError("WEB_FETCH_FAILED", "网页无法访问") from exc
-        finally:
-            if connection is not None:
-                try:
-                    connection.close()
-                except OSError:
-                    pass
+                connection.settimeout(max(0.001, deadline - time.monotonic()))
+                if parts.scheme == "https":
+                    connection = ssl.create_default_context().wrap_socket(
+                        connection, server_hostname=hostname
+                    )
+                    connection.settimeout(max(0.001, deadline - time.monotonic()))
+                target = _request_target(parts.path, parts.query)
+                host_header = f"[{hostname}]" if ":" in hostname else hostname
+                if port not in {80, 443}:
+                    host_header = f"{host_header}:{port}"
+                request = (
+                    f"GET {target} HTTP/1.1\r\n"
+                    f"Host: {host_header}\r\n"
+                    "User-Agent: StudentDocumentAgent/5.1\r\n"
+                    "Accept: text/html,application/xhtml+xml,text/plain;q=0.8\r\n"
+                    "Accept-Encoding: identity\r\n"
+                    "Connection: close\r\n\r\n"
+                ).encode("ascii")
+                connection.sendall(request)
+                response = http.client.HTTPResponse(connection)
+                response.begin()
+                headers = {
+                    key.casefold(): value for key, value in response.getheaders()
+                }
+                body = response.read(max_bytes + 1)
+                if len(body) > max_bytes:
+                    raise URLFetchError(
+                        "WEB_RESPONSE_TOO_LARGE", "网页响应超过大小上限"
+                    )
+                return TransportResponse(int(response.status), headers, body)
+            except URLFetchError:
+                raise
+            except (TimeoutError, socket.timeout) as exc:
+                last_error = exc
+            except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
+                last_error = exc
+            finally:
+                if connection is not None:
+                    try:
+                        connection.close()
+                    except OSError:
+                        pass
+        if time.monotonic() >= deadline or isinstance(
+            last_error, (TimeoutError, socket.timeout)
+        ):
+            raise URLFetchError("WEB_FETCH_TIMEOUT", "网页访问超时") from last_error
+        raise URLFetchError("WEB_FETCH_FAILED", "网页无法访问") from last_error
 
 
 class URLFetcher:
