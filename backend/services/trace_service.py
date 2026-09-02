@@ -128,7 +128,11 @@ def _runtime_metrics(tool_name: str | None, result: Any) -> dict[str, Any]:
             str(pattern)
             for item in evidence
             if isinstance(item, dict)
-            for pattern in item.get("detected_untrusted_patterns") or []
+            for pattern in (
+                item.get("detected_untrusted_patterns")
+                or (item.get("metadata") or {}).get("risk_patterns")
+                or []
+            )
         }
         return {
             "retrieval_mode": data.get("mode"),

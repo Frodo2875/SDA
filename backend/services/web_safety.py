@@ -5,7 +5,6 @@ and never gains instruction, Tool, policy, or approval authority.
 """
 
 import re
-from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -70,34 +69,20 @@ def assess_web_content(*values: object) -> dict[str, object]:
     ).model_dump()
 
 
-def secure_web_evidence(evidence: Any, source_record: Any) -> Any:
-    """Attach Web security labels after the stable Evidence Factory boundary."""
-    from backend.evidence import UnifiedEvidence
-
-    canonical = (
-        evidence
-        if isinstance(evidence, UnifiedEvidence)
-        else UnifiedEvidence.model_validate(evidence)
-    )
-    values = (
-        source_record.model_dump(mode="json")
-        if isinstance(source_record, BaseModel)
-        else dict(source_record or {})
-    )
-    patterns = list(values.get("detected_untrusted_patterns") or [])
-    if not patterns:
-        security = assess_web_content(
-            values.get("title"), values.get("snippet"), values.get("content"),
-            values.get("metadata"),
-        )
-        patterns = list(security["detected_untrusted_patterns"])
-    payload = canonical.model_dump(mode="json")
-    payload["metadata"] = {
-        **dict(canonical.metadata),
+def web_security_metadata(assessment: dict[str, object]) -> dict[str, object]:
+    """Create the pre-Factory metadata envelope for an untrusted Web record."""
+    model = WebContentAssessment.model_validate(assessment)
+    return {
         "untrusted_content": True,
+        "risk_patterns": list(model.detected_untrusted_patterns),
+        "security_flags": {
+            "instruction_authority": "none",
+            "approval_authority": "none",
+            "can_trigger_tool": False,
+            "can_change_tool_risk": False,
+            "can_approve": False,
+        },
     }
-    payload["detected_untrusted_patterns"] = patterns
-    return UnifiedEvidence.model_validate(payload)
 
 
 def _bounded_text_values(values: object, limit: int = 100_000) -> list[str]:
@@ -126,5 +111,5 @@ __all__ = [
     "WEB_INJECTION_PATTERNS",
     "WebContentAssessment",
     "assess_web_content",
-    "secure_web_evidence",
+    "web_security_metadata",
 ]

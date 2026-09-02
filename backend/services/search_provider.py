@@ -4,7 +4,7 @@ from typing import Any, Protocol
 
 from backend.services.web_models import WebSearchResult, WebSearchScope
 from backend.services.url_fetch import URLFetchError, canonicalize_url
-from backend.services.web_safety import assess_web_content
+from backend.services.web_safety import assess_web_content, web_security_metadata
 
 
 class SearchProviderError(RuntimeError):
@@ -59,6 +59,10 @@ def normalize_search_results(
             "url": canonical_url,
             "untrusted_content": True,
             "detected_untrusted_patterns": security["detected_untrusted_patterns"],
+            "metadata": {
+                **dict(item.metadata),
+                **web_security_metadata(security),
+            },
         })
         if item.url in seen:
             continue
