@@ -45,7 +45,7 @@ from backend.tools.excel_utils import failure, success
 WORD_CHUNK_SIZE = 900
 WORD_CHUNK_OVERLAP = 100
 SUPPORTED_DOCUMENT_TYPES = {
-    "pdf", "word", "image", "presentation", "txt", "json"
+    "pdf", "word", "image", "presentation", "txt", "json", "markdown"
 }
 NO_EVIDENCE_MESSAGE = "当前材料中未找到足够依据。"
 OCR_NOT_SUPPORTED_MESSAGE = "当前版本不支持扫描 PDF / OCR。"
@@ -295,6 +295,14 @@ def _index_document(file_id: str, *, reprocess: bool) -> dict[str, Any]:
                 source_type=record["file_type"],
                 metadata_by_block=parsed_document.metadata_by_block,
             )
+            if record["file_type"] == "markdown":
+                chunks = [chunk for chunk in chunks if chunk["chunk_text"].strip()]
+                for chunk_index, chunk in enumerate(chunks):
+                    chunk["chunk_index"] = chunk_index
+                    block_metadata = parsed_document.metadata_by_block[chunk["metadata"]["block_id"]]
+                    # Canonical Block type stays in metadata.block; the input format
+                    # carries its richer semantic type in the existing metadata map.
+                    chunk["metadata"]["block_type"] = block_metadata["block_type"]
     except FileLocatorError as exc:
         _record_document_stage(record, "parse", parse_started, "failed", error_code="FILE_NOT_FOUND")
         return _index_failure(
@@ -728,8 +736,16 @@ def retrieve_document(
                 score=score,
             )
         )
+    metadata_by_chunk = {row["chunk_id"]: row.get("metadata") or {} for row in rows}
     evidence = []
     for item in unified_evidence:
+        if item.file_name and item.file_name.lower().endswith((".md", ".markdown")):
+            source_metadata = metadata_by_chunk.get(item.chunk_id, {})
+            item.metadata.update({
+                key: source_metadata[key]
+                for key in ("document_format", "heading_path", "line_number", "line_end", "block_type")
+                if key in source_metadata
+            })
         legacy = serialize_evidence3_compat(item)
         legacy["score"] = item.score
         legacy["text_excerpt"] = item.text_excerpt or item.content
@@ -1752,7 +1768,7 @@ def _validated_document(
         return arguments.file_id, record, failure("UNSUPPORTED_FILE_TYPE", f"该接口仅支持 {expected_type}")
     if record["file_type"] not in SUPPORTED_DOCUMENT_TYPES:
         return arguments.file_id, record, failure(
-            "UNSUPPORTED_FILE_TYPE", "仅支持 PDF、Word、图片、PPT/PPTX、TXT 和 JSON 文档索引"
+            "UNSUPPORTED_FILE_TYPE", "仅支持 PDF、Word、图片、PPT/PPTX、TXT、JSON 和 Markdown 文档索引"
         )
     return arguments.file_id, record, None
 

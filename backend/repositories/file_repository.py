@@ -436,7 +436,7 @@ def _legacy_state_fields(
             index_status = (
                 "indexed"
                 if record.get("file_type") in {
-                    "word", "pdf", "image", "presentation", "txt", "json"
+                    "word", "pdf", "image", "presentation", "txt", "json", "markdown"
                 }
                 else "not_required"
             )

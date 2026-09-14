@@ -31,6 +31,8 @@ SUPPORTED_UPLOADS = {
     ".png": "image",
     ".ppt": "presentation",
     ".pptx": "presentation",
+    ".md": "markdown",
+    ".markdown": "markdown",
     ".txt": "txt",
     ".json": "json",
     ".csv": "csv",
@@ -52,7 +54,7 @@ def _safe_file_name(file_name: str) -> tuple[str | None, dict[str, Any] | None]:
     if Path(clean_name).suffix.lower() not in SUPPORTED_UPLOADS:
         return None, failure(
             "UNSUPPORTED_FILE_TYPE",
-            "支持 .xlsx、.docx、.pdf、.ppt、.pptx、.txt、.json、.csv、.jpg、.jpeg 和 .png 文件",
+            "支持 .md、.markdown、.xlsx、.docx、.pdf、.ppt、.pptx、.txt、.json、.csv、.jpg、.jpeg 和 .png 文件",
         )
     return clean_name, None
 
@@ -66,7 +68,7 @@ def _validate_document(path: Path, suffix: str) -> dict[str, Any] | None:
             Document(path)
         elif suffix == ".pdf":
             return validate_pdf_file(path)
-        elif suffix in {".ppt", ".pptx", ".txt", ".json", ".csv"}:
+        elif suffix in {".ppt", ".pptx", ".txt", ".json", ".csv", ".md", ".markdown"}:
             return validate_multiformat_content(path)
         else:
             routed = route_document_input(path)
@@ -81,6 +83,8 @@ def _validate_document(path: Path, suffix: str) -> dict[str, Any] | None:
             ".png": "PNG",
             ".ppt": "PPT",
             ".pptx": "PPTX",
+            ".md": "Markdown",
+            ".markdown": "Markdown",
             ".txt": "TXT",
             ".json": "JSON",
             ".csv": "CSV",
@@ -210,7 +214,7 @@ def save_uploaded_file(
         if not parse_result["ok"]:
             return parse_result
 
-        if file_type in {"word", "pdf", "txt", "json", "presentation"}:
+        if file_type in {"word", "pdf", "txt", "json", "presentation", "markdown"}:
             index_result = index_document(file_record["file_id"])
             if not index_result["ok"]:
                 return index_result

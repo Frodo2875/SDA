@@ -70,6 +70,10 @@ class CSVTable:
 
 def parse_local_document(path: Path, *, file_id: str, file_name: str) -> ParsedDocument:
     suffix = path.suffix.lower()
+    if suffix in {".md", ".markdown"}:
+        from backend.services.markdown_parser import parse_markdown
+
+        return parse_markdown(path, file_id=file_id, file_name=file_name)
     if suffix == ".txt":
         return parse_txt(path, file_id=file_id, file_name=file_name)
     if suffix == ".json":
@@ -183,6 +187,9 @@ def parse_csv_table(path: Path) -> CSVTable:
 
 def validate_local_format(path: Path) -> None:
     suffix = path.suffix.lower()
+    if suffix in {".md", ".markdown"}:
+        parse_local_document(path, file_id="validation", file_name=path.name)
+        return
     if suffix == ".txt":
         text, _ = decode_text_file(path)
         if not text.strip():

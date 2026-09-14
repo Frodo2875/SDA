@@ -13,7 +13,7 @@ from backend.tools.excel_utils import failure, success
 
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
-TEXT_SUFFIXES = {".txt", ".json"}
+TEXT_SUFFIXES = {".txt", ".json", ".md", ".markdown"}
 PRESENTATION_SUFFIXES = {".ppt", ".pptx"}
 SUPPORTED_SUFFIXES = {
     ".xlsx", ".docx", ".pdf", ".csv", *TEXT_SUFFIXES,
@@ -32,6 +32,8 @@ _EXPECTED_MIME_TYPES = {
     ".png": {"image/png"},
     ".ppt": {"application/vnd.ms-powerpoint"},
     ".pptx": {"application/vnd.openxmlformats-officedocument.presentationml.presentation"},
+    ".md": {"text/markdown", "text/plain", "text/x-markdown"},
+    ".markdown": {"text/markdown", "text/plain", "text/x-markdown"},
     ".txt": {"text/plain"},
     ".json": {"application/json", "text/json"},
     ".csv": {"text/csv", "application/csv", "application/vnd.ms-excel"},
@@ -50,7 +52,7 @@ def route_document_input(
     if suffix not in SUPPORTED_SUFFIXES:
         return failure(
             "UNSUPPORTED_FILE_TYPE",
-            "不支持的文件类型；支持 XLSX、DOCX、PDF、PPT、PPTX、TXT、JSON、CSV、JPG、JPEG 和 PNG",
+            "不支持的文件类型；支持 Markdown、XLSX、DOCX、PDF、PPT、PPTX、TXT、JSON、CSV、JPG、JPEG 和 PNG",
             {"suffix": suffix or None, "route": "SAFE_REJECT"},
         )
     mime_error = validate_declared_mime(suffix, declared_mime_type)
@@ -80,7 +82,7 @@ def route_document_input(
         if content_error is not None:
             return content_error
         return success(
-            _route_data(suffix.lstrip("."), "TEXT", suffix, _canonical_mime(suffix)),
+            _route_data("markdown" if suffix in {".md", ".markdown"} else suffix.lstrip("."), "TEXT", suffix, _canonical_mime(suffix)),
             "输入已路由到文本文档处理",
         )
     if suffix in PRESENTATION_SUFFIXES:
@@ -256,7 +258,10 @@ def _route_data(
 
 
 def _canonical_mime(suffix: str) -> str:
-    canonical = {".json": "application/json", ".csv": "text/csv"}
+    canonical = {
+        ".json": "application/json", ".csv": "text/csv",
+        ".md": "text/markdown", ".markdown": "text/markdown",
+    }
     return canonical.get(suffix, next(iter(_EXPECTED_MIME_TYPES[suffix])))
 
 

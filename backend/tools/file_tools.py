@@ -11,7 +11,7 @@ from backend.tools.excel_utils import failure, resolve_data_file, success
 
 SUPPORTED_SUFFIXES = {
     ".xlsx", ".docx", ".pdf", ".ppt", ".pptx", ".txt", ".json",
-    ".csv", ".jpg", ".jpeg", ".png",
+    ".md", ".markdown", ".csv", ".jpg", ".jpeg", ".png",
 }
 FILE_TYPES = {
     ".xlsx": "excel",
@@ -22,6 +22,8 @@ FILE_TYPES = {
     ".png": "image",
     ".ppt": "presentation",
     ".pptx": "presentation",
+    ".md": "markdown",
+    ".markdown": "markdown",
     ".txt": "txt",
     ".json": "json",
     ".csv": "csv",

@@ -129,7 +129,7 @@ async def health() -> HealthResponse:
 async def api_list_files(
     search: str | None = Query(default=None, max_length=255),
     file_type: Literal[
-        "excel", "word", "pdf", "image", "presentation", "txt", "json", "csv"
+        "excel", "word", "pdf", "image", "presentation", "txt", "json", "csv", "markdown"
     ] | None = Query(default=None),
     lifecycle_status: Literal[
         "uploaded", "detecting", "parsing", "visual_processing", "ocr_processing",

@@ -53,7 +53,7 @@ def locate_evidence(
             location = _locate_excel(evidence, record, path)
         elif record["file_type"] == "csv":
             location = _locate_csv(evidence, record, path)
-        elif record["file_type"] in {"pdf", "word", "presentation", "txt", "json"}:
+        elif record["file_type"] in {"pdf", "word", "presentation", "txt", "json", "markdown"}:
             location = _locate_document(evidence, record)
         elif record["file_type"] == "image":
             location = _locate_image(evidence, record, path)
@@ -89,6 +89,10 @@ def _locate_document(
     evidence: dict[str, Any], record: dict[str, Any]
 ) -> dict[str, Any]:
     chunks = database.get_document_chunks(record["file_id"])
+    if record["file_type"] == "markdown" and evidence.get("chunk_id"):
+        # A split block can contain several chunks. Never highlight its first
+        # chunk when the citation names a later one (or an obsolete chunk).
+        chunks = [item for item in chunks if item.get("chunk_id") == evidence["chunk_id"]]
     chunk = next(
         (
             item
@@ -166,6 +170,17 @@ def _locate_document(
         }
     if record["file_type"] == "presentation":
         return {**base, "location_type": "presentation", "slide_number": base["slide_number"]}
+    if record["file_type"] == "markdown":
+        return {
+            **base, "location_type": "markdown",
+            "heading_path": metadata.get("heading_path", []),
+            "line_end": metadata.get("line_end"),
+            "metadata": {
+                key: metadata[key]
+                for key in ("heading_path", "line_number", "line_end", "block_type")
+                if key in metadata
+            },
+        }
     if record["file_type"] == "txt":
         return {**base, "location_type": "txt", "line_number": base["line_number"]}
     if record["file_type"] == "json":
