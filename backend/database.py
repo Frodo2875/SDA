@@ -332,8 +332,8 @@ def search_document_chunks_filtered(
     )
 
 
-def create_task_record(task: dict[str, Any], steps: list[dict[str, Any]]) -> None:
-    TASK_REPOSITORY.create(task, steps)
+def create_task_record(task: dict[str, Any], steps: list[dict[str, Any]]) -> str:
+    return TASK_REPOSITORY.create(task, steps)
 
 
 def get_task_record(task_id: str) -> dict[str, Any] | None:

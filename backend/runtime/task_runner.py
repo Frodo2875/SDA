@@ -38,7 +38,8 @@ class StepStatus(str, Enum):
 
 
 def start_task(
-    *, session_id: str, user_message: str, plan: TaskPlan
+    *, session_id: str, user_message: str, plan: TaskPlan,
+    async_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     now = database.utc_now()
     task_id = uuid4().hex
@@ -69,8 +70,11 @@ def start_task(
         }
         for step in plan.steps
     ]
-    database.create_task_record(task, steps)
-    return database.get_task_record(task_id)
+    if async_metadata is not None:
+        task.update(status="pending", task_status="created", progress=0, message="任务已进入队列")
+        task["checkpoint_data"]["async_task"] = async_metadata
+    persisted_id = database.create_task_record(task, steps)
+    return database.get_task_record(persisted_id or task_id)
 
 
 def start_tool_step(

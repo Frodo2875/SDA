@@ -3,7 +3,7 @@
 import json
 import sqlite3
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 
@@ -14,8 +14,23 @@ class TaskRepository:
     def __init__(self, connection_factory: ConnectionFactory) -> None:
         self._connection_factory = connection_factory
 
-    def create(self, task: dict[str, Any], steps: list[dict[str, Any]]) -> None:
+    def create(self, task: dict[str, Any], steps: list[dict[str, Any]]) -> str:
         with self._connection_factory() as connection:
+            metadata = (task.get("checkpoint_data") or {}).get("async_task") or {}
+            if metadata.get("task_type") == "research" and metadata.get("idempotency_key"):
+                # Serialize lookup + task/step insertion across processes, not
+                # merely across requests in one Python worker.
+                connection.execute("BEGIN IMMEDIATE")
+                cutoff = (datetime.fromisoformat(task["created_at"]) - timedelta(seconds=300)).isoformat()
+                rows = connection.execute(
+                    "SELECT task_id, checkpoint_data FROM tasks WHERE session_id = ? "
+                    "AND task_type = ? AND created_at >= ? ORDER BY created_at DESC",
+                    (task["session_id"], task["task_type"], cutoff),
+                ).fetchall()
+                for row in rows:
+                    saved = json.loads(row["checkpoint_data"]).get("async_task") or {}
+                    if saved.get("idempotency_key") == metadata["idempotency_key"]:
+                        return str(row["task_id"])
             connection.execute(
                 """
                 INSERT INTO tasks (
@@ -52,6 +67,7 @@ class TaskRepository:
                         step.get("started_at"), step.get("completed_at"),
                     ),
                 )
+        return str(task["task_id"])
 
     def get(self, task_id: str) -> dict[str, Any] | None:
         with self._connection_factory() as connection:
@@ -59,6 +75,67 @@ class TaskRepository:
                 "SELECT * FROM tasks WHERE task_id = ?", (task_id,)
             ).fetchone()
         return self._task(row) if row is not None else None
+
+    def update_research(
+        self, task_id: str, *, agent: dict[str, Any] | None = None,
+        result: dict[str, Any] | None = None, stage: str | None = None,
+        cancellation_requested: bool = False,
+    ) -> None:
+        """Merge checkpoints under a write lock without losing cancellation flags."""
+        with self._connection_factory() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+            if row is None:
+                raise ValueError("研究任务不存在")
+            checkpoint = json.loads(row["checkpoint_data"])
+            metadata = checkpoint.get("async_task") or {}
+            if metadata.get("task_type") != "research":
+                raise ValueError("不是研究任务")
+            saved = dict(metadata.get("checkpoint") or {})
+            if agent is not None:
+                saved["agent"] = {**saved.get("agent", {}), **agent}
+            if result is not None:
+                saved["result"] = result
+            metadata["checkpoint"] = saved
+            if stage is not None:
+                metadata["progress_detail"] = {"unit": "stage", "stage": stage}
+            if cancellation_requested:
+                metadata["cancellation_requested"] = True
+            checkpoint["async_task"] = metadata
+            serialized = json.dumps(checkpoint, ensure_ascii=False)
+            if len(serialized.encode()) > 8 * 1024 * 1024:
+                raise ValueError("研究检查点超过容量限制")
+            connection.execute(
+                "UPDATE tasks SET checkpoint_data = ?, updated_at = ? WHERE task_id = ?",
+                (serialized, datetime.now(timezone.utc).isoformat(), task_id),
+            )
+
+    def requeue_research(
+        self, task: dict[str, Any], metadata: dict[str, Any], *, progress: int, message: str,
+    ) -> bool:
+        """Atomically reset a research task once, rejecting stale retry/resume requests."""
+        with self._connection_factory() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT * FROM tasks WHERE task_id = ?", (task["task_id"],)).fetchone()
+            if row is None or row["updated_at"] != task["updated_at"] or row["task_status"] not in {
+                "failed", "partial_success", "paused", "cancelled",
+            }:
+                return False
+            checkpoint = json.loads(row["checkpoint_data"])
+            metadata["progress_detail"] = {"unit": "stage", "stage": "CREATED"}
+            checkpoint["async_task"] = metadata
+            connection.execute(
+                "UPDATE task_steps SET status = 'created', retry_count = ?, result_summary = NULL, "
+                "failed_reason = NULL, started_at = NULL, completed_at = NULL WHERE task_id = ?",
+                (int(metadata.get("retry_count", 0)), task["task_id"]),
+            )
+            connection.execute(
+                "UPDATE tasks SET status = 'pending', task_status = 'created', progress = ?, "
+                "message = ?, current_step = 1, checkpoint_data = ?, updated_at = ?, "
+                "completed_at = NULL, error_code = NULL WHERE task_id = ?",
+                (progress, message, json.dumps(checkpoint), datetime.now(timezone.utc).isoformat(), task["task_id"]),
+            )
+        return True
 
     def list_for_session(self, session_id: str, limit: int = 100) -> list[dict[str, Any]]:
         bounded = max(1, min(int(limit), 500))

@@ -241,6 +241,19 @@ def enqueue_async_task(
             ),
         ),
     )
+    if arguments.task_type == "research":
+        import hashlib
+
+        task = start_task(
+            session_id=arguments.session_id, user_message=payload["message"], plan=plan,
+            async_metadata={
+                "task_type": "research", "payload": payload, "checkpoint": {},
+                "retry_count": 0,
+                "idempotency_key": hashlib.sha256(payload["message"].encode()).hexdigest(),
+                "progress_detail": {"unit": "stage", "stage": "CREATED"},
+            },
+        )
+        return success(_task_payload(task["task_id"]), "研究任务已创建或复用")
     task = start_task(
         session_id=arguments.session_id,
         user_message=f"Async task: {arguments.task_type}",
@@ -371,6 +384,9 @@ def cancel_async_task(task_id: str) -> dict[str, Any]:
         return failure("TASK_NOT_CANCELLABLE", "当前任务状态不可取消")
     now = database.utc_now()
     if task["task_status"] == AsyncTaskStatus.RUNNING.value:
+        if (task["checkpoint_data"].get("async_task") or {}).get("task_type") == "research":
+            database.TASK_REPOSITORY.update_research(task_id, cancellation_requested=True)
+            return success(_task_payload(task_id), "取消请求已登记，将在下一个安全点停止")
         checkpoint_data = dict(task["checkpoint_data"])
         metadata = dict(checkpoint_data.get("async_task") or {})
         metadata["cancellation_requested"] = True
@@ -443,7 +459,8 @@ def retry_async_task(task_id: str) -> dict[str, Any]:
     elif metadata.get("task_type") == "batch" and failed_items:
         payload["student_ids"] = failed_items
     metadata["payload"] = payload
-    metadata["checkpoint"] = {}
+    if metadata.get("task_type") != "research":
+        metadata["checkpoint"] = {}
     metadata["progress_detail"] = {"unit": "stage", "stage": "queued_for_retry"}
     metadata.pop("cancellation_requested", None)
     return _reset_for_queue(task, metadata, progress=0, message="任务等待重试")
@@ -508,7 +525,7 @@ def _validated_payload(arguments: AsyncTaskCreateRequest) -> dict[str, Any]:
                 raise ValueError("OCR region_ids 必须是唯一的非空字符串列表")
             payload["region_ids"] = [region_id.strip() for region_id in region_ids]
         return payload
-    if arguments.task_type == "workflow":
+    if arguments.task_type in {"workflow", "research"}:
         payload = dict(arguments.payload)
         message = payload.get("message")
         if not isinstance(message, str) or not message.strip() or len(message) > 10_000:
@@ -522,6 +539,10 @@ def _validated_payload(arguments: AsyncTaskCreateRequest) -> dict[str, Any]:
 
 
 def _default_executor(task_type: str) -> AsyncTaskExecutor:
+    if task_type == "research":
+        from backend.services.research_task import execute_research
+
+        return execute_research
     if task_type in {"ocr", "layout", "index", "reindex"}:
         def execute_document(
             payload: dict[str, Any], context: AsyncTaskContext
@@ -753,6 +774,10 @@ def _finish_task(
             item.get("target_id") for item in failure_details if item.get("target_id")
         ]
     metadata["checkpoint"] = checkpoint
+    if metadata.get("task_type") == "research":
+        metadata["progress_detail"] = {
+            "unit": "stage", "stage": "WAITING_CONFIRMATION" if is_waiting else "COMPLETED" if ok else "FAILED",
+        }
     metadata.pop("atomic_section", None)
     metadata.pop("cancellation_requested", None)
     checkpoint_data["async_task"] = metadata
@@ -923,6 +948,11 @@ def _reset_for_queue(
     progress: int,
     message: str,
 ) -> dict[str, Any]:
+    if metadata.get("task_type") == "research":
+        changed = database.TASK_REPOSITORY.requeue_research(task, metadata, progress=progress, message=message)
+        if not changed:
+            return failure("TASK_STATE_CONFLICT", "任务状态已变化，请重新查询")
+        return success(_task_payload(task["task_id"]), message)
     checkpoint_data = dict(task["checkpoint_data"])
     checkpoint_data["async_task"] = metadata
     now = database.utc_now()

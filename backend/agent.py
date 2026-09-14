@@ -12,6 +12,7 @@ from backend import database
 from backend.evidence import unify_evidence_chain
 from backend.llm_client import LLMClient
 from backend.runtime.planner import create_plan
+from backend.runtime.agent_observer import AgentObserver
 from backend.runtime.task_runner import (
     complete_generation_step,
     finalize_task,
@@ -594,6 +595,7 @@ async def _run_agent_core(
     context_prompt: str | None = None,
     domain_route: dict[str, Any] | None = None,
     source_route: dict[str, Any] | None = None,
+    observer: AgentObserver | None = None,
 ) -> dict[str, Any]:
     """Run the model/tool loop until a final answer or the safety limit is reached."""
     llm_client = client or LLMClient()
@@ -625,55 +627,86 @@ async def _run_agent_core(
     tool_rounds = 0
     incomplete_answer_retries = 0
 
+    saved = (observer.load().get("core") or {}) if observer else {}
+    messages = saved.get("messages", messages)
+    executed_calls = saved.get("executed_calls", executed_calls)
+    tool_rounds = int(saved.get("tool_rounds", 0))
+    incomplete_answer_retries = int(saved.get("incomplete_answer_retries", 0))
+    llm_attempts = int(saved.get("llm_attempts", 0))
+    pending_calls = saved.get("pending_calls", [])
+
+    def checkpoint() -> None:
+        if observer:
+            observer.save(core={
+                "messages": messages, "executed_calls": executed_calls,
+                "tool_rounds": tool_rounds, "llm_attempts": llm_attempts,
+                "incomplete_answer_retries": incomplete_answer_retries,
+                "pending_calls": pending_calls,
+            })
+
     for _ in range(max_tool_rounds + 1):
+        resuming_calls = bool(pending_calls)
+        if observer:
+            observer.stage("GENERATING" if not resuming_calls else "RUNNING")
         if task_id is not None:
             start_generation_step(task_id)
         llm_started = time.perf_counter()
-        assistant_message = dict(
-            await llm_client.create_chat_completion(messages, available_tool_definitions)
-        )
+        if resuming_calls:
+            assistant_message = {"tool_calls": pending_calls}
+        else:
+            if observer and llm_attempts >= max_tool_rounds + 1:
+                return {"answer": "研究任务调用预算已耗尽", "tool_calls": executed_calls,
+                        "status": "max_tool_rounds_exceeded"}
+            llm_attempts += 1
+            checkpoint()
+            assistant_message = dict(
+                await llm_client.create_chat_completion(messages, available_tool_definitions)
+            )
         llm_duration_ms = max(
             0, round((time.perf_counter() - llm_started) * 1000)
         )
         usage = llm_usage_metrics(assistant_message.pop("_usage", {}))
         model_name = str(assistant_message.pop("_model", "") or "unknown")
-        try:
-            record_trace(
-                session_id=session_id,
-                task_id=task_id,
-                step_id=_current_step_id(task_id),
-                event_type="llm_call",
-                tool_name="llm",
-                arguments={
-                    "message_count": len(messages),
-                    "available_tool_count": len(available_tool_definitions),
-                    "model": model_name,
-                },
-                result={"ok": True, "status": "success", "message": "LLM 响应完成"},
-                duration_ms=llm_duration_ms,
-                result_status="success",
-                input_tokens=usage["input_tokens"],
-                output_tokens=usage["output_tokens"],
-                total_tokens=usage["total_tokens"],
-                cost_usd=usage["cost_usd"],
-                metrics={
-                    "pricing_configured": usage["pricing_configured"],
-                    "usage_available": usage["usage_available"],
-                    **({
-                        "domain": domain_route["domain"],
-                        "effective_domain": domain_route["effective_domain"],
-                        "task_type": domain_route["task_type"],
-                        "reason_code": domain_route["reason_code"],
-                    } if domain_route is not None else {}),
-                    **({
-                        "source_strategy": source_route["source_strategy"],
-                    } if source_route is not None else {}),
-                },
-            )
-        except Exception:
-            pass
+        if not resuming_calls:
+            try:
+                record_trace(
+                    session_id=session_id,
+                    task_id=task_id or (observer.task_id if observer else None),
+                    step_id=_current_step_id(task_id),
+                    event_type="llm_call",
+                    tool_name="llm",
+                    arguments={
+                        "message_count": len(messages),
+                        "available_tool_count": len(available_tool_definitions),
+                        "model": model_name,
+                    },
+                    result={"ok": True, "status": "success", "message": "LLM 响应完成"},
+                    duration_ms=llm_duration_ms,
+                    result_status="success",
+                    input_tokens=usage["input_tokens"],
+                    output_tokens=usage["output_tokens"],
+                    total_tokens=usage["total_tokens"],
+                    cost_usd=usage["cost_usd"],
+                    metrics={
+                        "pricing_configured": usage["pricing_configured"],
+                        "usage_available": usage["usage_available"],
+                        **({
+                            "domain": domain_route["domain"],
+                            "effective_domain": domain_route["effective_domain"],
+                            "task_type": domain_route["task_type"],
+                            "reason_code": domain_route["reason_code"],
+                        } if domain_route is not None else {}),
+                        **({
+                            "source_strategy": source_route["source_strategy"],
+                        } if source_route is not None else {}),
+                    },
+                )
+            except Exception:
+                pass
         tool_calls = assistant_message.get("tool_calls") or []
         if not tool_calls:
+            if observer:
+                observer.stage("EVIDENCE_CHECK")
             answer = assistant_message.get("content")
             if not isinstance(answer, str) or not answer.strip():
                 return {
@@ -701,6 +734,7 @@ async def _run_agent_core(
                         + "。完成后再生成最终回答。",
                     }
                 )
+                checkpoint()
                 continue
             normalized_answer = _normalize_final_answer(answer.strip(), executed_calls)
             if _is_write_request(message):
@@ -765,13 +799,14 @@ async def _run_agent_core(
                 "status": "completed",
             }
 
-        if tool_rounds >= max_tool_rounds:
+        if not resuming_calls and tool_rounds >= max_tool_rounds:
             return {
                 "answer": "工具调用次数达到上限，请简化问题后重试。",
                 "tool_calls": executed_calls,
                 "status": "max_tool_rounds_exceeded",
             }
-        tool_rounds += 1
+        if not resuming_calls:
+            tool_rounds += 1
 
         normalized_calls = []
         for index, tool_call in enumerate(tool_calls):
@@ -786,7 +821,8 @@ async def _run_agent_core(
                     },
                 }
             )
-        messages.append({"role": "assistant", "content": assistant_message.get("content"), "tool_calls": normalized_calls})
+        if not resuming_calls:
+            messages.append({"role": "assistant", "content": assistant_message.get("content"), "tool_calls": normalized_calls})
 
         tool_priority = {
             "search_student": 0,
@@ -804,8 +840,16 @@ async def _run_agent_core(
             normalized_calls,
             key=lambda call: tool_priority.get(call["function"]["name"], 4),
         )
+        pending_calls = ordered_calls
+        checkpoint()
         for tool_call in ordered_calls:
             name = tool_call["function"]["name"]
+            if observer:
+                observer.stage(
+                    "WEB_RETRIEVAL" if name == "retrieve_web"
+                    else "LOCAL_RETRIEVAL" if name in {"retrieve_document", "query_table", "get_table_schema"}
+                    else "WAITING_TOOL"
+                )
             started = time.perf_counter()
             step_id = None
             if task_id is not None:
@@ -866,6 +910,7 @@ async def _run_agent_core(
                 try:
                     record_trace(
                         session_id=session_id,
+                        task_id=observer.task_id if observer else None,
                         event_type="tool_execution",
                         tool_name=name,
                         arguments=arguments,
@@ -910,6 +955,8 @@ async def _run_agent_core(
                     ),
                 }
             )
+            pending_calls = pending_calls[1:]
+            checkpoint()
 
     return {
         "answer": "工具调用次数达到上限，请简化问题后重试。",
@@ -939,34 +986,42 @@ async def run_agent(
     client: ChatClient | None = None,
     max_tool_rounds: int = MAX_TOOL_ROUNDS,
     session_id: str = "direct",
+    observer: AgentObserver | None = None,
 ) -> dict[str, Any]:
     """Run one Agent request and persist both sides of the chat."""
-    context_resolution = resolve_message(session_id, message)
+    saved_execution = (observer.load().get("execution") or {}) if observer else {}
+    context_resolution = saved_execution.get("context_resolution") or resolve_message(session_id, message)
     resolved_message = context_resolution["message"]
     # Reuse the existing LLM Trace event for route metadata so V3 Trace
     # cardinality remains compatible. Standalone routing traces by default.
-    domain_route = route_domain(
+    domain_route = saved_execution.get("domain_route") or route_domain(
         resolved_message, session_id=session_id, trace=False
     )
-    source_route = route_source(resolved_message)
+    source_route = saved_execution.get("source_route") or route_source(resolved_message)
     plan = (
         create_plan(resolved_message)
         if domain_route["effective_domain"] == "student"
         else None
     )
-    task = (
+    task = database.get_task_record(saved_execution["task_id"]) if saved_execution.get("task_id") else (
         start_task(session_id=session_id, user_message=message, plan=plan)
-        if plan is not None
+        if plan is not None and not saved_execution
         else None
     )
     task_id = task["task_id"] if task is not None else None
-    database.save_chat_message(
-        session_id=session_id,
-        role="user",
-        content=message,
-        used_tools=[],
-        status="received",
-    )
+    if observer:
+        observer.save(execution={
+            "context_resolution": context_resolution, "domain_route": domain_route,
+            "source_route": source_route, "task_id": task_id,
+        })
+    if not saved_execution:
+        database.save_chat_message(
+            session_id=session_id,
+            role="user",
+            content=message,
+            used_tools=[],
+            status="received",
+        )
     if context_resolution["clarification"]:
         record_domain_route_trace(domain_route, session_id)
         result = {
@@ -997,6 +1052,7 @@ async def run_agent(
             context_prompt=context_resolution["context_prompt"],
             domain_route=domain_route,
             source_route=source_route,
+            **({"observer": observer} if observer is not None else {}),
         )
     except Exception:
         if task_id is not None:

@@ -31,6 +31,8 @@ from backend.services.batch_service import BatchArguments, get_batch, run_batch
 from backend.services.file_view import get_file_preview, get_file_view, list_file_views
 from backend.services.evidence_locator import locate_evidence
 from backend.services.task_view import get_task_view, list_task_views
+from backend.services.task_complexity_router import route_task_complexity
+from backend.services.research_task import create_research_task, get_research_task, dispatch_research_task
 from backend.runtime.context_manager import get_context
 from backend.schemas import (
     ActionResponse,
@@ -43,6 +45,7 @@ from backend.schemas import (
     ToolResponse,
     VersionActionRequest,
     WordDiffOperationRequest,
+    ResearchTaskRequest,
 )
 from backend.tools.analysis_tools import compare_students
 from backend.tools.file_tools import list_files
@@ -352,9 +355,15 @@ async def api_compare_students(request: CompareStudentsRequest) -> dict[str, Any
 
 
 @app.post("/api/chat", response_model=ChatResponse, tags=["agent"])
-async def api_chat(request: ChatRequest) -> dict[str, Any] | JSONResponse:
+async def api_chat(request: ChatRequest, background_tasks: BackgroundTasks) -> dict[str, Any] | JSONResponse:
     """Run one stateless natural-language request through the LLM tool loop."""
     try:
+        if route_task_complexity(request.message)["async_required"]:
+            task = create_research_task(ResearchTaskRequest(session_id=request.session_id, query=request.message))
+            if task["status"] == "CREATED":
+                background_tasks.add_task(dispatch_research_task, task["task_id"])
+            return {"answer": "复杂请求已创建研究任务，可通过 task_id 查询状态和结果。",
+                    "tool_calls": [], "status": "research_task_created", "task_id": task["task_id"]}
         return await run_agent(request.message, session_id=request.session_id)
     except LLMConfigurationError as exc:
         return JSONResponse(
@@ -371,6 +380,55 @@ async def api_chat(request: ChatRequest) -> dict[str, Any] | JSONResponse:
             status_code=500,
             content={"answer": "服务器内部错误", "tool_calls": [], "status": "error"},
         )
+
+
+@app.post("/research-task", status_code=202, tags=["research"], response_model=None)
+@app.post("/api/research-task", status_code=202, tags=["research"], response_model=None)
+async def api_create_research_task(request: ResearchTaskRequest, background_tasks: BackgroundTasks) -> dict[str, Any]:
+    task = create_research_task(request)
+    if task["status"] == "CREATED":
+        background_tasks.add_task(dispatch_research_task, task["task_id"])
+    return task
+
+
+@app.get("/research-task/{task_id}", tags=["research"], response_model=None)
+@app.get("/api/research-task/{task_id}", tags=["research"], response_model=None)
+async def api_get_research_task(task_id: str) -> dict[str, Any] | JSONResponse:
+    task = get_research_task(task_id)
+    return task if task is not None else JSONResponse(status_code=404, content={"error_code": "TASK_NOT_FOUND"})
+
+
+def _research_action(task_id: str, action: Callable[[str], dict[str, Any]]) -> dict[str, Any] | JSONResponse:
+    if get_research_task(task_id) is None:
+        return JSONResponse(status_code=404, content={"error_code": "TASK_NOT_FOUND"})
+    result = action(task_id)
+    if not result["ok"]:
+        return JSONResponse(status_code=409, content={"error_code": result["error_code"], "message": "任务当前不支持此操作"})
+    return get_research_task(task_id)
+
+
+@app.post("/research-task/{task_id}/cancel", tags=["research"], response_model=None)
+@app.post("/api/research-task/{task_id}/cancel", tags=["research"], response_model=None)
+async def api_cancel_research_task(task_id: str) -> dict[str, Any] | JSONResponse:
+    return _research_action(task_id, cancel_async_task)
+
+
+@app.post("/research-task/{task_id}/retry", tags=["research"], response_model=None)
+@app.post("/api/research-task/{task_id}/retry", tags=["research"], response_model=None)
+async def api_retry_research_task(task_id: str, background_tasks: BackgroundTasks) -> dict[str, Any] | JSONResponse:
+    result = _research_action(task_id, retry_async_task)
+    if isinstance(result, dict):
+        background_tasks.add_task(dispatch_research_task, task_id)
+    return result
+
+
+@app.post("/research-task/{task_id}/resume", tags=["research"], response_model=None)
+@app.post("/api/research-task/{task_id}/resume", tags=["research"], response_model=None)
+async def api_resume_research_task(task_id: str, background_tasks: BackgroundTasks) -> dict[str, Any] | JSONResponse:
+    result = _research_action(task_id, resume_async_task)
+    if isinstance(result, dict):
+        background_tasks.add_task(dispatch_research_task, task_id)
+    return result
 
 
 def _action_response(result: dict[str, Any]) -> dict[str, Any] | JSONResponse:
@@ -547,7 +605,7 @@ async def api_create_async_task(
     if not result["ok"]:
         return JSONResponse(status_code=400, content=result)
     task_id = result["data"]["task"]["task_id"]
-    background_tasks.add_task(run_async_task, task_id)
+    background_tasks.add_task(dispatch_research_task if get_research_task(task_id) else run_async_task, task_id)
     return result
 
 
@@ -572,7 +630,7 @@ async def api_retry_async_task(
             status_code=404 if result.get("error_code") == "TASK_NOT_FOUND" else 409,
             content=result,
         )
-    background_tasks.add_task(run_async_task, task_id)
+    background_tasks.add_task(dispatch_research_task if get_research_task(task_id) else run_async_task, task_id)
     return result
 
 
@@ -642,5 +700,5 @@ async def api_resume_task(
             content={**result, "message": "任务无法恢复"},
         )
     if is_async:
-        background_tasks.add_task(run_async_task, task_id)
+        background_tasks.add_task(dispatch_research_task if get_research_task(task_id) else run_async_task, task_id)
     return {**result, "message": "任务恢复状态已更新"}
