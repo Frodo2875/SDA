@@ -14,6 +14,7 @@ APP = Path(__file__).resolve().parents[1] / "frontend" / "app.py"
 @pytest.fixture
 def ui(monkeypatch: pytest.MonkeyPatch) -> AppTest:
     monkeypatch.setattr(api_client, "list_files", lambda **kwargs: [])
+    monkeypatch.setattr(api_client, "list_knowledge_bases", lambda: [])
     monkeypatch.setattr(api_client, "list_tasks", lambda session_id: [])
     monkeypatch.setattr(api_client, "get_traces", lambda **kwargs: [])
     return AppTest.from_file(APP).run(timeout=10)
@@ -99,14 +100,16 @@ def test_task_page_uses_existing_refresh(ui: AppTest, monkeypatch: pytest.Monkey
 
 
 @pytest.mark.parametrize("page", ["knowledge", "reports", "usage"])
-def test_placeholders_make_no_business_request(ui: AppTest, monkeypatch: pytest.MonkeyPatch, page: str) -> None:
+def test_navigation_uses_available_business_contracts(ui: AppTest, monkeypatch: pytest.MonkeyPatch, page: str) -> None:
     def forbidden(*args, **kwargs):
         pytest.fail("placeholder must not call a new business endpoint")
     monkeypatch.setattr(api_client, "request", forbidden)
     ui.button(key=f"nav-{page}").click().run()
     assert not ui.exception
     assert len(ui.info) == 1
-    assert "尚未开放" in ui.info[0].value
+    assert ("暂无知识库" if page == "knowledge" else "尚未开放") in ui.info[0].value
+    if page == "knowledge":
+        assert any(item.label == "创建" for item in ui.button)
     assert not ui.get("file_uploader")
 
 

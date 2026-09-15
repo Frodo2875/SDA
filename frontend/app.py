@@ -4,7 +4,7 @@ import streamlit as st
 
 from frontend import controller
 from frontend.shell import render_shell
-from frontend.pages import dashboard, chat, documents, tasks, settings, placeholder
+from frontend.pages import dashboard, chat, documents, tasks, settings, placeholder, knowledge
 
 
 def render_page() -> None:
@@ -16,6 +16,7 @@ def render_page() -> None:
         "dashboard": dashboard.render,
         "chat": chat.render,
         "documents": documents.render,
+        "knowledge": knowledge.render,
         "tasks": tasks.render,
         "settings": settings.render,
     }

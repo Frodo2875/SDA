@@ -513,6 +513,27 @@ def _create_evidence_locations(connection: sqlite3.Connection) -> None:
     )
 
 
+def _create_knowledge_bases(connection: sqlite3.Connection) -> None:
+    connection.execute("""
+        CREATE TABLE knowledge_bases (
+            knowledge_base_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    connection.execute("""
+        CREATE TABLE knowledge_base_files (
+            knowledge_base_id TEXT NOT NULL REFERENCES knowledge_bases(knowledge_base_id) ON DELETE CASCADE,
+            file_id TEXT NOT NULL REFERENCES files(file_id) ON DELETE CASCADE,
+            attached_at TEXT NOT NULL,
+            PRIMARY KEY (knowledge_base_id, file_id)
+        )
+    """)
+    connection.execute("CREATE INDEX ix_knowledge_base_files_file ON knowledge_base_files(file_id)")
+
+
 MIGRATIONS = (
     Migration(1, "add_files_v2_foundation", _add_files_v2_foundation),
     Migration(2, "normalize_file_lifecycle", _normalize_file_lifecycle),
@@ -527,6 +548,7 @@ MIGRATIONS = (
     Migration(11, "add_trace_evaluation_metrics", _add_trace_evaluation_metrics),
     Migration(12, "create_document_ocr_pages", _create_document_ocr_pages),
     Migration(13, "create_evidence_locations", _create_evidence_locations),
+    Migration(14, "create_knowledge_bases", _create_knowledge_bases),
 )
 
 

@@ -133,9 +133,10 @@ def test_first_run_creates_database_tables_and_file_records(
             (11, "add_trace_evaluation_metrics"),
             (12, "create_document_ocr_pages"),
             (13, "create_evidence_locations"),
+            (14, "create_knowledge_bases"),
         ]
         assert all(row[2] for row in migrations)
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 13
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 14
 
     file_rows = database.fetch_all("files")
     assert {

@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from backend import database
 from backend.report_api import router as report_router
+from backend.knowledge_api import router as knowledge_router
 from backend.agent import run_agent
 from backend.llm_client import LLMAPIError, LLMConfigurationError
 from backend.runtime.task_runner import resume_task as resume_workflow_task
@@ -65,6 +66,7 @@ app = FastAPI(
 )
 
 app.include_router(report_router)
+app.include_router(knowledge_router)
 
 
 CLIENT_ERROR_CODES = {

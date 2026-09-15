@@ -27,7 +27,7 @@ def render() -> None:
         st.button("刷新概览", key="refresh-overview", on_click=refresh_overview)
         files = st.session_state.overview_files
         cards = st.columns(4)
-        cards[0].metric("知识库数量", "—", help="知识库尚未接入")
+        cards[0].metric("知识库数量", st.session_state.get("knowledge_count", "—"), help="最近一次打开知识库列表时的数量")
         cards[1].metric("文件数量", len(files) if files is not None else "—", help="现有文件列表，不受文档页筛选影响")
         cards[2].metric("任务数量", len(st.session_state.known_tasks), help="当前浏览器会话已加载的任务")
         cards[3].metric("报告数量", "—", help="报告列表尚未接入")

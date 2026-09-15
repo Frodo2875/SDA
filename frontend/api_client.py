@@ -184,3 +184,37 @@ def prepare_rollback(file_id: str, version_id: str, session_id: str) -> dict[str
 
 def get_batch(batch_id: str) -> dict[str, Any]:
     return request("GET", f"/api/batches/{batch_id}").get("data") or {}
+
+
+def knowledge_request(method: str, suffix: str = "", **kwargs: Any) -> Any:
+    """Keep management API failures visible instead of returning empty success."""
+    result = request(method, f"/api/knowledge-bases{suffix}", **kwargs)
+    if not result.get("ok"):
+        raise RuntimeError(result.get("message") or "知识库操作失败")
+    return result["data"]
+
+
+def list_knowledge_bases() -> list[dict[str, Any]]:
+    return knowledge_request("GET")
+
+
+def create_knowledge_base(name: str, description: str) -> dict[str, Any]:
+    return knowledge_request("POST", json={"name": name, "description": description})
+
+
+def get_knowledge_base(identifier: str) -> dict[str, Any]:
+    return knowledge_request("GET", f"/{identifier}")
+
+
+def list_knowledge_files(identifier: str) -> list[dict[str, Any]]:
+    return knowledge_request("GET", f"/{identifier}/files")
+
+
+def attach_knowledge_file(identifier: str, file_id: str) -> dict[str, Any]:
+    return knowledge_request("POST", f"/{identifier}/files", json={"file_id": file_id})
+
+
+def upload_knowledge_file(identifier: str, uploaded_file: Any) -> dict[str, Any]:
+    return knowledge_request("POST", f"/{identifier}/upload", files={
+        "file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type or "application/octet-stream")
+    })

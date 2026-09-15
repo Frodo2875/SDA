@@ -179,18 +179,20 @@ def render_file_panel(
     on_upload: Callable[[list[Any]], None],
     on_refresh: Callable[[], None],
     on_version_action: ActionHandler,
+    upload_extensions: list[str] | None = None,
+    uploader_key: str | None = None,
 ) -> None:
     st.subheader("Document Workspace")
     st.caption("文件、生命周期、解析与索引状态")
     uploaded = st.file_uploader(
         "拖拽或选择多个材料",
-        type=SUPPORTED_UPLOAD_EXTENSIONS,
+        type=upload_extensions or SUPPORTED_UPLOAD_EXTENSIONS,
         accept_multiple_files=True,
         help=(
             "支持 Excel、Word、PDF、PPT/PPTX、TXT、JSON、CSV、JPG、JPEG 和 PNG。"
             "文件将逐个上传并显示结果。"
         ),
-        key=f"material-uploader-{uploader_version}",
+        key=uploader_key or f"material-uploader-{uploader_version}",
     )
     if st.button(
         "上传所选文件",

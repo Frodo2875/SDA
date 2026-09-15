@@ -8,6 +8,8 @@ from frontend.components.evidence_panel import render_evidence_preview
 
 def render() -> None:
     st.title("聊天")
+    if st.session_state.get("knowledge_base_id"):
+        st.info(f"知识库上下文：{st.session_state.get('knowledge_base_name', '')}。当前检索范围尚未限定到该知识库。")
     st.caption("在当前会话中提问，查看资料引用与研究结果。")
     conversation, evidence = st.columns([2, 1], gap="large")
     with conversation:
