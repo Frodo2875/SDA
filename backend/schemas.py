@@ -118,6 +118,7 @@ class ChatResponse(BaseModel):
     task_id: str | None = None
     evidence: list[dict[str, Any]] = Field(default_factory=list)
     unified_evidence: list[dict[str, Any]] = Field(default_factory=list)
+    evidence_quality: dict[str, Any] | None = None
 
 
 class ActionResponse(BaseModel):

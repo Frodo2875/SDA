@@ -8,6 +8,7 @@ from backend.runtime.async_task_runtime import AsyncTaskContext, enqueue_async_t
 from backend.schemas import ResearchTaskRequest
 from backend.services.redaction import redact_value
 from backend.services.trace_service import record_trace
+from backend.services.evidence_quality import attach_evidence_quality
 
 
 _SUCCESS_STATUSES = {"completed", "clarification_required", "confirmation_required"}
@@ -128,9 +129,10 @@ async def execute_research(payload: dict[str, Any], context: AsyncTaskContext) -
             "error_code": _ERROR_CODES.get(result.get("status"), "RESEARCH_AGENT_FAILED"),
             "message": "研究任务未完成，请检查任务状态后恢复",
         }
+    result = attach_evidence_quality(result, query=payload["message"])
     safe_result = redact_value({
         key: result[key] for key in
-        ("answer", "status", "task_id", "evidence", "unified_evidence", "pending_action")
+        ("answer", "status", "task_id", "evidence", "unified_evidence", "pending_action", "evidence_quality")
         if key in result
     })
     database.TASK_REPOSITORY.update_research(context.task_id, result=safe_result)

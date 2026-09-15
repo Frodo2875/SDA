@@ -36,6 +36,7 @@ from backend.services.domain_router import (
 from backend.services.redaction import redacted_json, redact_value
 from backend.services.student_domain_adapter import STUDENT_DOMAIN_ADAPTER
 from backend.services.source_router import route_source
+from backend.services.evidence_quality import attach_evidence_quality
 from backend.services.tool_scope_resolver import (
     SourceToolScope,
     resolve_source_tool_scope,
@@ -1077,6 +1078,7 @@ async def run_agent(
     result["unified_evidence"] = _collect_unified_evidence(
         result.get("tool_calls") or []
     )
+    result = attach_evidence_quality(result, query=resolved_message)
     result["route"] = domain_route
     result["source_route"] = source_route
     update_after_run(session_id=session_id, result=result, task_id=task_id)
