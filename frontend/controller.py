@@ -16,6 +16,7 @@ from frontend.components.file_panel import (
 def initialize_state() -> None:
     defaults = {
         "active_page": "dashboard",
+        "chat_mode": "普通问答",
         "workspace_name": "默认 Workspace",
         "session_id": uuid4().hex,
         "messages": [],
@@ -111,18 +112,28 @@ def handle_task_operation(task_id: str, operation: str) -> None:
 
 
 def submit_message(message: str) -> None:
+    st.session_state.latest_evidence = []
+    st.session_state.selected_evidence_location = None
+    st.session_state.evidence_location_error = None
     st.session_state.messages.append({"role": "user", "content": message})
     try:
         with st.spinner("Agent 正在处理材料…"):
             response = api_client.chat(st.session_state.session_id, message)
         task_id = response.get("task_id")
-        task = api_client.get_task(task_id) if task_id else None
+        task = None
+        display_warnings = []
+        if task_id:
+            try:
+                task = api_client.get_task(task_id)
+            except RuntimeError:
+                display_warnings.append("任务详情暂不可用，可稍后刷新。")
         if task_id and task:
             st.session_state.known_tasks[task_id] = task
-        traces = api_client.get_traces(
-            task_id=task_id,
-            session_id=None if task_id else st.session_state.session_id,
-        )
+        try:
+            traces = api_client.get_traces(task_id=task_id, session_id=None if task_id else st.session_state.session_id)
+        except RuntimeError:
+            traces = []
+            display_warnings.append("Trace 暂不可用，回答已保留。")
         displayed_evidence = (
             response.get("unified_evidence") or response.get("evidence") or []
         )
@@ -136,6 +147,10 @@ def submit_message(message: str) -> None:
                 "evidence": displayed_evidence,
                 "task": task,
                 "traces": traces,
+                "display_warnings": display_warnings,
+                "evidence_quality": response.get("evidence_quality"),
+                "web_search_warnings": response.get("web_search_warnings"),
+                "research_task_id": response.get("task_id") if response.get("status") == "research_task_created" else None,
             }
         )
         st.session_state.latest_evidence = displayed_evidence

@@ -218,3 +218,22 @@ def upload_knowledge_file(identifier: str, uploaded_file: Any) -> dict[str, Any]
     return knowledge_request("POST", f"/{identifier}/upload", files={
         "file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type or "application/octet-stream")
     })
+
+
+def create_research_task(session_id: str, query: str) -> dict[str, Any]:
+    return request("POST", "/api/research-task", json={"session_id": session_id, "query": query})
+
+
+def get_research_task(task_id: str) -> dict[str, Any]:
+    return request("GET", f"/api/research-task/{task_id}")
+
+
+def create_report(task_id: str, title: str) -> dict[str, Any]:
+    result = request("POST", f"/api/research-task/{task_id}/reports", json={"title": title})
+    if not result.get("ok"):
+        raise RuntimeError(result.get("message") or "报告生成失败")
+    return result["data"]
+
+
+def preview_report(task_id: str, report_id: str, format: str) -> dict[str, Any]:
+    return request("POST", f"/api/research-task/{task_id}/reports/{report_id}/preview", json={"format": format})

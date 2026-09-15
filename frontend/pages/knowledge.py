@@ -1,11 +1,11 @@
 """Persistent knowledge organization using the existing document controls."""
 
 from typing import Any
-from uuid import uuid4
 
 import streamlit as st
 
 from frontend import api_client, controller
+from frontend.chat_workspace import new_conversation
 from frontend.components.file_panel import (
     FILE_TYPE_FILTERS, SUPPORTED_UPLOAD_EXTENSIONS, filter_files_by_lifecycle,
     format_file_size, render_file_panel,
@@ -111,14 +111,7 @@ def render_detail(record: dict[str, Any], files: list[dict[str, Any]]) -> None:
     st.metric("文件数量", record["file_count"])
     st.caption(f"创建：{record['created_at']} · 更新：{record['updated_at']} · 状态：{record['status']}")
     if st.button("新建聊天", key="knowledge-chat"):
-        st.session_state.session_id = uuid4().hex
-        st.session_state.messages = []
-        st.session_state.latest_evidence = []
-        st.session_state.selected_evidence_location = None
-        st.session_state.evidence_location_error = None
-        st.session_state.known_tasks = {}
-        st.session_state.knowledge_base_id = identifier
-        st.session_state.knowledge_base_name = record["name"]
+        new_conversation(identifier, record["name"])
         st.session_state.active_page = "chat"
         st.rerun()
     st.caption("聊天入口携带知识库上下文；本阶段尚未限定检索范围。")

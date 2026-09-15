@@ -6,7 +6,7 @@ from typing import Any
 import streamlit as st
 
 from frontend.components.confirmation_card import render_confirmation
-from frontend.components.evidence_panel import render_evidence
+from frontend.components.evidence_panel import render_evidence, source_labels
 from frontend.components.task_progress import render_batch, render_task
 from frontend.components.trace_panel import render_trace
 
@@ -69,9 +69,23 @@ def render_messages(
                 st.error(message["content"])
             else:
                 st.markdown(message["content"])
+            warnings = [*(message.get("display_warnings") or []),
+                        *((message.get("evidence_quality") or {}).get("warnings") or []),
+                        *(message.get("web_search_warnings") or [])]
+            for warning in warnings:
+                st.warning(str(warning.get("message") or warning) if isinstance(warning, dict) else str(warning))
             for table in message.get("comparison_tables") or []:
                 st.dataframe(table, use_container_width=True, hide_index=True)
             render_task(message.get("task"))
+            if message.get("evidence"):
+                st.caption("来源：")
+                for label in source_labels(message["evidence"]):
+                    st.text(label)
+                if st.button("查看本条回答证据", key=f"answer-sources-{index}"):
+                    st.session_state.latest_evidence = message["evidence"]
+                    st.session_state.selected_evidence_location = None
+                    st.session_state.evidence_location_error = None
+                    st.rerun()
             render_batch(message.get("batch"))
             render_evidence(
                 message.get("evidence") or [],

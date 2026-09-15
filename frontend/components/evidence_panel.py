@@ -4,6 +4,7 @@ import base64
 from collections.abc import Callable
 from html import escape
 from typing import Any
+from urllib.parse import urlsplit
 
 import streamlit as st
 
@@ -11,6 +12,17 @@ import streamlit as st
 def evidence_location(item: dict[str, Any]) -> list[str]:
     """Build an observable source locator shared by chat and workspace preview."""
     location = []
+    metadata = item.get("metadata") or {}
+    if metadata.get("heading_path"):
+        location.append("Heading：" + " > ".join(str(value) for value in metadata["heading_path"]))
+    line = item.get("line_number") or metadata.get("line_number")
+    if line is not None:
+        location.append(f"Line：{line}" + (f"-{metadata['line_end']}" if metadata.get("line_end") else ""))
+    row = item.get("row_number") if item.get("row_number") is not None else item.get("row_index")
+    if row is not None:
+        location.append(f"Row：{row}" + (f"-{metadata['row_end']}" if metadata.get("row_end") is not None else ""))
+    if item.get("locator_type"):
+        location.append(f"类型：{item['locator_type']}")
     if item.get("page_no") is not None:
         location.append(f"Page：{item['page_no']}")
     if item.get("image_no") is not None:
@@ -64,6 +76,20 @@ def _is_web_evidence(item: dict[str, Any]) -> bool:
     return item.get("source_type") in {"WEB", "URL"}
 
 
+def web_url(item: dict[str, Any]) -> str | None:
+    value = str(item.get("url") or "")
+    try:
+        parsed = urlsplit(value)
+        return value if parsed.scheme in {"http", "https"} and parsed.hostname and not parsed.username and not parsed.password else None
+    except ValueError:
+        return None
+
+
+def source_labels(evidence: list[dict[str, Any]]) -> list[str]:
+    return [f"[{index}] {'Web 来源' if _is_web_evidence(item) else '本地文件'} · {_evidence_label(item)}"
+            for index, item in enumerate(evidence, 1)]
+
+
 EvidenceHandler = Callable[[dict[str, Any]], None]
 
 
@@ -77,7 +103,7 @@ def render_evidence_preview(
     st.subheader("Evidence Preview")
     st.caption("回答引用的 file / page / block / cell / bbox")
     if not evidence:
-        st.info("当前回答暂无引用。")
+        st.info("暂无证据。")
         return
     for index, item in enumerate(evidence, start=1):
         with st.container(border=True):
@@ -85,10 +111,14 @@ def render_evidence_preview(
                 f"**{index}. {_evidence_label(item)}**"
             )
             st.caption(" · ".join(evidence_location(item)) or "来源级证据")
+            st.caption("Web Evidence" if _is_web_evidence(item) else "Local Evidence")
             if item.get("content") or item.get("value_summary"):
                 st.write(item.get("content") or item["value_summary"])
-            if _is_web_evidence(item) and item.get("url"):
-                st.markdown(f"[打开来源网页]({item['url']})")
+            if _is_web_evidence(item):
+                st.text(f"URL：{item.get('url') or '未提供'}")
+                st.caption(f"Domain：{item.get('domain') or '未提供'} · Retrieved At：{item.get('retrieved_at') or '未提供'}")
+                if url := web_url(item):
+                    st.link_button("打开来源网页", url)
             if not _is_web_evidence(item) and item.get("evidence_id") and st.button(
                 "打开原文",
                 key=f"evidence-preview-{item['evidence_id']}-{index}",
@@ -116,8 +146,8 @@ def render_evidence(
             st.caption(" · ".join(evidence_location(item)) or "来源级证据")
             if item.get("content") or item.get("value_summary"):
                 st.write(item.get("content") or item["value_summary"])
-            if _is_web_evidence(item) and item.get("url"):
-                st.markdown(f"[打开来源网页]({item['url']})")
+            if _is_web_evidence(item) and (url := web_url(item)):
+                st.link_button("打开来源网页", url)
             if not _is_web_evidence(item) and item.get("evidence_id") and st.button(
                 "打开原文",
                 key=f"{key_prefix}-{item['evidence_id']}-{index}",
