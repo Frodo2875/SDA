@@ -4,6 +4,7 @@ import streamlit as st
 from frontend import api_client
 from frontend.pages import workspace
 from frontend.shell import navigate
+from frontend.system_dashboard import render_status
 
 
 def refresh_overview() -> None:
@@ -19,7 +20,7 @@ def refresh_overview() -> None:
 
 def render() -> None:
     st.title("工作空间概览")
-    overview, quick = st.tabs(["概览", "快捷工作台"])
+    overview, quick, system = st.tabs(["概览", "快捷工作台", "系统状态"])
     with overview:
         if "overview_files" not in st.session_state:
             refresh_overview()
@@ -30,7 +31,8 @@ def render() -> None:
         cards[0].metric("知识库数量", st.session_state.get("knowledge_count", "—"), help="最近一次打开知识库列表时的数量")
         cards[1].metric("文件数量", len(files) if files is not None else "—", help="现有文件列表，不受文档页筛选影响")
         cards[2].metric("任务数量", len(st.session_state.known_tasks), help="当前浏览器会话已加载的任务")
-        cards[3].metric("报告数量", "—", help="报告列表尚未接入")
+        report_count = (st.session_state.get("system_snapshot") or {}).get("counts", {}).get("报告")
+        cards[3].metric("报告数量", report_count if report_count is not None else "—", help="最近系统快照中已知研究任务的报告数")
         if st.session_state.overview_files_error:
             st.warning(st.session_state.overview_files_error)
         st.write("")
@@ -58,6 +60,8 @@ def render() -> None:
                 st.caption("当前会话尚未加载任务。")
         with columns[2], st.container(border=True):
             st.markdown("**最近报告**")
-            st.caption("报告列表尚未接入。")
+            st.caption("前往报告中心查看已发现的报告。")
     with quick:
         workspace.render()
+    with system:
+        render_status()

@@ -5,6 +5,7 @@ import streamlit as st
 from frontend import controller
 from frontend.shell import render_shell
 from frontend.pages import dashboard, chat, documents, tasks, settings, placeholder, knowledge, reports
+from frontend.pages import usage
 
 
 def render_page() -> None:
@@ -19,6 +20,7 @@ def render_page() -> None:
         "knowledge": knowledge.render,
         "tasks": tasks.render,
         "reports": reports.render,
+        "usage": usage.render,
         "settings": settings.render,
     }
     pages.get(st.session_state.active_page, placeholder.render)()

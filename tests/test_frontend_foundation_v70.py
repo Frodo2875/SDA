@@ -107,7 +107,7 @@ def test_navigation_uses_available_business_contracts(ui: AppTest, monkeypatch: 
     ui.button(key=f"nav-{page}").click().run()
     assert not ui.exception
     assert len(ui.info) == 1
-    assert {"knowledge": "暂无知识库", "reports": "暂无已发现的报告", "usage": "尚未开放"}[page] in ui.info[0].value
+    assert {"knowledge": "暂无知识库", "reports": "暂无已发现的报告", "usage": "统计需点击刷新"}[page] in ui.info[0].value
     if page == "knowledge":
         assert any(item.label == "创建" for item in ui.button)
     if page == "reports":
