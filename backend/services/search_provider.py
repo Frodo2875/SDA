@@ -11,10 +11,18 @@ class SearchProviderError(RuntimeError):
     """A provider is unavailable or returned an invalid response."""
 
     def __init__(
-        self, message: str, *, error_code: str = "WEB_SEARCH_PROVIDER_ERROR"
+        self, message: str, *, error_code: str = "WEB_SEARCH_PROVIDER_ERROR",
+        search_error_code: str | None = None,
     ) -> None:
         super().__init__(message)
         self.error_code = error_code
+        self.search_error_code = search_error_code or {
+            "WEB_SEARCH_AUTH_ERROR": "SEARCH_AUTH_FAILED",
+            "WEB_SEARCH_RATE_LIMITED": "SEARCH_RATE_LIMIT",
+            "WEB_SEARCH_TIMEOUT": "SEARCH_TIMEOUT",
+            "WEB_SEARCH_INVALID_RESPONSE": "SEARCH_INVALID_RESPONSE",
+        }.get(error_code, "SEARCH_PROVIDER_UNAVAILABLE")
+        self.provider_execution: dict[str, Any] = {}
 
 
 class SearchProvider(Protocol):
@@ -36,7 +44,7 @@ class UnavailableSearchProvider:
     def search(
         self, query: str, scope: WebSearchScope
     ) -> list[WebSearchResult | dict[str, Any]]:
-        raise SearchProviderError(self.message)
+        raise SearchProviderError("Web Search Provider 尚未配置或配置无效")
 
 
 def normalize_search_results(

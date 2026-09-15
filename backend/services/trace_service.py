@@ -40,6 +40,14 @@ def record_trace(
         duration_ms=duration_ms,
         current=runtime_metrics,
     ))
+    data = result.get("data") if isinstance(result, dict) else None
+    provider_execution = data.get("provider_execution") if isinstance(data, dict) else None
+    if tool_name == "retrieve_web" and isinstance(provider_execution, dict):
+        runtime_metrics["provider_execution"] = provider_execution
+        if provider_execution.get("provider") in {"tavily", "unconfigured"}:
+            # Query text may contain personal context beyond recognized PII patterns.
+            arguments = {"query": "[omitted]"}
+            runtime_metrics["search_query"] = "[omitted]"
     trace = {
         "trace_id": uuid4().hex,
         "task_id": task_id,

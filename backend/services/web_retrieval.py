@@ -8,9 +8,9 @@ from backend.evidence import build_web_evidence
 from backend.services.search_provider import (
     SearchProvider,
     SearchProviderError,
-    normalize_search_results,
 )
 from backend.services.search_provider_factory import build_search_provider_from_env
+from backend.services.search_reliability import reliable_search
 from backend.services.url_fetch import URLFetchError, URLFetcher
 from backend.services.web_models import WebSearchScope
 from backend.tools.excel_utils import failure, success
@@ -86,12 +86,7 @@ class WebRetrievalService:
             scope = WebSearchScope(
                 top_k=top_k, language=language, region=region
             )
-            raw_results = self.search_provider.search(clean_query, scope)
-            results = normalize_search_results(
-                raw_results,
-                provider_name=str(getattr(self.search_provider, "name", "unknown")),
-                limit=scope.top_k,
-            )
+            results, provider_execution = reliable_search(self.search_provider, clean_query, scope)
         except SearchProviderError as exc:
             return failure(
                 exc.error_code,
@@ -100,6 +95,8 @@ class WebRetrievalService:
                     "status": "failed",
                     "mode": "search",
                     "query": clean_query,
+                    "search_error_code": exc.search_error_code,
+                    "provider_execution": exc.provider_execution,
                     "latency_ms": _elapsed_ms(started),
                 },
             )
@@ -126,7 +123,7 @@ class WebRetrievalService:
                 },
             )
         status = "found" if results else "not_found"
-        retrieved_at = database.utc_now()
+        retrieved_at = provider_execution["retrieved_at"]
         evidence = []
         for item in results:
             try:
@@ -144,6 +141,8 @@ class WebRetrievalService:
                 "mode": "search",
                 "query": clean_query,
                 "provider": str(getattr(self.search_provider, "name", "unknown")),
+                "provider_execution": provider_execution,
+                "search_error_code": provider_execution["error_code"],
                 "results": [item.model_dump(mode="json") for item in results],
                 "result_count": len(results),
                 "evidence": evidence,

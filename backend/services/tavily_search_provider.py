@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from typing import Any
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+import math
+import time
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -13,6 +17,24 @@ from backend.services.web_models import WebSearchScope
 
 DEFAULT_TAVILY_BASE_URL = "https://api.tavily.com"
 DEFAULT_TAVILY_TIMEOUT_SECONDS = 8.0
+MAX_RETRY_AFTER_SECONDS = 2.0
+
+
+def retry_after_seconds(value: str | None) -> float | None:
+    """Return a bounded delay; excessive valid delays decline the retry."""
+    try:
+        delay = float(value or "1")
+    except ValueError:
+        try:
+            stamp = parsedate_to_datetime(value or "")
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+            delay = (stamp - datetime.now(timezone.utc)).total_seconds()
+        except (TypeError, ValueError, OverflowError):
+            delay = 1.0
+    if not math.isfinite(delay):
+        delay = 1.0
+    return None if delay > MAX_RETRY_AFTER_SECONDS else max(0.0, delay)
 
 
 class TavilySearchProvider:
@@ -79,6 +101,24 @@ class TavilySearchProvider:
         ]
 
     def _post(self, payload: dict[str, Any]) -> httpx.Response:
+        from backend.services.search_reliability import note_attempt
+
+        for attempt in range(2):
+            note_attempt(attempt)
+            response = self._request(payload)
+            if response.status_code != 429:
+                return self._check_status(response)
+            delay = retry_after_seconds(response.headers.get("Retry-After"))
+            response.close()
+            if attempt == 1 or delay is None:
+                break
+            time.sleep(delay)
+        raise SearchProviderError(
+            "Tavily API 请求已达到限流或额度限制",
+            error_code="WEB_SEARCH_RATE_LIMITED",
+        )
+
+    def _request(self, payload: dict[str, Any]) -> httpx.Response:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -102,8 +142,13 @@ class TavilySearchProvider:
             ) from exc
         except httpx.HTTPError as exc:
             raise SearchProviderError(
-                "无法连接 Tavily Search", error_code="WEB_SEARCH_PROVIDER_ERROR"
+                "无法连接 Tavily Search", error_code="WEB_SEARCH_PROVIDER_ERROR",
+                search_error_code="SEARCH_NETWORK_ERROR",
             ) from exc
+        return response
+
+    @staticmethod
+    def _check_status(response: httpx.Response) -> httpx.Response:
         if response.status_code in {401, 403}:
             raise SearchProviderError(
                 "Tavily API 鉴权失败", error_code="WEB_SEARCH_AUTH_ERROR"
@@ -147,6 +192,24 @@ def _normalize_tavily_result(
             "Tavily 返回了无效搜索结果",
             error_code="WEB_SEARCH_INVALID_RESPONSE",
         )
+    if (any(not isinstance(raw.get(key), str) or not raw[key].strip()
+            for key in ("title", "url"))
+            or len(raw["title"]) > 500 or len(raw["url"]) > 4096
+            or (raw.get("content") is not None and (
+                not isinstance(raw["content"], str) or len(raw["content"]) > 4000))
+            or any(raw.get(key) is not None and not isinstance(raw[key], str)
+                   for key in ("published_date", "favicon"))
+            or (raw.get("score") is not None and (
+                isinstance(raw["score"], bool) or not isinstance(raw["score"], (int, float))
+                or not math.isfinite(raw["score"])))):
+        raise SearchProviderError("Tavily 搜索结果字段无效", error_code="WEB_SEARCH_INVALID_RESPONSE")
+    try:
+        parts = urlsplit(raw["url"])
+        if parts.scheme not in {"http", "https"} or not parts.hostname or parts.username or parts.password:
+            raise ValueError("invalid URL")
+        parts.port
+    except ValueError as exc:
+        raise SearchProviderError("Tavily 搜索结果 URL 无效", error_code="WEB_SEARCH_INVALID_RESPONSE") from exc
     metadata = {
         "provider_score": raw.get("score"),
         "published_at": raw.get("published_date"),

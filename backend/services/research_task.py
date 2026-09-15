@@ -9,6 +9,7 @@ from backend.schemas import ResearchTaskRequest
 from backend.services.redaction import redact_value
 from backend.services.trace_service import record_trace
 from backend.services.evidence_quality import attach_evidence_quality
+from backend.services.search_reliability import research_search_scope
 
 
 _SUCCESS_STATUSES = {"completed", "clarification_required", "confirmation_required"}
@@ -120,9 +121,12 @@ async def execute_research(payload: dict[str, Any], context: AsyncTaskContext) -
         if action["status"] == "executed":
             cached = {**cached, "status": "completed"}
             cached.pop("pending_action", None)
-    result = cached or await run_agent(
-        payload["message"], session_id=payload["session_id"], observer=observer,
-    )
+    with research_search_scope(context.task_id, payload["session_id"]) as searches:
+        result = cached or await run_agent(
+            payload["message"], session_id=payload["session_id"], observer=observer,
+        )
+    if searches.failures:
+        result = {**result, "web_search_warnings": searches.failures}
     if result.get("status") not in _SUCCESS_STATUSES:
         return {
             "ok": False, "data": None,
@@ -132,7 +136,7 @@ async def execute_research(payload: dict[str, Any], context: AsyncTaskContext) -
     result = attach_evidence_quality(result, query=payload["message"])
     safe_result = redact_value({
         key: result[key] for key in
-        ("answer", "status", "task_id", "evidence", "unified_evidence", "pending_action", "evidence_quality")
+        ("answer", "status", "task_id", "evidence", "unified_evidence", "pending_action", "evidence_quality", "web_search_warnings")
         if key in result
     })
     database.TASK_REPOSITORY.update_research(context.task_id, result=safe_result)
