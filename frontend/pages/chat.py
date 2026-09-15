@@ -49,6 +49,10 @@ def render_research(message: dict[str, Any], index: int) -> None:
     with st.container(border=True):
         task = message.get("research") or {}
         st.caption(f"Research Task · {message['research_task_id']}")
+        if st.button("在任务中心打开", key=f"research-center-open-{index}"):
+            st.session_state.research_selected_id = message["research_task_id"]
+            st.session_state.active_page = "tasks"
+            st.rerun()
         st.write(f"状态：{task.get('status', '待刷新')} · 阶段：{(task.get('progress') or {}).get('stage', '待刷新')}")
         if task.get("updated_at"):
             st.caption(f"更新时间：{task['updated_at']}")

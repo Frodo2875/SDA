@@ -228,6 +228,12 @@ def get_research_task(task_id: str) -> dict[str, Any]:
     return request("GET", f"/api/research-task/{task_id}")
 
 
+def research_task_action(task_id: str, operation: str) -> dict[str, Any]:
+    if operation not in {"cancel", "retry", "resume"}:
+        raise ValueError("不支持的研究任务操作")
+    return request("POST", f"/api/research-task/{task_id}/{operation}")
+
+
 def create_report(task_id: str, title: str) -> dict[str, Any]:
     result = request("POST", f"/api/research-task/{task_id}/reports", json={"title": title})
     if not result.get("ok"):
