@@ -241,5 +241,28 @@ def create_report(task_id: str, title: str) -> dict[str, Any]:
     return result["data"]
 
 
+def get_report(task_id: str, report_id: str) -> dict[str, Any]:
+    result = request("GET", f"/api/research-task/{task_id}/reports/{report_id}")
+    if not result.get("ok"):
+        raise RuntimeError(result.get("message") or "报告读取失败")
+    return result["data"]
+
+
+def download_report(task_id: str, report_id: str, format: str) -> bytes:
+    if format not in {"md", "docx"}:
+        raise ValueError("不支持的报告格式")
+    try:
+        response = httpx.get(f"{BASE_URL}/api/research-task/{task_id}/reports/{report_id}/download",
+                             params={"format": format}, timeout=TIMEOUT)
+        if response.is_error:
+            raise RuntimeError("报告下载失败，请确认文件已通过审批且仍可用。")
+        expected = "text/markdown" if format == "md" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        if not response.headers.get("content-type", "").startswith(expected):
+            raise RuntimeError("下载响应格式不正确。")
+        return response.content
+    except httpx.RequestError as exc:
+        raise RuntimeError("报告下载通信失败，请稍后重试。") from exc
+
+
 def preview_report(task_id: str, report_id: str, format: str) -> dict[str, Any]:
     return request("POST", f"/api/research-task/{task_id}/reports/{report_id}/preview", json={"format": format})
