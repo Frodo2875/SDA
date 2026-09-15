@@ -1,6 +1,8 @@
 """Word diff previews and immutable snapshots around the existing HITL action."""
 
 import hashlib
+from io import BytesIO
+import re
 import json
 import os
 import tempfile
@@ -57,8 +59,8 @@ def preview_word_diff(
         return failure("INVALID_DIFF_OPERATION", f"Diff 操作参数无效：{exc}")
 
     try:
-        before_bytes = path.read_bytes()
-        before_text = _word_text(path)
+        before_bytes = path.read_bytes() if path.exists() else _empty_document(path)
+        before_text = _word_text(path) if path.exists() else ""
     except Exception:
         return failure("WORD_READ_ERROR", "读取 Word 生成 Diff 失败")
     target_version = None
@@ -87,7 +89,7 @@ def preview_word_diff(
         impact_scope = "恢复整个文档内容"
 
     normalized_operation = validated.model_dump()
-    normalized_operation["expected_hash"] = _hash_bytes(before_bytes)
+    normalized_operation["expected_hash"] = _hash_bytes(before_bytes) if path.exists() else "ABSENT"
     normalized_operation["target_version_id"] = (
         target_version["version_id"] if target_version else None
     )
@@ -132,9 +134,10 @@ def execute_versioned_word_action(
     if error is not None:
         return error
 
-    original_bytes = path.read_bytes()
+    existed = path.exists()
+    original_bytes = path.read_bytes() if existed else _empty_document(path)
     expected_hash = operation.get("expected_hash")
-    if expected_hash and expected_hash != _hash_bytes(original_bytes):
+    if expected_hash and expected_hash != (_hash_bytes(original_bytes) if existed else "ABSENT"):
         return failure(
             "FILE_CHANGED_SINCE_PREVIEW",
             "文件在 Diff 预览后已发生变化，请重新生成预览并确认",
@@ -142,8 +145,8 @@ def execute_versioned_word_action(
 
     before_id = uuid4().hex
     after_id = uuid4().hex
-    before_path = _version_storage_path(file_id, before_id)
-    after_path = _version_storage_path(file_id, after_id)
+    before_path = _version_storage_path(file_id, before_id, path.suffix)
+    after_path = _version_storage_path(file_id, after_id, path.suffix)
     try:
         _write_snapshot(before_path, original_bytes)
         action_result = _apply_operation(
@@ -153,11 +156,11 @@ def execute_versioned_word_action(
             write_handler=write_handler,
         )
         if not action_result["ok"]:
-            _restore_if_changed(path, original_bytes)
+            _restore_report_or_existing(path, original_bytes, existed)
             _cleanup_paths(before_path, after_path)
             return action_result
 
-        Document(path)
+        _validate_document(path)
         updated_bytes = path.read_bytes()
         _write_snapshot(after_path, updated_bytes)
         timestamp = database.utc_now()
@@ -194,7 +197,7 @@ def execute_versioned_word_action(
             "Word 操作已安全执行并创建新版本",
         )
     except Exception:
-        restore_error = _restore_if_changed(path, original_bytes)
+        restore_error = _restore_report_or_existing(path, original_bytes, existed)
         _cleanup_paths(before_path, after_path)
         if restore_error is not None:
             return failure(
@@ -236,6 +239,12 @@ def _apply_operation(
     write_handler: WriteHandler,
 ) -> dict[str, Any]:
     if operation["operation_type"] == "append":
+        if path.suffix == ".md":
+            before = path.read_text(encoding="utf-8") if path.exists() else ""
+            _atomic_replace_bytes(path, (before + ("\n" if before else "") + str(operation["content"])).encode("utf-8"))
+            return success({"file_name": record["file_name"]}, "Markdown 报告已写入")
+        if not path.exists():
+            _atomic_replace_bytes(path, _empty_document(path))
         return write_handler(record["file_name"], str(operation["content"]))
     target_id = operation.get("target_version_id") or operation.get("version_id")
     target = database.get_file_version(str(target_id)) if target_id else None
@@ -276,7 +285,7 @@ def _writable_word(
     record = database.get_file_record_by_id(clean_id)
     if record is None:
         return None, None, failure("FILE_NOT_FOUND", "未找到指定文件")
-    if record["file_type"] != "word":
+    if record["file_type"] != "word" and not (_is_report(record) and record["file_type"] == "markdown"):
         return None, None, failure("INVALID_TARGET_FILE", "目标文件必须是 Word 文档")
     if not bool(record["writable"]):
         return None, None, failure("FILE_WRITE_FORBIDDEN", "该系统文件为只读，禁止修改")
@@ -285,13 +294,20 @@ def _writable_word(
     try:
         path = resolve_by_file_id(clean_id)
     except FileLocatorError as exc:
-        return None, None, failure("FILE_NOT_FOUND", str(exc))
-    if path.suffix.lower() != ".docx":
+        if not _is_report(record):
+            return None, None, failure("FILE_NOT_FOUND", str(exc))
+        from backend.tools.excel_utils import DATA_DIR
+        path = DATA_DIR / "uploads" / record["file_name"]
+        if path.exists() or path.is_symlink() or path.parent.resolve() != DATA_DIR.resolve() / "uploads":
+            return None, None, failure("INVALID_TARGET_FILE", "报告目标路径无效")
+    if path.suffix.lower() != ".docx" and not (_is_report(record) and path.suffix == ".md"):
         return None, None, failure("INVALID_TARGET_FILE", "目标文件必须是 Word 文档")
     return record, path, None
 
 
 def _word_text(path: Path) -> str:
+    if path.suffix == ".md":
+        return path.read_text(encoding="utf-8")
     document = Document(path)
     return "\n".join(paragraph.text for paragraph in document.paragraphs if paragraph.text)
 
@@ -317,10 +333,10 @@ def _snapshot_path(
     return path, None
 
 
-def _version_storage_path(file_id: str, version_id: str) -> Path:
+def _version_storage_path(file_id: str, version_id: str, suffix: str = ".docx") -> Path:
     if not all(char.isalnum() or char in {"-", "_"} for char in file_id):
         raise ValueError("非法 file_id")
-    return database.DB_PATH.parent / "versions" / file_id / f"{version_id}.docx"
+    return database.DB_PATH.parent / "versions" / file_id / f"{version_id}{suffix}"
 
 
 def _write_snapshot(path: Path, content: bytes) -> None:
@@ -343,16 +359,17 @@ def _write_snapshot(path: Path, content: bytes) -> None:
 
 def _atomic_replace_bytes(path: Path, content: bytes) -> None:
     temporary: Path | None = None
+    path.parent.mkdir(parents=True, exist_ok=True)
     try:
         with tempfile.NamedTemporaryFile(
             mode="wb", dir=path.parent, prefix=f".{path.stem}-restore-",
-            suffix=".docx", delete=False
+            suffix=path.suffix, delete=False
         ) as output:
             output.write(content)
             output.flush()
             os.fsync(output.fileno())
             temporary = Path(output.name)
-        Document(temporary)
+        _validate_document(temporary)
         os.replace(temporary, path)
         temporary = None
     finally:
@@ -403,3 +420,34 @@ def _cleanup_paths(*paths: Path) -> None:
             path.unlink(missing_ok=True)
         except OSError:
             pass
+
+
+def _is_report(record: dict[str, Any]) -> bool:
+    name = str(record.get("file_name") or "")
+    return bool(re.fullmatch(r"report-[0-9a-f]{32}\.(?:md|docx)", name)
+                and record.get("file_path") == f"data/uploads/{name}")
+
+
+def _empty_document(path: Path) -> bytes:
+    if path.suffix == ".md":
+        return b""
+    output = BytesIO()
+    Document().save(output)
+    return output.getvalue()
+
+
+def _validate_document(path: Path) -> None:
+    if path.suffix == ".md":
+        path.read_bytes().decode("utf-8")
+    else:
+        Document(path)
+
+
+def _restore_report_or_existing(path: Path, original: bytes, existed: bool) -> Exception | None:
+    if existed:
+        return _restore_if_changed(path, original)
+    try:
+        path.unlink(missing_ok=True)
+        return None
+    except OSError as exc:
+        return exc

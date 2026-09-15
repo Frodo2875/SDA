@@ -7,6 +7,7 @@ from fastapi import BackgroundTasks, FastAPI, File, Path, Query, UploadFile
 from fastapi.responses import JSONResponse
 
 from backend import database
+from backend.report_api import router as report_router
 from backend.agent import run_agent
 from backend.llm_client import LLMAPIError, LLMConfigurationError
 from backend.runtime.task_runner import resume_task as resume_workflow_task
@@ -62,6 +63,8 @@ app = FastAPI(
     description="学生材料智能文档助手开发测试 API",
     version="0.1.0",
 )
+
+app.include_router(report_router)
 
 
 CLIENT_ERROR_CODES = {

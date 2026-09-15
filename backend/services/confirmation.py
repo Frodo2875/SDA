@@ -35,6 +35,7 @@ from backend.tools.word_tools import write_word
 
 
 ACTION_TYPE_WRITE_WORD = "write_word"
+ACTION_TYPE_WRITE_REPORT = "write_report"
 ACTION_TYPE_DELETE_FILE = "delete_file"
 ACTION_TYPE_UNDO_WORD = "undo_word"
 ACTION_TYPE_ROLLBACK_WORD = "rollback_word"
@@ -195,6 +196,7 @@ def _create_pending_word_action(
     if task_id is None:
         task_type = {
             ACTION_TYPE_WRITE_WORD: "word_write",
+            ACTION_TYPE_WRITE_REPORT: "report_write",
             ACTION_TYPE_UNDO_WORD: "word_undo",
             ACTION_TYPE_ROLLBACK_WORD: "word_rollback",
         }[action_type]
@@ -539,6 +541,7 @@ def _execute_frozen_action(action: dict[str, Any]) -> dict[str, Any]:
             return _failure("FILE_DELETE_ERROR", "文件删除失败")
     if action["action_type"] not in {
         ACTION_TYPE_WRITE_WORD,
+        ACTION_TYPE_WRITE_REPORT,
         ACTION_TYPE_UNDO_WORD,
         ACTION_TYPE_ROLLBACK_WORD,
     }:
@@ -641,6 +644,7 @@ def _approval_binding_error(action: dict[str, Any]) -> str | None:
         return "Approval 目标文件已经变化"
     expected_operation = {
         ACTION_TYPE_WRITE_WORD: "append",
+        ACTION_TYPE_WRITE_REPORT: "append",
         ACTION_TYPE_UNDO_WORD: "undo",
         ACTION_TYPE_ROLLBACK_WORD: "rollback",
         ACTION_TYPE_DELETE_FILE: None,
@@ -707,3 +711,21 @@ def _clear_context_action(session_id: str, action_id: str) -> None:
         clear_pending_action(session_id, action_id)
     except Exception:
         return
+
+
+def create_pending_report_action(
+    *, session_id: str, file_id: str, content: str,
+    evidence_context: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Report format adapter; reuse the exact frozen approval transaction."""
+    guard = assess_visual_high_impact_write(evidence_context)
+    if guard["decision"] != "confirm":
+        return _failure("VISUAL_FIELD_REVIEW_REQUIRED", "视觉证据必须先经用户核对", guard)
+    preview = preview_word_diff(file_id, WordDiffOperation(operation_type="append", content=content))
+    if not preview["ok"]:
+        return preview
+    return _create_pending_word_action(
+        session_id=session_id, action_type=ACTION_TYPE_WRITE_REPORT, preview=preview,
+        student_id="", student_name="", content=content, task_id=None,
+        finalize_standalone=True,
+    )
