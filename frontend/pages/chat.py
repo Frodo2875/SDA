@@ -89,7 +89,6 @@ def render_research(message: dict[str, Any], index: int) -> None:
 def render() -> None:
     st.title("聊天")
     render_context()
-    st.radio("聊天模式", workspace.MODES, key="chat_mode", horizontal=True)
     render_document_actions()
     with st.expander("显示选项"):
         show_sources = st.toggle("查看参考资料", key="chat-show-sources", value=False)
@@ -115,7 +114,13 @@ def render() -> None:
                 on_locate=actions.handle_evidence_location,
             )
     workspace.save_conversation()
-    if prompt := st.chat_input("输入问题或研究目标", key="workspace-chat"):
+    mode_column, input_column = st.columns([1.15, 6], gap="small", vertical_alignment="bottom")
+    with mode_column:
+        st.selectbox("聊天模式", workspace.MODES, key="chat_mode",
+                     label_visibility="collapsed", help="选择普通问答、深度研究或报告生成")
+    with input_column:
+        prompt = st.chat_input("输入问题或研究目标", key="workspace-chat")
+    if prompt:
         if prompt.strip():
             workspace.submit(prompt.strip())
             st.rerun()

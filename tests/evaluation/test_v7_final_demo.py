@@ -83,7 +83,7 @@ def test_knowledge_to_research_to_approved_report(tmp_path: Path, monkeypatch: A
     assert ui.dataframe[0].value.iloc[0]["状态"] == "可查询"
     ui.button(key="knowledge-chat").click().run(timeout=20)
     assert ui.session_state.knowledge_base_id == kb_id
-    ui.radio(key="chat_mode").set_value("报告生成").run(timeout=20)
+    ui.selectbox(key="chat_mode").set_value("报告生成").run(timeout=20)
     ui.chat_input[0].set_value("根据本地学生材料统计专业分布，并结合网页分析就业方向生成报告").run(timeout=30)
     ui.button(key="research-refresh-1").click().run(timeout=20)
     assert not ui.exception

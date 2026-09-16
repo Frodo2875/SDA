@@ -32,13 +32,14 @@ def ui(monkeypatch: pytest.MonkeyPatch) -> AppTest:
 
 
 def research(ui: AppTest, mode: str = "深度研究") -> None:
-    ui.radio(key="chat_mode").set_value(mode).run()
+    ui.selectbox(key="chat_mode").set_value(mode).run()
     ui.chat_input[0].set_value("分析专业就业方向").run()
     assert not ui.exception
 
 
 def test_chat_layout_and_modes(ui: AppTest) -> None:
-    assert ui.radio(key="chat_mode").options == ["普通问答", "深度研究", "报告生成"]
+    assert ui.selectbox(key="chat_mode").options == ["普通问答", "深度研究", "报告生成"]
+    assert not [item for item in ui.radio if item.key == "chat_mode"]
     assert len(ui.chat_input) == 1
     assert not ui.toggle(key="chat-show-sources").value
     assert not any(item.value == "参考资料" for item in ui.subheader)
