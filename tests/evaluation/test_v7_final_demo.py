@@ -80,7 +80,7 @@ def test_knowledge_to_research_to_approved_report(tmp_path: Path, monkeypatch: A
     assert database.get_file_record_by_id(file_id)["queryable"]
     assert database.get_document_chunks(file_id)
     ui.button(key=f"knowledge-enter-{kb_id}").click().run(timeout=20)
-    assert ui.dataframe[0].value.iloc[0]["状态"] == "Indexed"
+    assert ui.dataframe[0].value.iloc[0]["状态"] == "可查询"
     ui.button(key="knowledge-chat").click().run(timeout=20)
     assert ui.session_state.knowledge_base_id == kb_id
     ui.radio(key="chat_mode").set_value("报告生成").run(timeout=20)

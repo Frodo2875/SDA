@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from backend import database
 from backend.report_api import router as report_router
+from backend.document_action_api import router as document_action_router
 from backend.knowledge_api import router as knowledge_router
 from backend.agent import run_agent
 from backend.llm_client import LLMAPIError, LLMConfigurationError
@@ -66,6 +67,7 @@ app = FastAPI(
 )
 
 app.include_router(report_router)
+app.include_router(document_action_router)
 app.include_router(knowledge_router)
 
 

@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Any
 
 import streamlit as st
+from frontend.presentation import label as status_label
 
 
 TASK_CATEGORIES = ("OCR任务", "索引任务", "Batch任务", "Workflow任务")
@@ -71,12 +72,12 @@ def render_task_center(
     on_resume: Callable[[str], None] | None = None,
 ) -> None:
     heading, refresh = st.columns([3, 1])
-    heading.subheader("Task Center")
+    heading.subheader("处理任务")
     if refresh.button("刷新", key="refresh-task-center", use_container_width=True):
         on_refresh()
-    st.caption("当前浏览器会话中的 OCR、索引与 Workflow 任务")
     for category, items in task_center_groups(tasks).items():
-        with st.expander(f"{category}（{len(items)}）", expanded=bool(items)):
+        name = {"OCR任务": "文字识别", "索引任务": "文档整理", "Batch任务": "批量任务", "Workflow任务": "处理流程"}[category]
+        with st.expander(f"{name}（{len(items)}）", expanded=bool(items)):
             if not items:
                 st.caption("暂无任务")
                 continue
@@ -87,7 +88,7 @@ def render_task_center(
                     f"{STATUS_ICONS.get(status, '○')} **{task.get('task_summary') or task.get('task_type') or category}**"
                 )
                 st.caption(
-                    f"{status} · {task.get('message') or task.get('next_action') or '—'}"
+                    f"{status_label(status)} · {task.get('message') or task.get('next_action') or '—'}"
                 )
                 document = task.get("document") or {}
                 if document:
@@ -102,10 +103,10 @@ def render_task_center(
                     st.progress(percent / 100, text=progress_text)
                 elif progress_text:
                     st.caption(f"当前阶段：{progress_text}")
-                st.caption(f"Task ID：{task.get('task_id', '—')}")
+                st.caption(f"任务编号：{task.get('task_id', '—')}")
                 current = task.get("current_node") or {}
                 st.caption(
-                    f"当前 Step/Node：{current.get('name') or task.get('next_action') or '—'}"
+                    f"当前步骤：{current.get('name') or task.get('next_action') or '—'}"
                 )
                 st.caption(
                     f"开始时间：{task.get('started_at') or '尚未开始'} · "

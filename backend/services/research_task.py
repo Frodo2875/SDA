@@ -133,7 +133,10 @@ async def execute_research(payload: dict[str, Any], context: AsyncTaskContext) -
             "error_code": _ERROR_CODES.get(result.get("status"), "RESEARCH_AGENT_FAILED"),
             "message": "研究任务未完成，请检查任务状态后恢复",
         }
-    result = attach_evidence_quality(result, query=payload["message"])
+    from backend.services.document_capabilities import document_capability_answer
+    capability_answer = document_capability_answer(payload["message"])
+    if capability_answer is None or result.get("answer") != capability_answer:
+        result = attach_evidence_quality(result, query=payload["message"])
     safe_result = redact_value({
         key: result[key] for key in
         ("answer", "status", "task_id", "evidence", "unified_evidence", "pending_action", "evidence_quality", "web_search_warnings")

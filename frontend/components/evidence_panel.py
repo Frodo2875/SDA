@@ -100,10 +100,9 @@ def render_evidence_preview(
     location_error: str | None = None,
     on_locate: EvidenceHandler | None = None,
 ) -> None:
-    st.subheader("Evidence Preview")
-    st.caption("回答引用的 file / page / block / cell / bbox")
+    st.subheader("参考资料")
     if not evidence:
-        st.info("暂无证据。")
+        st.info("暂无参考资料。")
         return
     for index, item in enumerate(evidence, start=1):
         with st.container(border=True):
@@ -111,7 +110,7 @@ def render_evidence_preview(
                 f"**{index}. {_evidence_label(item)}**"
             )
             st.caption(" · ".join(evidence_location(item)) or "来源级证据")
-            st.caption("Web Evidence" if _is_web_evidence(item) else "Local Evidence")
+            st.caption("网页资料" if _is_web_evidence(item) else "本地资料")
             if item.get("content") or item.get("value_summary"):
                 st.write(item.get("content") or item["value_summary"])
             if _is_web_evidence(item):

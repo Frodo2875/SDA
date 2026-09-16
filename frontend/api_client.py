@@ -11,6 +11,10 @@ TIMEOUT = 60.0
 CHAT_TIMEOUT = 120.0
 
 
+def preview_document_draft(**payload: Any) -> dict[str, Any]:
+    return request("POST", "/api/document-actions/preview", json=payload)
+
+
 def request(method: str, path: str, **kwargs: Any) -> dict[str, Any]:
     timeout = kwargs.pop("timeout", TIMEOUT)
     try:

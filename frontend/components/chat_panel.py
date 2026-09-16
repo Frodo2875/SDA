@@ -59,6 +59,7 @@ def render_messages(
     messages: list[dict[str, Any]],
     on_action: Callable[[int, str], None],
     on_evidence: Callable[[dict[str, Any]], None] | None = None,
+    *, show_sources: bool = False, show_details: bool = False,
 ) -> None:
     for index, message in enumerate(messages):
         avatar = "🎓" if message["role"] == "assistant" else "👤"
@@ -69,15 +70,16 @@ def render_messages(
                 st.error(message["content"])
             else:
                 st.markdown(message["content"])
-            warnings = [*(message.get("display_warnings") or []),
-                        *((message.get("evidence_quality") or {}).get("warnings") or []),
-                        *(message.get("web_search_warnings") or [])]
-            for warning in warnings:
-                st.warning(str(warning.get("message") or warning) if isinstance(warning, dict) else str(warning))
+            if show_details:
+                warnings = [*(message.get("display_warnings") or []),
+                            *((message.get("evidence_quality") or {}).get("warnings") or []),
+                            *(message.get("web_search_warnings") or [])]
+                for warning in warnings:
+                    st.warning(str(warning.get("message") or warning) if isinstance(warning, dict) else str(warning))
             for table in message.get("comparison_tables") or []:
                 st.dataframe(table, use_container_width=True, hide_index=True)
             render_task(message.get("task"))
-            if message.get("evidence"):
+            if show_sources and message.get("evidence"):
                 st.caption("来源：")
                 for label in source_labels(message["evidence"]):
                     st.text(label)
@@ -87,12 +89,14 @@ def render_messages(
                     st.session_state.evidence_location_error = None
                     st.rerun()
             render_batch(message.get("batch"))
-            render_evidence(
-                message.get("evidence") or [],
-                on_locate=on_evidence,
-                key_prefix=f"message-evidence-{index}",
-            )
-            render_trace(message.get("traces") or [])
+            if show_sources:
+                render_evidence(
+                    message.get("evidence") or [],
+                    on_locate=on_evidence,
+                    key_prefix=f"message-evidence-{index}",
+                )
+            if show_details:
+                render_trace(message.get("traces") or [])
             if message.get("version_id"):
                 st.success(f"新版本：{message['version_id']}")
             if message.get("pending_action"):

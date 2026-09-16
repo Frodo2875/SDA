@@ -39,7 +39,7 @@ def detail(ui: AppTest) -> AppTest:
 
 def test_task_list_and_detail_navigation(ui: AppTest) -> None:
     assert any(item.value == "学生专业就业分析" for item in ui.text)
-    assert any("WEB_RETRIEVAL" in item.value for item in ui.caption)
+    assert any("查找网页" in item.value for item in ui.caption)
     assert any("2026-09-15T10:20:00" in item.value for item in ui.caption)
     detail(ui)
     assert ui.session_state.research_selected_id == "r1"
@@ -59,9 +59,9 @@ def test_list_filter(ui: AppTest, label: str, visible: bool) -> None:
 def test_timeline_does_not_invent_completed_steps(ui: AppTest) -> None:
     detail(ui)
     rows = [item.value for item in ui.text]
-    assert any("• LOCAL_RETRIEVAL" in row for row in rows)
-    assert any("→ WEB_RETRIEVAL" in row for row in rows)
-    assert not any("✓ LOCAL_RETRIEVAL" in row or "EVIDENCE_CHECK" in row for row in rows)
+    assert any("• 查找文档" in row for row in rows)
+    assert any("→ 查找网页" in row for row in rows)
+    assert not any("✓ 查找文档" in row or "核对资料" in row for row in rows)
 
 
 @pytest.mark.parametrize("operation,status", [("cancel", "RUNNING"), ("retry", "FAILED"), ("resume", "CANCELLED")])
@@ -102,9 +102,9 @@ def test_trace_and_result_evidence_use_original_session(ui: AppTest, monkeypatch
     calls = []
     monkeypatch.setattr(api_client, "locate_evidence", lambda *args: calls.append(args) or {"file_name": "学生.md"})
     detail(ui)
-    assert {metric.label: metric.value for metric in ui.metric} == {"Local Evidence": "1", "Web Evidence": "1"}
+    assert {metric.label: metric.value for metric in ui.metric} == {"本地引用": "1", "网页引用": "1"}
     ui.checkbox(key="research-trace-r1").check().run()
-    assert any(item.label == "高级 / 调试 Trace" for item in ui.expander)
+    assert any(item.label == "详细处理记录" for item in ui.expander)
     ui.checkbox(key="research-result-r1").check().run()
     assert any(item.value == "研究结论" for item in ui.markdown)
     next(button for button in ui.button if button.label == "打开原文").click().run()
@@ -118,7 +118,7 @@ def test_rerun_polls_new_state_and_toggle_can_disable_timer(ui: AppTest, monkeyp
     assert ui.toggle(key="research-auto-refresh").value
     ui.run()
     assert "r1" in calls
-    assert any("状态：COMPLETED" in item.value for item in ui.caption)
+    assert any("状态：已完成" in item.value for item in ui.caption)
     ui.toggle(key="research-auto-refresh").set_value(False).run()
     assert not ui.exception
     assert not ui.toggle(key="research-auto-refresh").value
@@ -153,17 +153,17 @@ def test_history_sessions_are_included(ui: AppTest, monkeypatch: pytest.MonkeyPa
 
 
 def test_direct_task_id_entry(ui: AppTest) -> None:
-    next(item for item in ui.text_input if "Task ID" in item.label).set_value("r1")
+    next(item for item in ui.text_input if "任务编号" in item.label).set_value("r1")
     next(item for item in ui.button if item.label == "打开任务").click().run()
     assert not ui.exception
     assert ui.session_state.research_selected_id == "r1"
 
 
 def test_invalid_task_id_is_not_opened(ui: AppTest) -> None:
-    next(item for item in ui.text_input if "Task ID" in item.label).set_value("../files")
+    next(item for item in ui.text_input if "任务编号" in item.label).set_value("../files")
     next(item for item in ui.button if item.label == "打开任务").click().run()
     assert not ui.exception
-    assert any("有效的 Task ID" in item.value for item in ui.error)
+    assert any("正确的任务编号" in item.value for item in ui.error)
     assert not ui.session_state.filtered_state.get("research_selected_id")
 
 

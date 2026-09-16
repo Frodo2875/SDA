@@ -9,7 +9,7 @@ import streamlit as st
 def render_trace(traces: list[dict[str, Any]]) -> None:
     if not traces:
         return
-    with st.expander("高级 / 调试 Trace", expanded=False):
+    with st.expander("详细处理记录", expanded=False):
         rows = []
         for item in traces:
             try:

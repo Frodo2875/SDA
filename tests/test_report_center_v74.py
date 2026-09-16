@@ -43,7 +43,7 @@ def test_list_detail_markdown_evidence_warning_and_versions(ui: AppTest) -> None
     assert any(item.value == REPORT["summary"] for item in ui.markdown)
     assert any("学生.xlsx" in item.value for item in ui.markdown)
     assert any("时间缺失" in item.value for item in ui.warning)
-    assert any("v1" in item.value and "available" in item.value for item in ui.caption)
+    assert any("v1" in item.value and "可用" in item.value for item in ui.caption)
     assert len([item for item in ui.button if item.label == "恢复此版本"]) == 1
     ui.button(key="report-back").click().run()
     assert not ui.exception and ui.session_state.selected_report is None

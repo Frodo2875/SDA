@@ -43,10 +43,10 @@ def test_pages_refresh_health_and_scoped_counts(sources: list, page: str) -> Non
     assert not sources
     ui.button(key="system-refresh").click().run()
     assert not ui.exception
-    assert any(item.value == "Online" for item in ui.text)
-    assert any(item.value == "Evidence：1" for item in ui.text)
-    assert any("连通性未验证" in item.value for item in ui.text)
-    assert any("LLM 模型 / Embedding Provider：Unavailable" in item.value for item in ui.caption)
+    assert any(item.value == "在线" for item in ui.text)
+    assert any(item.value == "引用资料：1" for item in ui.text)
+    assert any("暂未检测" in item.value for item in ui.text)
+    assert any("暂不提供单独的连接检测" in item.value for item in ui.caption)
     assert "SECRET" not in str(ui.session_state.system_snapshot)
 
 

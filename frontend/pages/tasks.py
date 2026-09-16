@@ -3,6 +3,8 @@
 import re
 
 import streamlit as st
+from frontend.presentation import label as status_label
+from frontend.presentation import stage_text
 from frontend import api_client, research_center as center, controller as actions
 from frontend.components.task_center import render_task_center
 from frontend.components.evidence_panel import render_evidence_preview
@@ -11,16 +13,15 @@ from frontend.components.trace_panel import render_trace
 
 def render() -> None:
     st.title("研究任务")
-    st.subheader("研究任务中心")
     automatic = st.toggle("自动刷新（每 5 秒）", value=True, key="research-auto-refresh")
-    st.caption("列表覆盖当前浏览器已知会话，每个会话最多读取最近 100 个任务；不是全局任务列表。")
+    st.caption("显示本次浏览器会话中找到的最近任务。")
 
     @st.fragment(run_every=5 if automatic else None)
     def live() -> None:
         render_center()
 
     live()
-    with st.expander("原有 OCR / 索引 / Workflow 任务"):
+    with st.expander("其他处理任务"):
         render_task_center(
             [view for view in st.session_state.known_tasks.values() if not center.is_research(view)],
             on_refresh=lambda: (actions.refresh_tasks(), st.rerun()),
@@ -41,13 +42,13 @@ def render_center() -> None:
         render_detail(identifier)
         return
     with st.form("research-open"):
-        task_id = st.text_input("按 Task ID 打开已有研究任务", max_chars=128)
+        task_id = st.text_input("按任务编号查找", max_chars=128)
         if st.form_submit_button("打开任务"):
             if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", task_id.strip()):
                 st.session_state.research_selected_id = task_id.strip()
                 st.rerun()
             else:
-                st.error("请输入有效的 Task ID（字母、数字、下划线或连字符）。")
+                st.error("请输入正确的任务编号。")
     st.button("刷新研究任务列表", key="research-center-refresh")
     tasks, errors = center.refresh_list()
     for error in errors:
@@ -59,7 +60,7 @@ def render_center() -> None:
     for task in visible:
         with st.container(border=True):
             st.text(task.get("query") or task["task_id"])
-            st.caption(f"状态：{task['status']} · 当前阶段：{(task.get('progress') or {}).get('stage', '未提供')}")
+            st.caption(f"状态：{status_label(task['status'])} · 当前阶段：{status_label((task.get('progress') or {}).get('stage', '未提供'))}")
             st.caption(f"创建：{task.get('created_at') or '未提供'} · 更新：{task.get('updated_at') or '未提供'}")
             if task.get("stale"):
                 st.warning("当前为上次读取的状态，本次刷新失败。")
@@ -77,8 +78,8 @@ def render_detail(identifier: str) -> None:
         return
     st.session_state.setdefault("research_catalog", {})[identifier] = task
     st.subheader(task.get("query") or identifier)
-    st.caption(f"Task ID：{identifier}")
-    st.write(f"状态：{task['status']} · 当前阶段：{(task.get('progress') or {}).get('stage', '未提供')}")
+    st.caption(f"任务编号：{identifier}")
+    st.write(f"状态：{status_label(task['status'])} · 当前阶段：{status_label((task.get('progress') or {}).get('stage', '未提供'))}")
     st.caption(f"创建：{task.get('created_at') or '未提供'} · 更新：{task.get('updated_at') or '未提供'}")
     if task.get("error"):
         st.error(task["error"].get("error_message") or "任务执行失败")
@@ -101,20 +102,20 @@ def render_detail(identifier: str) -> None:
         traces = []
         st.warning(f"执行记录暂不可用：{exc}")
     st.markdown("#### 执行阶段")
-    st.caption("展示实际记录的阶段和当前状态；Trace 为最近记录，未出现的阶段不代表已经执行。")
+    st.caption("以下为已记录的处理进度。")
     for row in center.timeline(task, traces):
-        st.text(row)
+        st.text(stage_text(row))
     local, web = center.evidence_counts(task)
     columns = st.columns(2)
-    columns[0].metric("Local Evidence", local if local is not None else "—")
-    columns[1].metric("Web Evidence", web if web is not None else "—")
+    columns[0].metric("本地引用", local if local is not None else "—")
+    columns[1].metric("网页引用", web if web is not None else "—")
     if local is None:
-        st.caption("任务尚未返回结果，Evidence 数量暂不可用。")
+        st.caption("任务完成后显示引用数量。")
     if st.checkbox("查看执行日志", key=f"research-trace-{identifier}"):
         if traces:
             render_trace(traces)
         else:
-            st.info("暂无可显示的 Trace。")
+            st.info("暂无处理记录。")
     if st.checkbox("查看研究结果", key=f"research-result-{identifier}"):
         result = task.get("result")
         if not isinstance(result, dict):

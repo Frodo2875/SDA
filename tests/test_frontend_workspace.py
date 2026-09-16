@@ -57,7 +57,7 @@ def test_file_cards_filters_and_type_specific_details() -> None:
         "size": "1.5 KB",
         "created_time": "2026-08-21T10:00:00+08:00",
         "lifecycle_status": "可查询",
-        "index_status": "indexed",
+        "index_status": "可查询",
         "queryable": "是",
     }
     assert filter_files_by_lifecycle([item], "QUERYABLE") == [item]
@@ -326,7 +326,10 @@ def test_streamlit_page_renders_three_workspace_areas(monkeypatch) -> None:
 
     assert not app.exception
     subheaders = {item.value for item in app.subheader}
-    assert {"Document Workspace", "Agent Chat", "Evidence Preview", "Task Center"} <= subheaders
+    assert "参考资料" not in subheaders
+    app.toggle(key="show_insight_panel").set_value(True).run()
+    subheaders = {item.value for item in app.subheader}
+    assert {"文件管理", "聊天", "参考资料", "处理任务"} <= subheaders
     assert [toggle.label for toggle in app.toggle] == ["显示左栏", "显示右栏"]
     assert any(button.label == "上传所选文件" for button in app.button)
     assert any(button.label == "应用搜索 / 筛选 / 排序" for button in app.button)
@@ -335,23 +338,24 @@ def test_streamlit_page_renders_three_workspace_areas(monkeypatch) -> None:
     assert any(button.label == "重新解析" for button in app.button)
     assert any(button.label == "重新索引" for button in app.button)
     assert any(button.label == "删除文件" for button in app.button)
-    assert any(expander.label.startswith("OCR任务") for expander in app.expander)
-    assert any(expander.label.startswith("索引任务") for expander in app.expander)
-    assert any(expander.label.startswith("Workflow任务") for expander in app.expander)
+    assert any(expander.label.startswith("文字识别") for expander in app.expander)
+    assert any(expander.label.startswith("文档整理") for expander in app.expander)
+    assert any(expander.label.startswith("处理流程") for expander in app.expander)
 
 
 def test_streamlit_side_panels_can_be_hidden_independently(monkeypatch) -> None:
     monkeypatch.setattr(api_client, "list_files", lambda **kwargs: [_file()])
     app = AppTest.from_file(PROJECT_ROOT / "frontend" / "app.py").run(timeout=10)
 
+    app.toggle(key="show_insight_panel").set_value(True).run()
     app.toggle[0].set_value(False).run(timeout=10)
     subheaders = {item.value for item in app.subheader}
-    assert "Document Workspace" not in subheaders
-    assert {"Agent Chat", "Evidence Preview", "Task Center"} <= subheaders
+    assert "文件管理" not in subheaders
+    assert {"聊天", "参考资料", "处理任务"} <= subheaders
 
     app.toggle[1].set_value(False).run(timeout=10)
     subheaders = {item.value for item in app.subheader}
-    assert subheaders == {"Agent Chat"}
+    assert subheaders == {"聊天"}
 
 
 def test_f12_system_file_has_no_workspace_delete_entry(monkeypatch) -> None:
@@ -446,6 +450,7 @@ def test_answer_evidence_click_opens_pdf_page_and_bbox_preview(monkeypatch) -> N
     )
 
     app = AppTest.from_file(PROJECT_ROOT / "frontend" / "app.py").run(timeout=10)
+    app.toggle(key="show_insight_panel").set_value(True).run()
     app.chat_input[0].set_value("查询规则").run(timeout=10)
 
     assert not app.exception

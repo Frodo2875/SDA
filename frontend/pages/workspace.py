@@ -45,12 +45,12 @@ def render() -> None:
             )
 
     with chat_column:
-        st.subheader("Agent Chat")
-        st.caption("结构化查询、文档问答、Workflow 与安全确认")
+        st.subheader("聊天")
         if not st.session_state.messages:
             with st.chat_message("assistant", avatar="🎓"):
                 st.markdown("欢迎使用。你可以尝试输入：`综合分析 S001`。")
-        render_messages(st.session_state.messages, handle_action, handle_evidence_location)
+        render_messages(st.session_state.messages, handle_action, handle_evidence_location,
+                        show_sources=show_insight, show_details=show_insight)
         if prompt := st.chat_input("输入问题，例如：那他的科研呢？", key="workspace-chat"):
             submit_message(prompt.strip())
             st.rerun()

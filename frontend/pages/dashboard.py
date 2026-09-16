@@ -1,6 +1,7 @@
 """Workspace overview with honest unavailable states and a legacy quick tab."""
 
 import streamlit as st
+from frontend.presentation import label as status_label
 from frontend import api_client
 from frontend.pages import workspace
 from frontend.shell import navigate
@@ -24,7 +25,6 @@ def render() -> None:
     with overview:
         if "overview_files" not in st.session_state:
             refresh_overview()
-        st.caption("从文档到研究结果，在一个工作空间内完成。")
         st.button("刷新概览", key="refresh-overview", on_click=refresh_overview)
         files = st.session_state.overview_files
         cards = st.columns(4)

@@ -2,16 +2,18 @@
 
 from typing import Any
 import streamlit as st
+from frontend.presentation import label as status_label
 from frontend import api_client, chat_workspace as workspace, controller as actions
 from frontend.components.chat_panel import render_messages
 from frontend.components.evidence_panel import render_evidence_preview
+from frontend.components.document_actions import render_document_actions
 
 
 def render_context() -> None:
     st.caption(f"当前知识库：{st.session_state.get('knowledge_base_name') or '全部文档'}")
     if st.session_state.get("knowledge_base_id"):
-        st.info("已携带知识库上下文；当前检索范围尚未限定到该知识库。")
-    with st.expander("选择知识库 / 新建会话"):
+        st.info("回答可能参考其他知识库的资料。")
+    with st.expander("新建聊天"):
         if st.button("加载知识库", key="chat-load-knowledge"):
             try:
                 st.session_state.chat_knowledge_choices = api_client.list_knowledge_bases()
@@ -29,8 +31,8 @@ def render_context() -> None:
             workspace.new_conversation(selected, choices[selected])
             st.rerun()
     workspace.save_conversation()
-    with st.expander("当前知识库历史聊天"):
-        st.caption("仅保留当前浏览器会话内的聊天；断开会话或重启后可能丢失，不是服务器历史记录。")
+    with st.expander("最近聊天"):
+        st.caption("记录仅在本次浏览器会话中保留。")
         history = workspace.history_for_knowledge()
         if not history:
             st.caption("暂无历史会话。")
@@ -48,12 +50,12 @@ def render_research(message: dict[str, Any], index: int) -> None:
         return
     with st.container(border=True):
         task = message.get("research") or {}
-        st.caption(f"Research Task · {message['research_task_id']}")
+        st.caption(f"研究任务 · {message['research_task_id']}")
         if st.button("在任务中心打开", key=f"research-center-open-{index}"):
             st.session_state.research_selected_id = message["research_task_id"]
             st.session_state.active_page = "tasks"
             st.rerun()
-        st.write(f"状态：{task.get('status', '待刷新')} · 阶段：{(task.get('progress') or {}).get('stage', '待刷新')}")
+        st.write(f"状态：{status_label(task.get('status', '待刷新'))} · 阶段：{status_label((task.get('progress') or {}).get('stage', '待刷新'))}")
         if task.get("updated_at"):
             st.caption(f"更新时间：{task['updated_at']}")
         if (task.get("error") or {}).get("error_message"):
@@ -65,7 +67,7 @@ def render_research(message: dict[str, Any], index: int) -> None:
             workspace.refresh_research(message)
             st.rerun()
         if message.get("report_requested"):
-            st.caption("研究完成后可生成报告草稿；写入文件仍需审批。")
+            st.caption("研究完成后可生成报告，导出前需要确认。")
             if not message.get("report") and st.button("生成报告草稿", key=f"report-create-{index}", disabled=task.get("status") != "COMPLETED"):
                 workspace.generate_report(message)
                 st.rerun()
@@ -73,7 +75,7 @@ def render_research(message: dict[str, Any], index: int) -> None:
         if report:
             st.subheader(report["title"])
             st.markdown(report["summary"])
-            st.caption(f"报告 ID：{report['report_id']} · 草稿（导出状态以审批结果为准）")
+            st.caption(f"报告 ID：{report['report_id']} · 草稿")
             for warning in report.get("warnings") or []:
                 st.warning(str(warning.get("message") or warning) if isinstance(warning, dict) else str(warning))
             format = st.selectbox("导出格式", ["md", "docx"], key=f"report-format-{index}")
@@ -88,21 +90,30 @@ def render() -> None:
     st.title("聊天")
     render_context()
     st.radio("聊天模式", workspace.MODES, key="chat_mode", horizontal=True)
-    conversation, evidence = st.columns([2, 1], gap="large")
+    render_document_actions()
+    with st.expander("显示选项"):
+        show_sources = st.toggle("查看参考资料", key="chat-show-sources", value=False)
+        show_details = st.toggle("查看处理详情", key="chat-show-details", value=False)
+    if show_sources:
+        conversation, evidence = st.columns([2, 1], gap="large")
+    else:
+        conversation, evidence = st.container(), None
     with conversation:
-        st.subheader("Agent Chat")
         if not st.session_state.messages:
-            st.info("开始提问，例如：综合分析 S001。")
-        render_messages(st.session_state.messages, actions.handle_action, actions.handle_evidence_location)
+            st.caption("有什么想了解的？")
+        render_messages(st.session_state.messages, actions.handle_action,
+                        actions.handle_evidence_location, show_sources=show_sources,
+                        show_details=show_details)
         for index, message in enumerate(st.session_state.messages):
             render_research(message, index)
-    with evidence:
-        render_evidence_preview(
-            st.session_state.latest_evidence,
-            location=st.session_state.selected_evidence_location,
-            location_error=st.session_state.evidence_location_error,
-            on_locate=actions.handle_evidence_location,
-        )
+    if evidence is not None:
+        with evidence:
+            render_evidence_preview(
+                st.session_state.latest_evidence,
+                location=st.session_state.selected_evidence_location,
+                location_error=st.session_state.evidence_location_error,
+                on_locate=actions.handle_evidence_location,
+            )
     workspace.save_conversation()
     if prompt := st.chat_input("输入问题或研究目标", key="workspace-chat"):
         if prompt.strip():

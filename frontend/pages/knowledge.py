@@ -3,6 +3,7 @@
 from typing import Any
 
 import streamlit as st
+from frontend.presentation import label as status_label
 
 from frontend import api_client, controller
 from frontend.chat_workspace import new_conversation
@@ -40,7 +41,7 @@ def filtered_files(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def upload_files(identifier: str, files: list[Any]) -> None:
     outcomes = []
-    with st.spinner("正在通过 Document Pipeline 上传文件…"):
+    with st.spinner("正在上传文件…"):
         for file in files:
             try:
                 api_client.upload_knowledge_file(identifier, file)
@@ -97,7 +98,7 @@ def render() -> None:
         with st.container(border=True):
             st.subheader(record["name"])
             st.text(record["description"])
-            st.caption(f"文件：{record['file_count']} · 状态：{record['status']}")
+            st.caption(f"文件：{record['file_count']} · 状态：{status_label(record['status'])}")
             st.caption(f"创建：{record['created_at']} · 更新：{record['updated_at']}")
             if st.button("进入", key=f"knowledge-enter-{record['knowledge_base_id']}"):
                 st.session_state.selected_knowledge_base_id = record["knowledge_base_id"]
@@ -109,12 +110,12 @@ def render_detail(record: dict[str, Any], files: list[dict[str, Any]]) -> None:
     st.subheader(record["name"])
     st.text(record["description"])
     st.metric("文件数量", record["file_count"])
-    st.caption(f"创建：{record['created_at']} · 更新：{record['updated_at']} · 状态：{record['status']}")
+    st.caption(f"创建：{record['created_at']} · 更新：{record['updated_at']} · 状态：{status_label(record['status'])}")
     if st.button("新建聊天", key="knowledge-chat"):
         new_conversation(identifier, record["name"])
         st.session_state.active_page = "chat"
         st.rerun()
-    st.caption("聊天入口携带知识库上下文；本阶段尚未限定检索范围。")
+    st.caption("回答可能参考其他知识库的资料。")
     with st.expander("加入已有文件"):
         try:
             members = {item["file_id"] for item in files}
@@ -129,10 +130,10 @@ def render_detail(record: dict[str, Any], files: list[dict[str, Any]]) -> None:
                 st.caption("没有可加入的已有文件。")
         except RuntimeError as exc:
             st.error(str(exc))
-    st.caption("文件可被多个知识库引用。删除文件需原有审批确认，并影响所有引用该文件的知识库。")
+    st.caption("删除文件会影响所有使用它的知识库，操作前需要确认。")
     if files:
         st.dataframe([{"文件名": item["file_name"], "类型": item.get("file_type", ""),
-                       "大小": format_file_size(item.get("size")), "状态": file_status(item),
+                       "大小": format_file_size(item.get("size")), "状态": status_label(file_status(item)),
                        "更新时间": item.get("updated_at") or item.get("created_time") or "—"}
                       for item in files], use_container_width=True)
     st.caption("上传支持原有格式及 Markdown（.md / .markdown）。")

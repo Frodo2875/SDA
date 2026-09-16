@@ -36,7 +36,7 @@ def initialize_state() -> None:
         "selected_evidence_location": None,
         "evidence_location_error": None,
         "show_document_workspace": True,
-        "show_insight_panel": True,
+        "show_insight_panel": False,
     }
     for key, value in defaults.items():
         st.session_state[key] = st.session_state[key] if key in st.session_state else value
@@ -141,6 +141,7 @@ def submit_message(message: str) -> None:
             {
                 "role": "assistant",
                 "content": response.get("answer") or "任务已处理。",
+                "response_status": response.get("status", "completed"),
                 "statuses": tool_statuses(response),
                 "comparison_tables": comparison_tables(response),
                 "pending_action": response.get("pending_action"),

@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 import streamlit as st
+from frontend.presentation import label as status_label
 
 from frontend import api_client, research_center
 from frontend.components.confirmation_card import render_confirmation
@@ -27,10 +28,10 @@ def render() -> None:
             st.rerun()
         render_detail(*selected)
         return
-    st.caption("当前浏览器已知研究任务中的报告；不代表全局报告列表。")
+    st.caption("显示本次浏览器会话中找到的报告。")
     with st.form("report-open"):
-        task_id = st.text_input("Research Task ID", max_chars=128).strip()
-        report_id = st.text_input("Report ID", max_chars=128).strip()
+        task_id = st.text_input("任务编号", max_chars=128).strip()
+        report_id = st.text_input("报告编号", max_chars=128).strip()
         if st.form_submit_button("打开已有报告"):
             if valid_id(task_id) and valid_id(report_id):
                 open_report(task_id, report_id)
@@ -71,7 +72,7 @@ def render() -> None:
             continue
         with st.container(border=True):
             st.subheader(report["title"])
-            st.caption(f"来源任务：{task_id} · 创建：{report['created_at']} · 状态：{report['status']}")
+            st.caption(f"来源任务：{task_id} · 创建：{report['created_at']} · 状态：{status_label(report['status'])}")
             if st.button("查看 / 下载 / 版本", key=f"report-open-{task_id}-{report_id}"):
                 open_report(task_id, report_id)
 
@@ -98,8 +99,8 @@ def render_detail(task_id: str, report_id: str) -> None:
         st.error(str(exc))
         return
     st.subheader(report["title"])
-    st.caption(f"来源任务：{task_id} · 创建：{report['created_at']} · 状态：{report['status']}")
-    st.caption("以下为已保存报告内容；下载文件以批准导出的当前版本为准。")
+    st.caption(f"来源任务：{task_id} · 创建：{report['created_at']} · 状态：{status_label(report['status'])}")
+    st.caption("预览为报告原稿，下载文件以当前导出版本为准。")
     st.markdown("## 任务说明")
     st.markdown(report.get("task_description") or "未提供")
     st.markdown("## 摘要")
@@ -107,7 +108,7 @@ def render_detail(task_id: str, report_id: str) -> None:
     st.markdown("## 核心结论")
     for conclusion in report.get("conclusions", []):
         st.markdown(conclusion["text"])
-        st.caption("Evidence：" + ", ".join(conclusion.get("evidence_refs") or []))
+        st.caption("引用编号：" + ", ".join(conclusion.get("evidence_refs") or []))
     for section in report.get("sections", []):
         st.subheader(section["title"])
         st.markdown(section["content"])
@@ -169,9 +170,9 @@ def render_versions(file_id: str, format: str, session_id: str, action_key: str)
     if not versions:
         st.caption("暂无版本记录。")
     if format == "md":
-        st.caption("现有 Rollback 接口仅支持 Word，Markdown 不提供恢复按钮。")
+        st.caption("仅 Word 支持恢复历史版本。")
     for version in reversed(versions):
-        st.caption(f"v{version.get('version_number')} · {version.get('created_at')} · {version.get('status', '未提供')}")
+        st.caption(f"v{version.get('version_number')} · {version.get('created_at')} · {status_label(version.get('status', '未提供'))}")
         if format == "docx" and st.button("恢复此版本", key=f"report-rollback-{version['version_id']}", disabled=version.get("status") != "available"):
             try:
                 response = api_client.prepare_rollback(file_id, version["version_id"], session_id)

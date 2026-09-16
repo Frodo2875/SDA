@@ -37,6 +37,7 @@ from backend.services.redaction import redacted_json, redact_value
 from backend.services.student_domain_adapter import STUDENT_DOMAIN_ADAPTER
 from backend.services.source_router import route_source
 from backend.services.evidence_quality import attach_evidence_quality
+from backend.services.document_capabilities import document_capability_answer
 from backend.services.tool_scope_resolver import (
     SourceToolScope,
     resolve_source_tool_scope,
@@ -59,7 +60,7 @@ SYSTEM_PROMPT = """你是学生材料智能文档助手。
 5. 姓名搜索出现 ambiguous 时，必须列出候选人并请用户用学号澄清，禁止自行选择。
 6. 文件不存在时必须明确说明文件不存在。
 7. 查询学生详情、成绩或科研前，如用户只提供姓名，应先用 search_student 确认唯一学号。
-8. write_word 不对你开放。用户要求写入时，你只能先生成待确认的综合评价内容，不得声称文件已经修改或用户已经确认。
+8. 普通问答、深度研究、报告生成都支持用户确认后的文档保存。用户要求写入或编辑时，先根据已核实资料生成正文草稿；通用正文可通过聊天页“文档操作”编辑并保存为新 Word/Markdown，或追加到已有可写 Word。已有学生综合评价写入流程仍会生成确认卡片。不得把“需要用户确认”误说成“没有写入权限”或要求用户只能自行复制上传；应说明可预览后确认保存。目标文件确实只读或操作不支持时，必须如实说明限制。写入、删除、撤销和恢复必须由用户在操作确认卡片中逐次确认，模型不能调用确认接口、代替确认或声称尚未执行的操作已完成。不能承诺任意格式编辑、覆盖原文或自动加入知识库。
 9. “综合分析某位学生”必须完整调用 get_student_info、get_student_scores、get_student_research，不能只依据其中一个工具回答。
 10. 比较两名或多名学生的综合情况时，必须依次完成：用 get_student_info 确认每名学生身份；用 get_student_scores 和 get_student_research 查询每名学生数据；最后调用 compare_students。不能跳过前置查询。
 11. get_student_research 返回 no_record 时，必须原样说明“当前科研成果材料中未查询到相关记录。”，不得说该学生没有科研成果或科研成果为零。
@@ -990,6 +991,19 @@ async def run_agent(
     observer: AgentObserver | None = None,
 ) -> dict[str, Any]:
     """Run one Agent request and persist both sides of the chat."""
+    capability_answer = document_capability_answer(message)
+    if capability_answer is not None:
+        # Product capabilities are known by the application, not inferred from
+        # the model's read-only tool list. This branch never creates an action.
+        database.save_chat_message(session_id=session_id, role="user", content=message,
+                                   used_tools=[], status="received")
+        database.save_chat_message(session_id=session_id, role="assistant", content=capability_answer,
+                                   used_tools=[], status="completed")
+        record_trace(session_id=session_id, task_id=observer.task_id if observer else None,
+                     event_type="capability_response", result_status="completed",
+                     metrics={"capability": "confirmed_document_actions"})
+        return {"answer": capability_answer, "status": "completed", "tool_calls": [],
+                "evidence": [], "unified_evidence": []}
     saved_execution = (observer.load().get("execution") or {}) if observer else {}
     context_resolution = saved_execution.get("context_resolution") or resolve_message(session_id, message)
     resolved_message = context_resolution["message"]

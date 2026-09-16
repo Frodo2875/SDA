@@ -6,5 +6,5 @@ from frontend.system_dashboard import render_status
 
 def render() -> None:
     st.title("使用统计")
-    st.info("统计需点击刷新获取；不可用数据以 — 表示。")
+    st.info("点击刷新查看最新统计。")
     render_status()

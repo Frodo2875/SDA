@@ -35,7 +35,7 @@ def enter(ui: AppTest) -> AppTest:
 def test_list_detail_files_upload_and_back(ui: AppTest) -> None:
     enter(ui)
     assert ui.session_state.selected_knowledge_base_id == RECORD["knowledge_base_id"]
-    assert ui.dataframe[0].value.iloc[0]["状态"] == "Indexed"
+    assert ui.dataframe[0].value.iloc[0]["状态"] == "可查询"
     assert ui.dataframe[0].value.iloc[0]["文件名"] == "学生.txt"
     assert len(ui.get("file_uploader")) == 1
     assert any(button.label == "查看详情" for button in ui.button)
@@ -75,7 +75,7 @@ def test_chat_carries_context_and_preserves_existing_chat_contract(ui: AppTest, 
     assert ui.session_state.active_page == "chat"
     assert ui.session_state.session_id != previous_session
     assert ui.session_state.knowledge_base_id == RECORD["knowledge_base_id"]
-    assert any("尚未限定" in item.value for item in ui.info)
+    assert any("可能参考其他知识库" in item.value for item in ui.info)
     ui.chat_input[0].set_value("分析专业").run()
     assert not ui.exception
     assert calls == [(ui.session_state.session_id, "分析专业")]

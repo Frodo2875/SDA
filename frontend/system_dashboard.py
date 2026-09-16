@@ -7,6 +7,7 @@ from typing import Any
 import streamlit as st
 
 from frontend import api_client
+from frontend.presentation import label as status_label
 
 
 def collect_snapshot(sessions: set[str]) -> dict[str, Any]:
@@ -58,21 +59,19 @@ def render_status() -> None:
     snapshot = st.session_state.get("system_snapshot") or {}
     columns = st.columns(4)
     for column, label, status in zip(columns,
-                                    ["Backend", "Document Pipeline", "Search Provider", "LLM Provider"],
-                                    [snapshot.get("backend", "未检查"), "组件健康未验证", "Tavily · 连通性未验证", "Unavailable · 无状态接口"]):
+                                    ["服务连接", "文档处理", "联网搜索", "智能模型"],
+                                    [status_label(snapshot.get("backend", "未检查")), "暂未检测", "暂未检测", "暂未检测"]):
         with column, st.container(border=True):
             st.markdown(f"**{label}**")
             st.text(status)
-    st.caption("LLM 模型 / Embedding Provider：Unavailable（后端未提供公开配置接口）；未读取认证配置。")
-    st.caption("Vector Database：健康未验证。Backend Online 不代表模型、检索或 Provider 已连接。")
-    st.caption("Parser：组件健康未验证；Index：组件健康未验证。下方数量仅反映文件生命周期与索引记录。")
-    st.caption(f"Backend API 版本：{snapshot.get('version', '未提供')} · 前端阶段：V7.5")
-    st.caption("API 版本来自 /health，不代表 Git 发布标签。")
+    with st.expander("系统详情"):
+        st.caption(f"服务版本：{snapshot.get('version', '未提供')}")
+        st.caption("搜索服务：Tavily。模型、文档搜索及处理服务暂不提供单独的连接检测。")
     for error in snapshot.get("errors", []):
         st.warning(error)
     if snapshot:
-        st.caption(f"快照时间（UTC）：{snapshot['time']}")
-        st.caption(f"文档处理数：{display(snapshot.get('processing'))} · 失败数：{display(snapshot.get('failed'))} · 已索引数：{display(snapshot.get('indexed'))}")
+        st.caption(f"更新时间（UTC）：{snapshot['time']}")
+        st.caption(f"处理中：{display(snapshot.get('processing'))} · 失败：{display(snapshot.get('failed'))} · 可查询：{display(snapshot.get('indexed'))}")
     render_counts(snapshot)
 
 
@@ -85,5 +84,6 @@ def render_counts(snapshot: dict[str, Any]) -> None:
     columns = st.columns(5)
     for column, label in zip(columns, ["文件", "知识库", "研究任务", "报告", "Evidence"]):
         with column, st.container(border=True):
-            st.text(f"{label}：{display(snapshot.get('counts', {}).get(label))}")
-    st.caption("文件/知识库来自列表 API；研究任务按当前浏览器已知会话统计，每会话最多最近 100 项。报告来自这些任务的保存结果，Evidence 按 evidence_id 去重，仅统计已返回的研究结果；不是全局总量或实时账单。")
+            st.text(f"{'引用资料' if label == 'Evidence' else label}：{display(snapshot.get('counts', {}).get(label))}")
+    with st.expander("统计范围"):
+        st.caption("文件和知识库按当前可用列表统计；任务、报告和引用资料仅包含本次浏览器会话中找到的记录，每段聊天最多最近 100 个任务。")

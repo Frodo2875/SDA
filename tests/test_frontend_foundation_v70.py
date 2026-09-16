@@ -25,7 +25,7 @@ def test_default_dashboard_header_and_menu(ui: AppTest) -> None:
     assert ui.session_state.active_page == "dashboard"
     assert "工作空间概览" in [item.value for item in ui.title]
     assert [item.label for item in ui.sidebar.button] == list(MENU.values())
-    assert any("Workspace · 默认 Workspace" in item.value for item in ui.caption)
+    assert any("工作空间 · 默认 Workspace" in item.value for item in ui.caption)
     assert any("用户 · 本地用户" in item.value for item in ui.caption)
     assert {item.label: item.value for item in ui.metric} == {
         "知识库数量": "—", "文件数量": "0", "任务数量": "0", "报告数量": "—",
@@ -60,6 +60,7 @@ def test_chat_evidence_and_trace_survive_navigation(ui: AppTest, monkeypatch: py
     monkeypatch.setattr(api_client, "get_traces", lambda **kwargs: [{"event_type": "tool_execution", "result_status": "success"}])
     monkeypatch.setattr(api_client, "locate_evidence", lambda *args: {**evidence, "location_type": "pdf", "text": "原始规则"})
     ui.button(key="nav-chat").click().run()
+    ui.toggle(key="chat-show-sources").set_value(True).run()
     ui.chat_input[0].set_value("查询规则").run()
     assert not ui.exception
     assert calls == [(ui.session_state.session_id, "查询规则")]
@@ -93,7 +94,7 @@ def test_task_page_uses_existing_refresh(ui: AppTest, monkeypatch: pytest.Monkey
     ui.button(key="nav-tasks").click().run()
     ui.button(key="refresh-task-center").click().run()
     assert not ui.exception
-    assert "Task Center" in [item.value for item in ui.subheader]
+    assert "处理任务" in [item.value for item in ui.subheader]
     assert ui.session_state.known_tasks["task-v70"] == task
     ui.button(key="nav-dashboard").click().run()
     assert next(item for item in ui.metric if item.label == "任务数量").value == "1"
@@ -107,7 +108,7 @@ def test_navigation_uses_available_business_contracts(ui: AppTest, monkeypatch: 
     ui.button(key=f"nav-{page}").click().run()
     assert not ui.exception
     assert len(ui.info) == 1
-    assert {"knowledge": "暂无知识库", "reports": "暂无已发现的报告", "usage": "统计需点击刷新"}[page] in ui.info[0].value
+    assert {"knowledge": "暂无知识库", "reports": "暂无已发现的报告", "usage": "点击刷新查看"}[page] in ui.info[0].value
     if page == "knowledge":
         assert any(item.label == "创建" for item in ui.button)
     if page == "reports":

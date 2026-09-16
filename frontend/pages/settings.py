@@ -10,5 +10,5 @@ def render() -> None:
         st.markdown("**当前工作空间**")
         st.write(st.session_state.workspace_name)
         st.caption("本地工作空间 · 当前用户：本地用户")
-    st.info("只读系统信息；配置由后台管理，本页不提供密钥、权限或安全策略编辑。")
+    st.info("系统信息仅供查看。")
     render_status()

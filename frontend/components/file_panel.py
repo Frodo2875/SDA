@@ -7,6 +7,7 @@ from typing import Any
 import streamlit as st
 
 from frontend import api_client
+from frontend.presentation import label as status_label
 
 
 ActionHandler = Callable[[dict[str, Any]], None]
@@ -86,7 +87,7 @@ def file_card_fields(item: dict[str, Any]) -> dict[str, str]:
         "size": format_file_size(item.get("size")),
         "created_time": str(item.get("created_time") or item.get("uploaded_at") or "—"),
         "lifecycle_status": LIFECYCLE_LABELS.get(lifecycle, lifecycle),
-        "index_status": str(item.get("index_status") or "—"),
+        "index_status": status_label(item.get("index_status") or "—"),
         "queryable": "是" if item.get("queryable") else "否",
     }
 
@@ -182,8 +183,7 @@ def render_file_panel(
     upload_extensions: list[str] | None = None,
     uploader_key: str | None = None,
 ) -> None:
-    st.subheader("Document Workspace")
-    st.caption("文件、生命周期、解析与索引状态")
+    st.subheader("文件管理")
     uploaded = st.file_uploader(
         "拖拽或选择多个材料",
         type=upload_extensions or SUPPORTED_UPLOAD_EXTENSIONS,
@@ -218,8 +218,9 @@ def render_file_panel(
         key="workspace_file_type",
     )
     filter_columns[1].selectbox(
-        "生命周期",
+        "处理状态",
         list(LIFECYCLE_FILTERS),
+        format_func=lambda value: status_label(LIFECYCLE_FILTERS[value]) if LIFECYCLE_FILTERS[value] else "全部状态",
         key="workspace_lifecycle",
     )
     st.selectbox(
@@ -325,7 +326,7 @@ def _render_file(
                     on_refresh=on_refresh,
                 )
         elif item.get("file_type") in {"excel", "csv"}:
-            st.caption("结构化表格使用 Schema，不提供文档 Block 重解析/重索引。")
+            st.caption("表格上传后即可查询。")
 
         if capabilities["delete"] and st.button(
             "删除文件",
@@ -356,7 +357,7 @@ def _render_file_details(file_id: str) -> None:
             f"登记时间：{detail.get('created_time') or '—'}"
         )
         st.markdown(
-            f"**状态**：生命周期 `{detail.get('canonical_status') or detail.get('lifecycle_status', '—')}` · "
+            f"**状态**：处理状态 `{detail.get('canonical_status') or detail.get('lifecycle_status', '—')}` · "
             f"解析 `{detail.get('parse_status', '—')}` · "
             f"索引 `{detail.get('index_status', '—')}`"
         )
@@ -443,13 +444,13 @@ def _run_document_operation(
 def _render_versions(
     item: dict[str, Any], session_id: str, on_version_action: ActionHandler
 ) -> None:
-    with st.expander("历史版本 / Undo / Rollback"):
+    with st.expander("历史版本"):
         try:
             versions = api_client.list_versions(item["file_id"])
         except RuntimeError as exc:
             st.warning(str(exc))
             return
-        if st.button("Undo 最近修改", key=f"undo-{item['file_id']}", use_container_width=True):
+        if st.button("撤销最近修改", key=f"undo-{item['file_id']}", use_container_width=True):
             try:
                 on_version_action(api_client.prepare_undo(item["file_id"], session_id))
             except RuntimeError as exc:
@@ -463,7 +464,7 @@ def _render_versions(
                 f"v{version.get('version_number')} · {version.get('change_type')} · "
                 f"{version.get('created_at')}"
             )
-            if columns[1].button("Rollback", key=f"rollback-{version['version_id']}"):
+            if columns[1].button("恢复版本", key=f"rollback-{version['version_id']}"):
                 try:
                     on_version_action(
                         api_client.prepare_rollback(

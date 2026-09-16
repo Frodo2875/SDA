@@ -7,6 +7,7 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 from frontend import api_client
+from frontend.presentation import label
 from frontend.components.evidence_panel import evidence_location, source_labels, web_url
 
 APP = Path(__file__).resolve().parents[1] / "frontend" / "app.py"
@@ -39,11 +40,13 @@ def research(ui: AppTest, mode: str = "深度研究") -> None:
 def test_chat_layout_and_modes(ui: AppTest) -> None:
     assert ui.radio(key="chat_mode").options == ["普通问答", "深度研究", "报告生成"]
     assert len(ui.chat_input) == 1
-    assert any(item.value == "暂无证据。" for item in ui.info)
+    assert not ui.toggle(key="chat-show-sources").value
+    assert not any(item.value == "参考资料" for item in ui.subheader)
     assert any("当前知识库：全部文档" in item.value for item in ui.caption)
 
 
 def test_normal_chat_sources_and_evidence_cards(ui: AppTest) -> None:
+    ui.toggle(key="chat-show-sources").set_value(True).run()
     ui.chat_input[0].set_value("分析专业").run()
     assert not ui.exception
     assert any(item.value == "专业分析" for item in ui.markdown)
@@ -62,7 +65,7 @@ def test_deep_mode_calls_existing_task_api_only(ui: AppTest, monkeypatch: pytest
     monkeypatch.setattr(api_client, "chat", forbidden)
     research(ui)
     assert calls == [(ui.session_state.session_id, "分析专业就业方向")]
-    assert any("状态：CREATED" in item.value for item in ui.markdown)
+    assert any("状态：待开始" in item.value for item in ui.markdown)
 
 
 @pytest.mark.parametrize("status,stage", [("RUNNING", "PLANNING"), ("WAITING_TOOL", "WEB_RETRIEVAL"),
@@ -72,7 +75,7 @@ def test_research_displays_actual_state(ui: AppTest, monkeypatch: pytest.MonkeyP
     research(ui)
     ui.button(key="research-refresh-1").click().run()
     assert not ui.exception
-    assert any(f"状态：{status} · 阶段：{stage}" in item.value for item in ui.markdown)
+    assert any(f"状态：{label(status)} · 阶段：{label(stage)}" in item.value for item in ui.markdown)
     assert ui.session_state.messages[-1]["research"]["status"] == status
 
 
@@ -153,7 +156,7 @@ def test_knowledge_selection_groups_history(ui: AppTest, monkeypatch: pytest.Mon
     assert ui.session_state.knowledge_base_id == "kb-a"
     assert ui.session_state.knowledge_base_name == "学生库"
     assert not any(item.key == f"history-{first}" for item in ui.button)
-    assert any("尚未限定" in item.value for item in ui.info)
+    assert any("可能参考其他知识库" in item.value for item in ui.info)
 
 
 def test_creation_failure_clears_previous_evidence(ui: AppTest, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -164,6 +167,7 @@ def test_creation_failure_clears_previous_evidence(ui: AppTest, monkeypatch: pyt
     research(ui)
     assert ui.session_state.latest_evidence == []
     assert any("创建失败" in item.value for item in ui.error)
+    ui.toggle(key="chat-show-sources").set_value(True).run()
     ui.button(key="answer-sources-1").click().run()
     assert ui.session_state.latest_evidence == [LOCAL, WEB]
 
@@ -186,6 +190,8 @@ def test_trace_and_task_detail_failures_preserve_created_task(ui: AppTest, monke
     assert not ui.exception
     assert ui.session_state.messages[-1]["content"] == "已创建研究任务"
     assert ui.button(key="research-refresh-1")
+    assert not any("Trace 暂不可用" in item.value for item in ui.warning)
+    ui.toggle(key="chat-show-details").set_value(True).run()
     assert any("Trace 暂不可用" in item.value for item in ui.warning)
 
 
