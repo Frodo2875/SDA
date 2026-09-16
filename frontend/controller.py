@@ -37,6 +37,7 @@ def initialize_state() -> None:
         "evidence_location_error": None,
         "show_document_workspace": True,
         "show_insight_panel": False,
+        "show_chat_tools": False,
     }
     for key, value in defaults.items():
         st.session_state[key] = st.session_state[key] if key in st.session_state else value

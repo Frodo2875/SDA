@@ -6,21 +6,21 @@
 - pytest 9.1.1、Streamlit 1.61.1、FastAPI 0.141.1、httpx 0.28.1、python-docx 1.2.0。
 - 环境：`/home/gxh/miniconda3/envs/tuli_env`。
 - 分支：`feature/v7-development`。
-- 进入 Final 时 HEAD：`5576d329ab2423359e1c2a06a4fa9222aa61a811`，working tree clean。
-- `v6-final-stable` 是该提交祖先；预定冻结 tag 为 `v7-final-stable`。
-- Final 只新增本报告、最终架构文档和 `tests/evaluation/test_v7_final_demo.py`；不新增业务功能/API/页面。
+- 初次 Final 提交：`87c4e8c7e5b24bd5c33e727aa8147357e30c00fe`。
+- `v6-final-stable` 是最终 V7 提交的祖先；最终冻结 tag 为 `v7-final-stable`。
+- 初次冻结后的人工体验验收包含界面简化、Logo、聊天输入区布局和复用既有 Approval/Version 的文档操作入口；未新增 Agent、Retriever、Evidence Schema 或 Provider。
 
 测试沿用隔离 SQLite 与临时上传目录；不向用户资料库提交测试文件。测试没有展示 `.env` 或认证信息。
 
 ## 2. 测试数量与命令
 
-功能基线已有 779 项测试。本次新增 1 项跨 UI/API 的 Final Demo。
+初次冻结时为 780 项测试；体验验收修订补充了权限说明、文档确认操作和界面默认状态测试。
 
 单独 Demo：`pytest -q tests/evaluation/test_v7_final_demo.py`，**1 passed，3.82 秒**。
 
-完整命令：`pytest -q`。最终结果：**总计 780，passed 780，failed 0，skipped 0，用时 77.65 秒**。V5/V6/V7 所有收集到的测试通过。
+最终完整命令：`pytest -q`。最终结果：**总计 818，passed 818，failed 0，skipped 0，用时 87.66 秒**。V5/V6/V7 所有收集到的测试通过。
 
-没有删除旧测试、skip 旧测试或降低断言。Final 阶段没有业务代码修复。
+没有删除旧测试、skip 旧测试或降低断言。
 
 ## 3. V7 功能验收
 
@@ -79,6 +79,6 @@ Source Router、Tool Boundary/Tool Scope Resolver、Cross Source Retrieval、Uni
 
 ## 7. 最终结论
 
-在上述公开边界内，V7 的产品工作空间、全量回归和可重复 Demo 已完成验收，可冻结。以提交 `V7 final evaluation and freeze` 创建 annotated tag `v7-final-stable`。最终 commit/tag 对应关系以 Git 为准，提交与建 tag 后检查工作区 clean。
+在上述公开边界内，V7 的产品工作空间、文档操作确认、全量回归和可重复 Demo 已完成验收，可冻结。`v7-final-stable` 指向最终体验验收提交；最终 commit/tag 对应关系以 Git 为准，提交与建 tag 后检查工作区 clean。
 
 不执行远程 push，不开发 V8。线上 Provider 连通性和真实浏览器人工体验仍需在实际部署环境中验证，不能由本测试结果代替。

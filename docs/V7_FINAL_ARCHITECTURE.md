@@ -4,7 +4,7 @@
 
 V7 将 Student Document Agent 的 V5/V6 能力组织成 Streamlit 产品工作空间：知识库、聊天、研究任务、报告交付与只读系统状态。它复用已有后端执行链路，不创建新的 Agent、Retriever、Evidence Schema、Provider 或任务运行时。
 
-最终代码边界以 `v7-final-stable` annotated tag 指向的提交为准。冻结前功能基线为 `5576d329ab2423359e1c2a06a4fa9222aa61a811`；Final 阶段只新增验收测试和两份最终文档。
+最终代码边界以 `v7-final-stable` annotated tag 指向的提交为准。初次冻结提交为 `87c4e8c7e5b24bd5c33e727aa8147357e30c00fe`；人工体验验收后又完成了界面文案简化、Logo、默认隐藏资料与处理详情、统一文档操作确认入口、输入区模式选择器，以及默认收起的聊天功能区。标签在这些验收修订完成并通过全量回归后更新到最终提交。
 
 ## 2. V5–V7 演进
 
@@ -12,7 +12,7 @@ V7 将 Student Document Agent 的 V5/V6 能力组织成 Streamlit 产品工作�
 | --- | --- | --- |
 | V5 | Trusted General Document Agent | 多格式输入、本地/Web/URL 检索、Source Router、Tool Boundary、Unified Evidence 4.0、跨来源检索、Web Safety/SSRF |
 | V6 | Reliable Research & Report Agent | Markdown、复杂任务异步执行与恢复、Evidence Quality Gate、Web Reliability、证据报告与审批导出 |
-| V7 | 产品工作空间 | 统一导航、知识库管理、Chat Workspace、Research Task Center、Report Center、System Dashboard |
+| V7 | 产品工作空间 | 统一导航、知识库管理、Chat Workspace、用户确认后的文档操作、Research Task Center、Report Center、System Dashboard |
 
 V5 冻结 tag commit：`36ccc19aac056b337747f7c40e0674809b2b41b6`。
 V6 冻结 tag commit：`f0cebebf4c85509b3feacc8976ae6f37ef6b2db6`。

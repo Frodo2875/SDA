@@ -37,19 +37,30 @@ def research(ui: AppTest, mode: str = "深度研究") -> None:
     assert not ui.exception
 
 
+def open_more(ui: AppTest) -> None:
+    if not ui.session_state.show_chat_tools:
+        ui.button(key="chat-more").click().run()
+
+
 def test_chat_layout_and_modes(ui: AppTest) -> None:
     assert ui.selectbox(key="chat_mode").options == ["普通问答", "深度研究", "报告生成"]
     assert not [item for item in ui.radio if item.key == "chat_mode"]
     assert len(ui.chat_input) == 1
-    assert not ui.toggle(key="chat-show-sources").value
+    assert "欢迎来到SDA！" in [item.value for item in ui.title]
+    assert ui.button(key="chat-more").label == "更多"
+    assert not [item for item in ui.toggle if item.key == "chat-show-sources"]
     assert not any(item.value == "参考资料" for item in ui.subheader)
     assert any("当前知识库：全部文档" in item.value for item in ui.caption)
+    assert not [item for item in ui.expander if item.label in {"新建聊天", "最近聊天", "文档操作", "显示选项"}]
+    open_more(ui)
+    assert ui.button(key="chat-more").label == "收起"
     assert [item.label for item in ui.expander[:4]] == [
         "新建聊天", "最近聊天", "文档操作", "显示选项",
     ]
 
 
 def test_normal_chat_sources_and_evidence_cards(ui: AppTest) -> None:
+    open_more(ui)
     ui.toggle(key="chat-show-sources").set_value(True).run()
     ui.chat_input[0].set_value("分析专业").run()
     assert not ui.exception
@@ -136,6 +147,7 @@ def test_report_requires_completion_and_uses_draft_and_preview_api(ui: AppTest, 
 
 
 def test_history_restores_session_and_evidence(ui: AppTest) -> None:
+    open_more(ui)
     first = ui.session_state.session_id
     ui.chat_input[0].set_value("历史问题").run()
     ui.button(key="chat-new").click().run()
@@ -150,6 +162,7 @@ def test_history_restores_session_and_evidence(ui: AppTest) -> None:
 
 
 def test_knowledge_selection_groups_history(ui: AppTest, monkeypatch: pytest.MonkeyPatch) -> None:
+    open_more(ui)
     monkeypatch.setattr(api_client, "list_knowledge_bases", lambda: [{"knowledge_base_id": "kb-a", "name": "学生库"}])
     first = ui.session_state.session_id
     ui.chat_input[0].set_value("全局会话").run()
@@ -164,6 +177,7 @@ def test_knowledge_selection_groups_history(ui: AppTest, monkeypatch: pytest.Mon
 
 
 def test_creation_failure_clears_previous_evidence(ui: AppTest, monkeypatch: pytest.MonkeyPatch) -> None:
+    open_more(ui)
     ui.chat_input[0].set_value("上一次问题").run()
     def fail(*args: object) -> dict:
         raise RuntimeError("创建失败")
@@ -185,6 +199,7 @@ def test_normal_chat_complex_response_offers_research_refresh(ui: AppTest, monke
 
 
 def test_trace_and_task_detail_failures_preserve_created_task(ui: AppTest, monkeypatch: pytest.MonkeyPatch) -> None:
+    open_more(ui)
     monkeypatch.setattr(api_client, "chat", lambda *args: {"answer": "已创建研究任务", "task_id": "research-1", "status": "research_task_created"})
     def fail(*args: object, **kwargs: object) -> dict:
         raise RuntimeError("暂不可用")

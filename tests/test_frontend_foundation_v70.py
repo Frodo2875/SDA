@@ -33,7 +33,7 @@ def test_default_dashboard_header_and_menu(ui: AppTest) -> None:
 
 
 @pytest.mark.parametrize("page,title", [
-    ("dashboard", "工作空间概览"), ("chat", "聊天"),
+    ("dashboard", "工作空间概览"), ("chat", "欢迎来到SDA！"),
     ("knowledge", "知识库"), ("documents", "我的文档"),
     ("tasks", "研究任务"), ("reports", "报告中心"),
     ("usage", "使用统计"), ("settings", "系统设置"),
@@ -60,6 +60,7 @@ def test_chat_evidence_and_trace_survive_navigation(ui: AppTest, monkeypatch: py
     monkeypatch.setattr(api_client, "get_traces", lambda **kwargs: [{"event_type": "tool_execution", "result_status": "success"}])
     monkeypatch.setattr(api_client, "locate_evidence", lambda *args: {**evidence, "location_type": "pdf", "text": "原始规则"})
     ui.button(key="nav-chat").click().run()
+    ui.button(key="chat-more").click().run()
     ui.toggle(key="chat-show-sources").set_value(True).run()
     ui.chat_input[0].set_value("查询规则").run()
     assert not ui.exception

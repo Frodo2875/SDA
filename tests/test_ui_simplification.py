@@ -15,6 +15,8 @@ def test_chat_hides_sources_until_requested_and_can_hide_them_again(monkeypatch)
     ui = AppTest.from_file(Path(__file__).resolve().parents[1] / "frontend" / "app.py").run()
     assert not ui.session_state.show_insight_panel
     ui.button(key="nav-chat").click().run()
+    assert not [item for item in ui.toggle if item.key in {"chat-show-sources", "chat-show-details"}]
+    ui.button(key="chat-more").click().run()
     assert not ui.toggle(key="chat-show-sources").value
     assert not ui.toggle(key="chat-show-details").value
     ui.chat_input[0].set_value("请分析材料").run()
@@ -44,6 +46,7 @@ def test_chat_hides_quality_warning_and_trace_until_details_are_requested(monkey
     })
     ui = AppTest.from_file(Path(__file__).resolve().parents[1] / "frontend" / "app.py").run()
     ui.button(key="nav-chat").click().run()
+    ui.button(key="chat-more").click().run()
     ui.chat_input[0].set_value("你好").run()
     assert not ui.warning
     assert not any(item.label == "详细处理记录" for item in ui.expander)

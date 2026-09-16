@@ -93,27 +93,32 @@ def render_research(message: dict[str, Any], index: int) -> None:
 
 
 def render() -> None:
-    st.title("聊天")
+    st.title("欢迎来到SDA！", text_alignment="center")
     render_context()
-    first_left, first_right = st.columns(2, gap="small")
-    with first_left:
-        render_new_chat()
-    with first_right:
-        render_recent_chat()
-    second_left, second_right = st.columns(2, gap="small")
-    with second_left:
-        render_document_actions()
-    with second_right:
-        with st.expander("显示选项"):
-            show_sources = st.toggle("查看参考资料", key="chat-show-sources", value=False)
-            show_details = st.toggle("查看处理详情", key="chat-show-details", value=False)
+    if st.button("收起" if st.session_state.show_chat_tools else "更多",
+                 key="chat-more", use_container_width=True):
+        st.session_state.show_chat_tools = not st.session_state.show_chat_tools
+        st.rerun()
+    show_sources = bool(st.session_state.get("chat-show-sources", False))
+    show_details = bool(st.session_state.get("chat-show-details", False))
+    if st.session_state.show_chat_tools:
+        first_left, first_right = st.columns(2, gap="small")
+        with first_left:
+            render_new_chat()
+        with first_right:
+            render_recent_chat()
+        second_left, second_right = st.columns(2, gap="small")
+        with second_left:
+            render_document_actions()
+        with second_right:
+            with st.expander("显示选项"):
+                show_sources = st.toggle("查看参考资料", key="chat-show-sources", value=False)
+                show_details = st.toggle("查看处理详情", key="chat-show-details", value=False)
     if show_sources:
         conversation, evidence = st.columns([2, 1], gap="large")
     else:
         conversation, evidence = st.container(), None
     with conversation:
-        if not st.session_state.messages:
-            st.caption("有什么想了解的？")
         render_messages(st.session_state.messages, actions.handle_action,
                         actions.handle_evidence_location, show_sources=show_sources,
                         show_details=show_details)

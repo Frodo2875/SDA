@@ -139,6 +139,7 @@ def test_each_mode_exposes_edit_preview_then_separate_confirmation(monkeypatch, 
     monkeypatch.setattr(api_client, "decide_action", lambda *args: pytest.fail("preview must never confirm"))
     app = AppTest.from_file(Path(__file__).resolve().parents[1] / "frontend/app.py").run(timeout=10)
     app.button(key="nav-chat").click().run()
+    app.button(key="chat-more").click().run()
     app.selectbox(key="chat_mode").set_value(mode).run()
     message = {"role": "assistant", "content": "原回答", "response_status": "completed"}
     if mode != "普通问答":
@@ -167,6 +168,7 @@ def test_management_controls_only_prepare_actions(monkeypatch, operation, method
     monkeypatch.setattr(api_client, method, lambda *args: calls.append(args) or {"ok": True, "data": {"action_id": "action", "status": "pending"}})
     app = AppTest.from_file(Path(__file__).resolve().parents[1] / "frontend/app.py").run(timeout=10)
     app.button(key="nav-chat").click().run()
+    app.button(key="chat-more").click().run()
     app.session_state.files = [file]
     app.selectbox(key="document-operation").set_value(operation).run()
     app.button(key="document-manage-preview").click().run()
