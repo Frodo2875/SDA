@@ -44,6 +44,9 @@ def test_chat_layout_and_modes(ui: AppTest) -> None:
     assert not ui.toggle(key="chat-show-sources").value
     assert not any(item.value == "参考资料" for item in ui.subheader)
     assert any("当前知识库：全部文档" in item.value for item in ui.caption)
+    assert [item.label for item in ui.expander[:4]] == [
+        "新建聊天", "最近聊天", "文档操作", "显示选项",
+    ]
 
 
 def test_normal_chat_sources_and_evidence_cards(ui: AppTest) -> None:

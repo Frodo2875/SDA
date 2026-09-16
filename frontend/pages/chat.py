@@ -13,6 +13,9 @@ def render_context() -> None:
     st.caption(f"当前知识库：{st.session_state.get('knowledge_base_name') or '全部文档'}")
     if st.session_state.get("knowledge_base_id"):
         st.info("回答可能参考其他知识库的资料。")
+
+
+def render_new_chat() -> None:
     with st.expander("新建聊天"):
         if st.button("加载知识库", key="chat-load-knowledge"):
             try:
@@ -30,6 +33,9 @@ def render_context() -> None:
         if st.button("开始新会话", key="chat-new"):
             workspace.new_conversation(selected, choices[selected])
             st.rerun()
+
+
+def render_recent_chat() -> None:
     workspace.save_conversation()
     with st.expander("最近聊天"):
         st.caption("记录仅在本次浏览器会话中保留。")
@@ -89,10 +95,18 @@ def render_research(message: dict[str, Any], index: int) -> None:
 def render() -> None:
     st.title("聊天")
     render_context()
-    render_document_actions()
-    with st.expander("显示选项"):
-        show_sources = st.toggle("查看参考资料", key="chat-show-sources", value=False)
-        show_details = st.toggle("查看处理详情", key="chat-show-details", value=False)
+    first_left, first_right = st.columns(2, gap="small")
+    with first_left:
+        render_new_chat()
+    with first_right:
+        render_recent_chat()
+    second_left, second_right = st.columns(2, gap="small")
+    with second_left:
+        render_document_actions()
+    with second_right:
+        with st.expander("显示选项"):
+            show_sources = st.toggle("查看参考资料", key="chat-show-sources", value=False)
+            show_details = st.toggle("查看处理详情", key="chat-show-details", value=False)
     if show_sources:
         conversation, evidence = st.columns([2, 1], gap="large")
     else:
