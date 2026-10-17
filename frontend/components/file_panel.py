@@ -206,12 +206,36 @@ def render_file_panel(
         renderer(f"{outcome.get('file_name', '文件')}：{outcome.get('message', '')}")
     if st.button("刷新文件列表", use_container_width=True, icon="🔄"):
         on_refresh()
+    with st.container(key="sda-file-toolbar"):
+        render_filters()
+    if st.button("应用搜索 / 筛选 / 排序"):
+        on_refresh()
+    if files_error:
+        st.warning(files_error)
+        return
+    if not files:
+        filtered = (st.session_state.get("workspace_search") or
+                    st.session_state.get("workspace_file_type", "全部类型") != "全部类型" or
+                    st.session_state.get("workspace_lifecycle", "全部状态") != "全部状态")
+        st.info("没有符合筛选条件的文件，可调整条件后重试。" if filtered else "当前没有可用材料文件。")
+        return
+    for source_type, title in (("system", "系统文件"), ("upload", "上传文件")):
+        group = [item for item in files if item.get("source_type") == source_type]
+        if not group:
+            continue
+        st.markdown(f"#### {title}")
+        for item in group:
+            _render_file(item, session_id, on_refresh, on_version_action)
+
+
+def render_filters() -> None:
+    """Compact visual controls using the existing filter keys and callbacks."""
     st.text_input(
         "搜索文件名",
         key="workspace_search",
         placeholder="输入文件名关键词",
     )
-    filter_columns = st.columns(2)
+    filter_columns = st.columns(3)
     filter_columns[0].selectbox(
         "文件类型",
         list(FILE_TYPE_FILTERS),
@@ -223,7 +247,7 @@ def render_file_panel(
         format_func=lambda value: status_label(LIFECYCLE_FILTERS[value]) if LIFECYCLE_FILTERS[value] else "全部状态",
         key="workspace_lifecycle",
     )
-    st.selectbox(
+    filter_columns[2].selectbox(
         "排序",
         [
             "登记时间（新到旧）",
@@ -233,21 +257,6 @@ def render_file_panel(
         ],
         key="workspace_sort",
     )
-    if st.button("应用搜索 / 筛选 / 排序", use_container_width=True):
-        on_refresh()
-    if files_error:
-        st.warning(files_error)
-        return
-    if not files:
-        st.info("当前没有可用材料文件。")
-        return
-    for source_type, title in (("system", "系统文件"), ("upload", "上传文件")):
-        group = [item for item in files if item.get("source_type") == source_type]
-        if not group:
-            continue
-        st.markdown(f"#### {title}")
-        for item in group:
-            _render_file(item, session_id, on_refresh, on_version_action)
 
 
 def _render_file(
@@ -262,19 +271,14 @@ def _render_file(
         st.markdown(f"**{fields['file_name']}**")
         st.caption(f"{fields['file_type']} · {fields['size']}")
         st.markdown(f"`{fields['lifecycle_status']}` · `索引 {fields['index_status']}`")
-        st.caption(
-            f"可查询：{fields['queryable']} · "
-            f"来源：{'系统' if item.get('source_type') == 'system' else '上传'}"
-        )
         st.caption(f"上传/登记时间：{fields['created_time']}")
-        schema = item.get("schema_summary") or {}
-        if item.get("file_type") == "excel":
-            st.caption(
-                f"Sheet：{schema.get('sheet_count', '—')} · 字段：{schema.get('field_count', '—')} · "
-                f"数据行：{schema.get('row_count', '—')}"
-            )
-        if item.get("file_type") in {"word", "pdf", "image"}:
-            st.caption(f"文档索引状态：{item.get('index_status', '—')}")
+        with st.expander("文件信息"):
+            st.caption(f"可查询：{fields['queryable']} · 来源：{'系统' if item.get('source_type') == 'system' else '上传'}")
+            schema = item.get("schema_summary") or {}
+            if item.get("file_type") == "excel":
+                st.caption(f"Sheet：{schema.get('sheet_count', '—')} · 字段：{schema.get('field_count', '—')} · 数据行：{schema.get('row_count', '—')}")
+            if item.get("file_type") in {"word", "pdf", "image"}:
+                st.caption(f"文档索引状态：{item.get('index_status', '—')}")
         error_summary = item.get("error_summary") or {}
         if error_summary:
             st.error(

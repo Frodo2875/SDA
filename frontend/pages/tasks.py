@@ -41,14 +41,8 @@ def render_center() -> None:
             st.rerun()
         render_detail(identifier)
         return
-    with st.form("research-open"):
-        task_id = st.text_input("按任务编号查找", max_chars=128)
-        if st.form_submit_button("打开任务"):
-            if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", task_id.strip()):
-                st.session_state.research_selected_id = task_id.strip()
-                st.rerun()
-            else:
-                st.error("请输入正确的任务编号。")
+    with st.expander("按编号查找任务"):
+        render_lookup()
     st.button("刷新研究任务列表", key="research-center-refresh")
     tasks, errors = center.refresh_list()
     for error in errors:
@@ -59,14 +53,26 @@ def render_center() -> None:
         st.info("当前范围内没有符合筛选条件的研究任务。" if not errors else "任务列表暂不完整，请稍后刷新。")
     for task in visible:
         with st.container(border=True):
-            st.text(task.get("query") or task["task_id"])
+            content, operation = st.columns([4, 1], vertical_alignment="center")
+            content.text(task.get("query") or task["task_id"])
+            if operation.button("查看任务详情", key=f"research-open-{task['task_id']}"):
+                st.session_state.research_selected_id = task["task_id"]
+                st.rerun()
             st.caption(f"状态：{status_label(task['status'])} · 当前阶段：{status_label((task.get('progress') or {}).get('stage', '未提供'))}")
             st.caption(f"创建：{task.get('created_at') or '未提供'} · 更新：{task.get('updated_at') or '未提供'}")
             if task.get("stale"):
                 st.warning("当前为上次读取的状态，本次刷新失败。")
-            if st.button("查看任务详情", key=f"research-open-{task['task_id']}"):
-                st.session_state.research_selected_id = task["task_id"]
+
+
+def render_lookup() -> None:
+    with st.form("research-open"):
+        task_id = st.text_input("按任务编号查找", max_chars=128)
+        if st.form_submit_button("打开任务"):
+            if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", task_id.strip()):
+                st.session_state.research_selected_id = task_id.strip()
                 st.rerun()
+            else:
+                st.error("请输入正确的任务编号。")
 
 
 def render_detail(identifier: str) -> None:

@@ -118,7 +118,7 @@ def submit_message(message: str) -> None:
     st.session_state.evidence_location_error = None
     st.session_state.messages.append({"role": "user", "content": message})
     try:
-        with st.spinner("Agent 正在处理材料…"):
+        with st.spinner("正在查找资料并整理回答，请稍候…"):
             response = api_client.chat(st.session_state.session_id, message)
         task_id = response.get("task_id")
         task = None

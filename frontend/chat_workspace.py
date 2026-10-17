@@ -66,7 +66,8 @@ def submit(prompt: str) -> None:
         st.session_state.selected_evidence_location = None
         st.session_state.evidence_location_error = None
         try:
-            task = api_client.create_research_task(st.session_state.session_id, prompt)
+            with st.spinner("正在创建研究任务…"):
+                task = api_client.create_research_task(st.session_state.session_id, prompt)
             st.session_state.messages.append({"role": "assistant", "content": "研究任务已创建，可刷新查看执行状态。",
                                              "research_task_id": task["task_id"], "research": task,
                                              "report_requested": mode == MODES[2]})
@@ -102,7 +103,8 @@ def refresh_research(message: dict[str, Any]) -> None:
 
 def generate_report(message: dict[str, Any]) -> None:
     try:
-        message["report"] = api_client.create_report(message["research_task_id"], "证据研究报告")
+        with st.spinner("正在整理报告草稿…"):
+            message["report"] = api_client.create_report(message["research_task_id"], "证据研究报告")
         message.pop("report_error", None)
     except RuntimeError as exc:
         message["report_error"] = str(exc)

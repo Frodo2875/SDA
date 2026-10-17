@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import streamlit as st
+from frontend.styles import render_styles
 
 LOGO_PATH = Path(__file__).resolve().parents[1] / "Logo" / "Student_Document_Agent.png"
 
@@ -11,6 +12,8 @@ MENU = {
     "documents": "我的文档", "tasks": "研究任务", "reports": "报告中心",
     "usage": "使用统计", "settings": "系统设置",
 }
+MENU_ICONS = dict(zip(MENU, ["home", "chat_bubble", "folder_open", "description",
+                             "manage_search", "article", "bar_chart", "settings"]))
 
 
 def navigate(page: str) -> None:
@@ -20,31 +23,21 @@ def navigate(page: str) -> None:
 def render_shell() -> None:
     if st.session_state.active_page not in MENU:
         navigate("dashboard")
-    st.markdown("""
-    <style>
-    :root {--platform-accent: #315ee7; --platform-muted: #64748b;}
-    .stApp {font-family: Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif;}
-    .block-container {max-width: 1480px; padding-top: 2rem; padding-bottom: 4rem;}
-    [data-testid="stSidebar"] {background: #f7f9fc; border-right: 1px solid #e2e8f0;}
-    [data-testid="stSidebar"] [data-testid="stButton"] button {text-align: left; border-radius: 8px;}
-    [data-testid="stMetric"] {background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 1rem; color: #17213b;}
-    [data-testid="stChatMessage"] {border-radius: 10px;}
-    button[kind="primary"] {background-color: var(--platform-accent); border-color: var(--platform-accent); color: white;}
-    .platform-brand {font-size: 1.2rem; font-weight: 650; letter-spacing: -.02em;}
-    </style>
-    """, unsafe_allow_html=True)
+    render_styles()
     st.logo(str(LOGO_PATH), size="large", icon_image=str(LOGO_PATH))
     with st.sidebar:
         st.markdown("### 学生材料助手")
         st.divider()
-        for key, label in MENU.items():
-            st.button(label, key=f"nav-{key}", use_container_width=True,
-                      type="primary" if st.session_state.active_page == key else "secondary",
-                      on_click=navigate, args=(key,))
+        with st.container(key="sda-navigation"):
+            for key, label in MENU.items():
+                st.button(label, key=f"nav-{key}", use_container_width=True,
+                          icon=f":material/{MENU_ICONS[key]}:",
+                          type="primary" if st.session_state.active_page == key else "secondary",
+                          on_click=navigate, args=(key,))
         st.divider()
         st.caption("Student Document Agent")
-    brand, workspace, user = st.columns([3, 2, 1])
-    brand.markdown('<div class="platform-brand">Student Document Agent</div>', unsafe_allow_html=True)
-    workspace.caption(f"工作空间 · {st.session_state.workspace_name}")
-    user.caption("用户 · 本地用户")
-    st.divider()
+    with st.container(key="sda-header"):
+        brand, workspace, user = st.columns([3, 2, 1])
+        brand.markdown('<div class="platform-brand">Student Document Agent</div>', unsafe_allow_html=True)
+        workspace.caption(f"工作空间 · {st.session_state.workspace_name}")
+        user.caption("用户 · 本地用户")

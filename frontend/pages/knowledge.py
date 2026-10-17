@@ -71,6 +71,31 @@ def render() -> None:
             return
         render_detail(record, files)
         return
+    with st.expander("新建知识库"):
+        render_create_form()
+    try:
+        records = api_client.list_knowledge_bases()
+        st.session_state.knowledge_count = len(records)
+    except RuntimeError as exc:
+        st.error(str(exc))
+        return
+    st.subheader("我的知识库")
+    if not records:
+        st.info("暂无知识库，请先创建。")
+    for record in records:
+        with st.container(border=True):
+            title, operation = st.columns([4, 1], vertical_alignment="center")
+            title.subheader(record["name"])
+            if operation.button("进入", key=f"knowledge-enter-{record['knowledge_base_id']}"):
+                st.session_state.selected_knowledge_base_id = record["knowledge_base_id"]
+                st.rerun()
+            st.text(record["description"])
+            st.caption(f"文件：{record['file_count']} · 状态：{status_label(record['status'])}")
+            st.caption(f"创建：{record['created_at']} · 更新：{record['updated_at']}")
+
+
+def render_create_form() -> None:
+    """Keep the existing form contract in a secondary, collapsible entry."""
     with st.form("create-knowledge"):
         st.subheader("新建知识库")
         name = st.text_input("名称", max_chars=100, key="knowledge-name")
@@ -85,24 +110,6 @@ def render() -> None:
                     st.rerun()
                 except RuntimeError as exc:
                     st.error(str(exc))
-    try:
-        records = api_client.list_knowledge_bases()
-        st.session_state.knowledge_count = len(records)
-    except RuntimeError as exc:
-        st.error(str(exc))
-        return
-    st.subheader("我的知识库")
-    if not records:
-        st.info("暂无知识库，请先创建。")
-    for record in records:
-        with st.container(border=True):
-            st.subheader(record["name"])
-            st.text(record["description"])
-            st.caption(f"文件：{record['file_count']} · 状态：{status_label(record['status'])}")
-            st.caption(f"创建：{record['created_at']} · 更新：{record['updated_at']}")
-            if st.button("进入", key=f"knowledge-enter-{record['knowledge_base_id']}"):
-                st.session_state.selected_knowledge_base_id = record["knowledge_base_id"]
-                st.rerun()
 
 
 def render_detail(record: dict[str, Any], files: list[dict[str, Any]]) -> None:
@@ -132,10 +139,11 @@ def render_detail(record: dict[str, Any], files: list[dict[str, Any]]) -> None:
             st.error(str(exc))
     st.caption("删除文件会影响所有使用它的知识库，操作前需要确认。")
     if files:
-        st.dataframe([{"文件名": item["file_name"], "类型": item.get("file_type", ""),
-                       "大小": format_file_size(item.get("size")), "状态": status_label(file_status(item)),
-                       "更新时间": item.get("updated_at") or item.get("created_time") or "—"}
-                      for item in files], use_container_width=True)
+        with st.expander("文件概览"):
+            st.dataframe([{"文件名": item["file_name"], "类型": item.get("file_type", ""),
+                           "大小": format_file_size(item.get("size")), "状态": status_label(file_status(item)),
+                           "更新时间": item.get("updated_at") or item.get("created_time") or "—"}
+                          for item in files], use_container_width=True, hide_index=True)
     st.caption("上传支持原有格式及 Markdown（.md / .markdown）。")
     render_file_panel(
         files=filtered_files(files), session_id=st.session_state.session_id,

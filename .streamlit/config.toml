@@ -1,0 +1,6 @@
+# Keep native tabs, input focus and buttons aligned with SDA in both themes.
+[theme.light]
+primaryColor = "#315ee7"
+
+[theme.dark]
+primaryColor = "#315ee7"

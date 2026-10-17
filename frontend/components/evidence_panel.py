@@ -170,9 +170,8 @@ def render_location_preview(location: dict[str, Any]) -> None:
             if location.get("confidence") is not None:
                 st.caption(f"OCR置信度：{float(location['confidence']):.2f}")
             st.markdown(
-                '<div style="border-left:4px solid #f2c94c;padding:.5rem '
-                '1rem;background:#fff8d6"><mark>'
-                f"{escape(str(location.get('text') or '（空）'))}</mark></div>",
+                '<div class="sda-source-highlight">'
+                f"{escape(str(location.get('text') or '（空）'))}</div>",
                 unsafe_allow_html=True,
             )
             _render_visual_review(location)

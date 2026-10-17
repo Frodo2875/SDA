@@ -29,14 +29,15 @@ def render() -> None:
         render_detail(*selected)
         return
     st.caption("显示本次浏览器会话中找到的报告。")
-    with st.form("report-open"):
-        task_id = st.text_input("任务编号", max_chars=128).strip()
-        report_id = st.text_input("报告编号", max_chars=128).strip()
-        if st.form_submit_button("打开已有报告"):
-            if valid_id(task_id) and valid_id(report_id):
-                open_report(task_id, report_id)
-            else:
-                st.error("请输入有效的任务 ID 和报告 ID。")
+    with st.expander("按编号查找报告"):
+        with st.form("report-open"):
+            task_id = st.text_input("任务编号", max_chars=128).strip()
+            report_id = st.text_input("报告编号", max_chars=128).strip()
+            if st.form_submit_button("打开已有报告"):
+                if valid_id(task_id) and valid_id(report_id):
+                    open_report(task_id, report_id)
+                else:
+                    st.error("请输入有效的任务 ID 和报告 ID。")
     tasks, errors = research_center.refresh_list()
     for error in errors:
         st.warning(error)
@@ -71,10 +72,11 @@ def render() -> None:
             st.warning(f"报告 {report_id}：{exc}")
             continue
         with st.container(border=True):
-            st.subheader(report["title"])
-            st.caption(f"来源任务：{task_id} · 创建：{report['created_at']} · 状态：{status_label(report['status'])}")
-            if st.button("查看 / 下载 / 版本", key=f"report-open-{task_id}-{report_id}"):
+            title, operation = st.columns([4, 1], vertical_alignment="center")
+            title.subheader(report["title"])
+            if operation.button("查看 / 下载 / 版本", key=f"report-open-{task_id}-{report_id}"):
                 open_report(task_id, report_id)
+            st.caption(f"来源任务：{task_id} · 创建：{report['created_at']} · 状态：{status_label(report['status'])}")
 
 
 def decide(key: str, decision: str) -> None:

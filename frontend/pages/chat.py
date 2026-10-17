@@ -93,14 +93,22 @@ def render_research(message: dict[str, Any], index: int) -> None:
 
 
 def render() -> None:
+    with st.container(key="sda-chat"):
+        render_chat()
+
+
+def render_chat() -> None:
+    """Keep session and action callbacks intact while grouping presentation."""
     st.title("欢迎来到SDA！", text_alignment="center")
     render_context()
     if st.button("收起" if st.session_state.show_chat_tools else "更多",
-                 key="chat-more", use_container_width=True):
+                 key="chat-more"):
         st.session_state.show_chat_tools = not st.session_state.show_chat_tools
         st.rerun()
-    show_sources = bool(st.session_state.get("chat-show-sources", False))
-    show_details = bool(st.session_state.get("chat-show-details", False))
+    # Widget keys are cleaned up when "More" is closed. Keep presentation
+    # preferences separately so collapsing controls never changes the view.
+    show_sources = bool(st.session_state.get("chat-show-sources", st.session_state.get("chat_sources_visible", False)))
+    show_details = bool(st.session_state.get("chat-show-details", st.session_state.get("chat_details_visible", False)))
     if st.session_state.show_chat_tools:
         first_left, first_right = st.columns(2, gap="small")
         with first_left:
@@ -112,8 +120,10 @@ def render() -> None:
             render_document_actions()
         with second_right:
             with st.expander("显示选项"):
-                show_sources = st.toggle("查看参考资料", key="chat-show-sources", value=False)
-                show_details = st.toggle("查看处理详情", key="chat-show-details", value=False)
+                show_sources = st.toggle("查看参考资料", key="chat-show-sources", value=show_sources)
+                show_details = st.toggle("查看处理详情", key="chat-show-details", value=show_details)
+    st.session_state.chat_sources_visible = show_sources
+    st.session_state.chat_details_visible = show_details
     if show_sources:
         conversation, evidence = st.columns([2, 1], gap="large")
     else:
@@ -133,12 +143,13 @@ def render() -> None:
                 on_locate=actions.handle_evidence_location,
             )
     workspace.save_conversation()
-    mode_column, input_column = st.columns([1.15, 6], gap="small", vertical_alignment="bottom")
-    with mode_column:
-        st.selectbox("聊天模式", workspace.MODES, key="chat_mode",
-                     label_visibility="collapsed", help="选择普通问答、深度研究或报告生成")
-    with input_column:
-        prompt = st.chat_input("输入问题或研究目标", key="workspace-chat")
+    with st.container(key="sda-composer"):
+        mode_column, input_column = st.columns([1.3, 5], gap="small", vertical_alignment="bottom")
+        with mode_column:
+            st.selectbox("聊天模式", workspace.MODES, key="chat_mode",
+                         label_visibility="collapsed", help="选择普通问答、深度研究或报告生成")
+        with input_column:
+            prompt = st.chat_input("输入问题或研究目标", key="workspace-chat")
     if prompt:
         if prompt.strip():
             workspace.submit(prompt.strip())

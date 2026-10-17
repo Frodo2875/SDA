@@ -9,6 +9,7 @@ from frontend.components.confirmation_card import render_confirmation
 from frontend.components.evidence_panel import render_evidence, source_labels
 from frontend.components.task_progress import render_batch, render_task
 from frontend.components.trace_panel import render_trace
+from frontend.shell import LOGO_PATH
 
 
 COMPARISON_COLUMNS = {
@@ -62,7 +63,7 @@ def render_messages(
     *, show_sources: bool = False, show_details: bool = False,
 ) -> None:
     for index, message in enumerate(messages):
-        avatar = "🎓" if message["role"] == "assistant" else "👤"
+        avatar = str(LOGO_PATH) if message["role"] == "assistant" else ":material/person:"
         with st.chat_message(message["role"], avatar=avatar):
             for status in message.get("statuses") or []:
                 st.caption(f"✓ {status}")

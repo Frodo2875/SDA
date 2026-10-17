@@ -2,6 +2,9 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .env
+.env_local
+.env.local
+。env_local
 .venv/
 venv/
 .streamlit/secrets.toml
