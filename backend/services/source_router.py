@@ -37,12 +37,31 @@ BOTH_SIGNALS = (
     "结合网上", "结合网络", "结合在线",
 )
 
+# A source restriction takes precedence over positive keywords and URLs.  Keep
+# "不联网" intact: deleting just the negation would accidentally grant Web tools.
+NETWORK_DENIAL = re.compile(
+    r"(?:不(?:要|用|需(?:要)?|必)?|禁止|严禁|无需|勿)\s*"
+    r"(?:联网|上网|(?:访问|抓取|读取|搜索|查询|查阅|查)\s*(?:网页|网站|互联网|网络|网上))"
+    r"|\b(?:do\s+not|don't|never|no)\s+(?:browse|browsing|web\s+search|internet\s+access)\b"
+    r"|\b(?:offline|local\s+(?:files?\s+)?only)\b",
+    re.I,
+)
+LOCAL_ONLY = re.compile(
+    r"(?:^|[，。；;！!\n\s])(?:请你|请)?(?:仅|只)(?:能|允许)?\s*"
+    r"(?:使用|用|依据|根据|查询|分析|读取|检索|处理|参考)?\s*(?:本地|上传|知识库|附件)"
+)
+
 
 def route_source(task: str) -> dict[str, object]:
     """Return a safe source hint without executing retrieval or changing scope."""
     clean = str(task or "").strip()
     urls = URL_PATTERN.findall(clean)
-    if urls:
+    if NETWORK_DENIAL.search(clean) or LOCAL_ONLY.search(clean):
+        route = SourceRoute(
+            source_strategy=SourceStrategy.LOCAL,
+            reason_code="EXPLICIT_LOCAL_ONLY_RESTRICTION",
+        )
+    elif urls:
         route = SourceRoute(
             source_strategy=SourceStrategy.DIRECT_URL,
             reason_code="EXPLICIT_DIRECT_URL",

@@ -13,6 +13,19 @@ def evidence_location(item: dict[str, Any]) -> list[str]:
     """Build an observable source locator shared by chat and workspace preview."""
     location = []
     metadata = item.get("metadata") or {}
+    aggregation = metadata.get("aggregation")
+    if isinstance(aggregation, dict):
+        operation = {
+            "sum": "求和", "avg": "平均值", "count": "计数",
+            "min": "最小值", "max": "最大值",
+        }.get(aggregation.get("operation"), "计算")
+        location.append(f"参与{operation}：{aggregation.get('field') or '记录数'}")
+        filters = [
+            f"{condition.get('field')} {condition.get('op')} {condition.get('value')}"
+            for condition in aggregation.get("filters", []) if isinstance(condition, dict)
+        ]
+        if filters:
+            location.append("筛选：" + "；".join(filters))
     if metadata.get("heading_path"):
         location.append("Heading：" + " > ".join(str(value) for value in metadata["heading_path"]))
     line = item.get("line_number") or metadata.get("line_number")

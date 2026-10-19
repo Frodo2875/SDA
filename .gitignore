@@ -2,8 +2,9 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .env
-.env_local
-.env.local
+.env.*
+.env_*
+!.env.example
 。env_local
 .venv/
 venv/
@@ -11,5 +12,19 @@ venv/
 *.db
 *.sqlite
 *.sqlite3
+*.db-*
+*.sqlite-*
+*.sqlite3-*
+*.log
+*.pem
+*.key
+*.p12
+*.pfx
+# Existing tracked synthetic fixtures remain available; new runtime data stays local.
+data/**
 data/uploads/
 data/versions/
+# Full local audit responses, traces and machine-specific diagnostic reports.
+docs/validation/
+docs/REAL_ENV_VALIDATION_2026-10-19.md
+docs/FIXES_REAL_VALIDATION_2026-10-19.md

@@ -42,6 +42,7 @@ class _PageHTMLParser(HTMLParser):
                 attributes.get("property")
                 or attributes.get("name")
                 or attributes.get("itemprop")
+                or ""
             ).strip().casefold()
             content = attributes.get("content", "").strip()
             if key and content and key not in self.meta:

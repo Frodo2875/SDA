@@ -86,6 +86,24 @@ def start_tool_step(
         raise ValueError("Task 不存在")
     steps = database.get_task_step_records(task_id)
     step = _matching_step(steps, tool_name, arguments)
+    if step is None and tool_name == "retrieve_document":
+        # A completed empty search is not a fulfilled information need. Permit
+        # correction within the Agent's existing round budget, until dependent
+        # analysis has started. Nonempty evidence and side effects never replay.
+        results = task["checkpoint_data"].get("node_results") or {}
+        step = next((
+            candidate for candidate in steps
+            if candidate["tool_name"] == tool_name
+            and candidate["status"] == StepStatus.SUCCESS.value
+            and ((results.get(candidate["step_id"]) or {}).get("data") or {}).get("status") == "not_found"
+            and not ((results.get(candidate["step_id"]) or {}).get("data") or {}).get("evidence")
+            and not ((results.get(candidate["step_id"]) or {}).get("data") or {}).get("unified_evidence")
+            and not any(
+                candidate["step_id"] in (dependent.get("depends_on") or [])
+                and dependent["status"] not in {StepStatus.CREATED.value, StepStatus.CANCELLED.value}
+                for dependent in steps
+            )
+        ), None)
     if step is None:
         return None
     if not _step_is_ready(step, steps, task["checkpoint_data"]):

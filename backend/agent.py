@@ -48,6 +48,8 @@ from backend.tool_registry import TOOL_REGISTRY
 
 
 MAX_TOOL_ROUNDS = 8
+MAX_PREPARATION_CALLS = 12
+READ_ONLY_PREPARATION_TOOLS = frozenset({"list_files", "get_table_schema", "inspect_excel"})
 LOGGER = logging.getLogger(__name__)
 MISSING_RESEARCH_MESSAGE = "当前科研成果材料中未查询到相关记录。"
 
@@ -82,6 +84,18 @@ GENERAL_DOMAIN_PROMPT = """当前请求按 General Document Core 处理。
 只能使用通用文件、Schema、query_table、aggregate_table、retrieve_document、retrieve_web、Evidence 和通用校验能力。
 不得要求、补造或推断 student_id、学生身份或学生专属字段；未知领域也按本规则安全降级。
 所有数值筛选和聚合必须由 Python Tool 完成，规则判断必须引用实际规则 Evidence。"""
+
+SCHOLARSHIP_WORKFLOW_PROMPT = """当前任务使用奖学金证据工作流。
+先用 search_student 确认身份；如果尚不知道文件 ID 和字段，用 list_files 发现真实文件，
+对成绩和科研表调用 get_table_schema，尚无 Schema 时调用 inspect_excel。
+这些是计划显式允许的只读准备操作，最多12次，不替代业务查询。
+确认 ID、Sheet 和字段后，分别用 query_table 按已确认学号查询成绩与科研数据，
+用 retrieve_document 检索真实评审规则，最后用 evaluate_scholarship_eligibility 判断。
+规则检索也应限定 list_files 返回的真实文件 ID，不要猜测文件格式；空检索可更正范围后重试。
+相互独立的文件发现和身份查询、两个表的 Schema 检查可以在同一轮调用。
+禁止把 Excel 当全文文档检索，禁止猜测 file_id、Sheet、字段、阈值或数值。
+材料不足应报告缺失；重名应先澄清；不得用 get_student_scores 替代计划要求的 query_table。
+最终说明本次规则工具实际使用的证据；写入仍须真实用户确认。"""
 
 
 TOOL_DEFINITIONS: list[dict[str, Any]] = TOOL_REGISTRY.definitions()
@@ -615,6 +629,18 @@ async def _run_agent_core(
         if source_tool_scope is not None
         else frozenset(TOOL_FUNCTIONS)
     )
+    planned_task = database.get_task_record(task_id) if task_id else None
+    plan_contract = ((planned_task or {}).get("checkpoint_data") or {}).get("plan") or {}
+    preparation_tools = (
+        frozenset(plan_contract.get("preparation_tools") or ())
+        & READ_ONLY_PREPARATION_TOOLS
+    )
+    if preparation_tools:
+        planned_tools = frozenset(
+            step.get("tool_name") for step in plan_contract.get("steps", [])
+        )
+        available_tool_names = available_tool_names & (planned_tools | preparation_tools)
+        messages.append({"role": "system", "content": SCHOLARSHIP_WORKFLOW_PROMPT})
     available_tool_definitions = [
         definition
         for definition in TOOL_DEFINITIONS
@@ -859,7 +885,21 @@ async def _run_agent_core(
                 step_id = start_tool_step(
                     task_id=task_id, tool_name=name, arguments=preview_arguments
                 )
-            if task_id is not None and step_id is None:
+            spec = TOOL_REGISTRY.get(name)
+            preparation_call = (
+                name in preparation_tools and spec is not None
+                and spec.read_only and not spec.requires_confirmation
+            )
+            preparation_exhausted = preparation_call and sum(
+                call["name"] in preparation_tools for call in executed_calls
+            ) >= MAX_PREPARATION_CALLS
+            if preparation_exhausted:
+                arguments = _argument_object(tool_call["function"]["arguments"])
+                result = _invalid_tool_result(
+                    "PREPARATION_BUDGET_EXCEEDED", "只读材料发现次数达到上限，请明确材料后重试"
+                )
+                retry_count = 0
+            elif task_id is not None and step_id is None and not preparation_call:
                 arguments = _argument_object(tool_call["function"]["arguments"])
                 result = _invalid_tool_result(
                     "TOOL_NOT_IN_PLAN",
@@ -912,7 +952,7 @@ async def _run_agent_core(
                 try:
                     record_trace(
                         session_id=session_id,
-                        task_id=observer.task_id if observer else None,
+                        task_id=task_id or (observer.task_id if observer else None),
                         event_type="tool_execution",
                         tool_name=name,
                         arguments=arguments,

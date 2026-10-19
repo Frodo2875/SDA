@@ -60,7 +60,7 @@ class RetrievalScope(ToolArguments):
     file_id: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{32}$")
     file_ids: list[str] | None = None
     file_type: Literal[
-        "excel", "word", "pdf", "presentation", "txt", "json", "csv"
+        "excel", "word", "pdf", "presentation", "txt", "json", "csv", "markdown"
     ] | None = None
     page: int | None = Field(default=None, ge=1)
     slide: int | None = Field(default=None, ge=1)

@@ -91,11 +91,13 @@ class TaskPlan:
     task_type: str
     steps: tuple[PlannedStep, ...]
     workflow_id: str = field(default_factory=lambda: uuid4().hex)
+    preparation_tools: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "workflow_id": self.workflow_id,
             "task_type": self.task_type,
+            "preparation_tools": list(self.preparation_tools),
             "steps": [
                 {**step.as_dict(), "workflow_id": self.workflow_id}
                 for step in self.steps
@@ -124,6 +126,7 @@ def _scholarship_plan() -> TaskPlan:
     analysis = uuid4().hex
     return TaskPlan(
         task_type="scholarship_evaluation",
+        preparation_tools=("list_files", "get_table_schema", "inspect_excel"),
         steps=(
             _step(1, "确认学生身份", StepType.QUERY, "search_student", "唯一学生身份", step_id=identity),
             _step(2, "查询学生成绩", StepType.QUERY, "query_table", "成绩字段 Evidence", step_id=scores, depends_on=(identity,)),
@@ -156,6 +159,7 @@ def _combined_scholarship_write_plan() -> TaskPlan:
     ids = [uuid4().hex for _ in range(12)]
     return TaskPlan(
         task_type="scholarship_evaluation_and_word_write",
+        preparation_tools=("list_files", "get_table_schema", "inspect_excel"),
         steps=(
             _step(1, "确认学生身份", StepType.QUERY, "search_student", "唯一学生身份", step_id=ids[0]),
             _step(2, "读取学生基本信息", StepType.QUERY, "get_student_info", "学生基本信息", step_id=ids[1], depends_on=(ids[0],)),

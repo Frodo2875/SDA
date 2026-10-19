@@ -55,7 +55,18 @@ def read_excel_rows(file_name: str, required_fields: list[str]) -> dict[str, Any
         return failure("INVALID_FILE_NAME", str(exc))
 
     if not path.is_file():
-        return failure("FILE_NOT_FOUND", f"文件不存在：data/{path.name}")
+        # Browser uploads live under data/uploads. Resolve only a registered,
+        # available file; never search arbitrary paths or bypass its lifecycle.
+        from backend import database
+        from backend.services.file_locator import FileLocatorError, resolve_by_file_id
+
+        record = database.get_file_record(file_name)
+        if record is None:
+            return failure("FILE_NOT_FOUND", f"文件不存在：data/{path.name}")
+        try:
+            path = resolve_by_file_id(record["file_id"])
+        except FileLocatorError:
+            return failure("FILE_NOT_FOUND", f"文件不存在或不可用：{file_name}")
 
     try:
         workbook = load_workbook(path, read_only=True, data_only=True)

@@ -1,0 +1,30 @@
+{
+  "date": "2026-10-19",
+  "regression": {
+    "tests": "852",
+    "failures": "0",
+    "errors": "0",
+    "skipped": "0",
+    "time": "135.218"
+  },
+  "new_regression_cases": 26,
+  "real_api": {
+    "total": 14,
+    "passed": 14
+  },
+  "real_browser_fixes": {
+    "total": 9,
+    "passed": 9,
+    "page_errors": []
+  },
+  "real_browser_full": {
+    "total": 13,
+    "passed": 13,
+    "page_errors": []
+  },
+  "real_cancel_resume": true,
+  "delivery_approval_boundary": true,
+  "cold_scholarship_without_user_metadata": true,
+  "remaining_boundary": "Evidence Quality 仍为告警；未接入完整充分性补检索闭环",
+  "materials": "synthetic only"
+}

@@ -210,6 +210,27 @@ def aggregate_table(
     evidence_fields = list(arguments.group_by)
     if arguments.field:
         evidence_fields.append(arguments.field)
+    evidence_fields.extend(item.field for item in arguments.filters)
+    evidence_fields = list(dict.fromkeys(evidence_fields))
+    # COUNT(*) still needs a real row locator; never invent a cell containing
+    # the computed result. Empty matches keep an empty contributing-cell list.
+    if not evidence_fields:
+        evidence_fields = [next(iter(context["fields"]))]
+    unified_evidence = _structured_evidence(context, matched_rows, evidence_fields)
+    aggregation = {
+        "operation": arguments.operation,
+        "field": arguments.field,
+        "group_by": arguments.group_by,
+        "filters": [item.model_dump() for item in arguments.filters],
+        "matched_rows": len(matched_rows),
+        "results": results,
+        "source_evidence_ids": [item.evidence_id for item in unified_evidence],
+    }
+    response["data"]["aggregation"] = aggregation
+    for item in unified_evidence:
+        item.metadata["aggregation"] = {
+            key: aggregation[key] for key in ("operation", "field", "group_by", "filters")
+        }
     response.update(
         {
             "evidence": _evidence(
@@ -220,6 +241,11 @@ def aggregate_table(
             ),
             "warnings": warnings,
             "result_summary": _aggregate_summary(arguments, status, results),
+            "evidence_chain": serialize_evidence3_chain(unified_evidence),
+            "unified_evidence": [
+                item.model_dump(mode="json", exclude_none=True)
+                for item in unified_evidence
+            ],
         }
     )
     return response
